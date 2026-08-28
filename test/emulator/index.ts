@@ -202,9 +202,16 @@ const bufferedHandlers: HandlerTable = {
 // is pinned separately by the oracle fixtures in test/oracle/commkey.spec.ts.
 const baseHandlers: HandlerTable = {
   ...bufferedHandlers,
-  [CMD.CONNECT]: (req, state) => [
-    reply(state, req, state.authenticated ? CMD.ACK_OK : CMD.ACK_UNAUTH),
-  ],
+  [CMD.CONNECT]: (req, state) => {
+    // A CONNECT begins a fresh session, so it must not inherit whatever a
+    // PREVIOUS connection to this same emulator instance settled: without
+    // this reset, one client authenticating with the right comm key leaves
+    // `state.authenticated` true forever, and a LATER connection presenting
+    // the wrong key — or none at all — would be waved through instead of
+    // challenged.
+    state.authenticated = state.commKey === 0
+    return [reply(state, req, state.authenticated ? CMD.ACK_OK : CMD.ACK_UNAUTH)]
+  },
   [CMD.AUTH]: (req, state) => {
     const expected = mixCommKey(state.commKey, state.sessionId)
     if (req.data.equals(expected)) {
