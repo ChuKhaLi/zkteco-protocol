@@ -1,13 +1,8 @@
 import { ZkFramingError } from '../../errors.js'
 import type { ZkUser } from '../../types.js'
+import { readNulTerminated } from './shared.js'
 
 export const USER_RECORD_SIZE = 72
-
-function readNulTerminated(buf: Buffer, start: number, length: number): string {
-  const field = buf.subarray(start, start + length)
-  const end = field.indexOf(0)
-  return field.subarray(0, end === -1 ? field.length : end).toString('ascii')
-}
 
 function decodeOne(rec: Buffer): ZkUser {
   return {

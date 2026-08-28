@@ -1,6 +1,7 @@
 import { ZkFramingError } from '../../errors.js'
 import { decodeZkTime } from '../time.js'
 import type { ZkNaiveTime } from '../../types.js'
+import { readNulTerminated } from './shared.js'
 
 const KNOWN_SIZES = [8, 16, 40] as const
 export type RecordSize = (typeof KNOWN_SIZES)[number]
@@ -69,12 +70,6 @@ export function detectRecordSize(bodyLength: number, recordCount: number): Recor
     )
   }
   return size as RecordSize
-}
-
-function readNulTerminated(buf: Buffer, start: number, length: number): string {
-  const field = buf.subarray(start, start + length)
-  const end = field.indexOf(0)
-  return field.subarray(0, end === -1 ? field.length : end).toString('ascii')
 }
 
 function decodeOne(rec: Buffer, size: RecordSize): DecodedAttendanceRecord {
