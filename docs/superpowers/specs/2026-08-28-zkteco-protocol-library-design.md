@@ -174,7 +174,16 @@ interface ZkUser {
   hasPassword: boolean
   /** Raw card number, 0 when unset. */
   cardNumber: number
-  /** Hex of the original record bytes. */
+  /**
+   * Hex of the record bytes, **with the 8-byte password field zeroed**.
+   *
+   * Not a byte-for-byte copy, deliberately. `raw` exists to be persisted and
+   * forwarded for reconciliation, so a credential must not ride along with it —
+   * hiding the password behind `hasPassword` while republishing it in hex would
+   * hide nothing. Note that a test asserting the plaintext password is absent
+   * from a serialised user passes whether or not the bytes are redacted, since
+   * `raw` is hex: assert on the encoded form.
+   */
   raw: string
 }
 ```
