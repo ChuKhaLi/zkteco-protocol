@@ -71,3 +71,10 @@ export interface ZkUser {
   /** Hex of the record bytes, with the 8-byte password field zeroed. Not a byte-for-byte copy; the password is redacted because `raw` is meant to be persisted and forwarded for reconciliation. */
   raw: string
 }
+
+/** Counters the device reports about its own storage. */
+export interface ZkDeviceInfo {
+  userCount: number
+  recordCount: number
+  recordCapacity: number
+}

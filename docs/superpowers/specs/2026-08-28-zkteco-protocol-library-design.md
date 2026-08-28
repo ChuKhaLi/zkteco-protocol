@@ -614,8 +614,11 @@ When a physical device is first connected, before trusting any reading:
 2. Reconcile it against §5 — specifically the checksum formulation, the comm-key mixing, and the
    reply-id quirk.
 3. Confirm which record size the model actually emits.
-4. Resolve any oracle divergence recorded under §7.3.
-5. Only then add the model to the compatibility table.
+4. Confirm the `CMD_GET_FREE_SIZES` field offsets in `src/commands/info.ts`
+   (`FREE_SIZES_OFFSET`) against a real reply. They are documentation-derived
+   and unverified; a wrong `recordCount` silently poisons the framing guard.
+5. Resolve any oracle divergence recorded under §7.3.
+6. Only then add the model to the compatibility table.
 
 Until that happens, every line of this library is a hypothesis.
 

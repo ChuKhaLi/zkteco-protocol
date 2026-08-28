@@ -4,6 +4,7 @@ import { CMD } from '../../src/codec/commands.js'
 import { decodePayload, encodePayload, type DecodedPacket } from '../../src/codec/packet.js'
 import { frameTcp, tryUnframeTcp } from '../../src/codec/framing.js'
 import { mixCommKey } from '../../src/codec/commkey.js'
+import { FREE_SIZES_OFFSET } from '../../src/commands/info.js'
 import type { ZkUser } from '../../src/types.js'
 
 export interface EmulatorRecords {
@@ -27,6 +28,7 @@ export interface EmulatorOptions {
    *  fall back to the legacy path. */
   supportsBuffer?: boolean
   handlers?: Partial<HandlerTable>
+  info?: { userCount: number; recordCount: number; recordCapacity: number }
 }
 
 export interface EmulatorState {
@@ -40,6 +42,7 @@ export interface EmulatorState {
   /** Set by the transport layer so a handler can end the connection. */
   dropConnection: boolean
   opts: EmulatorOptions
+  info: { userCount: number; recordCount: number; recordCapacity: number }
 }
 
 export type Handler = (req: DecodedPacket, state: EmulatorState) => Buffer[] | null
@@ -74,6 +77,22 @@ export function reply(
   return encodePayload({ command, sessionId: state.sessionId, replyId: req.replyId, data })
 }
 
+/**
+ * Builds a CMD_GET_FREE_SIZES reply body using the library's own offsets.
+ *
+ * Because this reuses FREE_SIZES_OFFSET from src/commands/info.ts rather than
+ * an independent encoding, the getInfo tests this backs prove the request/
+ * response plumbing — session flow, framing, decoding — NOT that the offsets
+ * themselves match a real device. See the provenance note on FREE_SIZES_OFFSET.
+ */
+export function encodeFreeSizes(info: EmulatorState['info']): Buffer {
+  const buf = Buffer.alloc(FREE_SIZES_OFFSET.recordCapacity + 4)
+  buf.writeUInt32LE(info.userCount, FREE_SIZES_OFFSET.userCount)
+  buf.writeUInt32LE(info.recordCount, FREE_SIZES_OFFSET.recordCount)
+  buf.writeUInt32LE(info.recordCapacity, FREE_SIZES_OFFSET.recordCapacity)
+  return buf
+}
+
 // CMD.AUTH here validates the mixed key using this library's OWN mixCommKey
 // (Task 5). That makes this handler and the tests it backs proof of the
 // authentication FLOW — challenge, mixed reply, ACK — not of whether
@@ -92,6 +111,9 @@ const baseHandlers: HandlerTable = {
     return [reply(state, req, CMD.ACK_UNAUTH)]
   },
   [CMD.EXIT]: (req, state) => [reply(state, req, CMD.ACK_OK)],
+  [CMD.GET_FREE_SIZES]: (req, state) => [
+    reply(state, req, CMD.ACK_OK, encodeFreeSizes(state.info)),
+  ],
 }
 
 function buildState(opts: EmulatorOptions): EmulatorState {
@@ -105,6 +127,7 @@ function buildState(opts: EmulatorOptions): EmulatorState {
     chunksSent: 0,
     dropConnection: false,
     opts,
+    info: opts.info ?? { userCount: 0, recordCount: 0, recordCapacity: 0 },
   }
 }
 
