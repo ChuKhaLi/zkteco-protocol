@@ -12,11 +12,31 @@ describe('mixCommKey', () => {
   })
 
   it('depends on the session id', () => {
-    expect(mixCommKey(1234, 1)).not.toEqual(mixCommKey(1234, 2))
+    expect(mixCommKey(1234, 0x0100)).not.toEqual(mixCommKey(1234, 0x0200))
   })
 
   it('depends on the key', () => {
     expect(mixCommKey(1234, 7)).not.toEqual(mixCommKey(5678, 7))
+  })
+
+  it('discards the low byte of the session id — SUSPECTED SPEC DEFECT', () => {
+    // Adding a small session id changes only byte 0 of the packed value; the
+    // half-swap moves that byte to index 2; step 5 then assigns the tick byte
+    // to index 2, erasing it. Session ids 1, 2 and 255 are therefore
+    // indistinguishable here.
+    //
+    // Devices issue small session ids, so if this is real the session plays
+    // almost no part in authentication — which would defeat the point of
+    // mixing it in. More likely the prose this was written from is wrong about
+    // the swap or about which byte is assigned.
+    //
+    // This test characterises current behaviour so the question cannot be
+    // lost. Task 14 captures CMD_AUTH bytes from an independent implementation
+    // and adjudicates it. If they disagree, the algorithm changes and THIS
+    // TEST SHOULD FAIL AND BE DELETED — that is the intended outcome.
+    expect(mixCommKey(1234, 1)).toEqual(mixCommKey(1234, 2))
+    expect(mixCommKey(1234, 1)).toEqual(mixCommKey(1234, 255))
+    expect(mixCommKey(1234, 1)).not.toEqual(mixCommKey(1234, 256))
   })
 
   it('assigns byte 2 directly from the tick byte rather than XORing it', () => {

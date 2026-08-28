@@ -15,6 +15,9 @@ const DEFAULT_TICKS = 50
  *
  * Written from a prose description of the algorithm, never transcribed from a
  * GPL implementation. Pinned by oracle fixtures.
+ *
+ * UNVERIFIED: the low byte of `sessionId` does not affect the output. See the
+ * characterisation test in commkey.spec.ts. Pending oracle adjudication.
  */
 export function mixCommKey(commKey: number, sessionId: number, ticks = DEFAULT_TICKS): Buffer {
   // 1. Reverse the bit order: input bit 0 becomes output bit 31.
