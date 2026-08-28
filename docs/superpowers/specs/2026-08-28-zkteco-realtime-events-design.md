@@ -375,6 +375,12 @@ attendance events. Record every byte each puts on the socket **after** its `CMD_
   documentation-only; record that in `PROVENANCE.md` and §12.
 - Both acknowledge → **acknowledge.**
 - They disagree → follow the specification, and record the divergence in `PROVENANCE.md`.
+- **One of them never registers a subscription at all** — it fails against the emulator before
+  reaching `CMD_REG_EVENT`, or supports no realtime path — then it contributed **no evidence
+  either way**, and the question is decided by the one oracle that did, with the claim scoped to
+  a single source exactly as the comm-key claim is (handoff §4). An oracle that produced nothing
+  is recorded in `PROVENANCE.md` as having produced nothing. An absence of evidence must never be
+  filed as agreement.
 
 Whichever way it resolves, `ackEvent()` is implemented and tested but **internal, and one call site
 away from being enabled** — exactly the disposition `applyReplyIdQuirk` received when the reply-id
