@@ -1,5 +1,6 @@
 import { checksum16 } from '../../src/codec/checksum.js'
 import { encodePayload } from '../../src/codec/packet.js'
+import { START_MARKER } from '../../src/codec/framing.js'
 
 export interface CapturedPacket {
   hex: string
@@ -31,9 +32,27 @@ export type ChecksumClass = 'self' | 'previous-reply-id' | 'ambiguous' | 'neithe
  *                        identical in the checksum computation.
  * 'neither'            — something else is going on; investigate before
  *                        trusting any of it.
+ *
+ * Data is extracted from p.hex instead of taken as a parameter because a caller
+ * should never need to juggle packet bytes manually. An optional parameter that
+ * defaults to empty is a silent wrong answer waiting for someone calling the
+ * obvious way.
  */
-export function classifyChecksum(p: CapturedPacket, dataHexAfterHeader = ''): ChecksumClass {
-  const data = Buffer.from(dataHexAfterHeader, 'hex')
+export function classifyChecksum(p: CapturedPacket): ChecksumClass {
+  const buf = Buffer.from(p.hex, 'hex')
+  let dataStart = 0
+
+  // If the packet is TCP-framed, skip the 8-byte TCP prefix (marker + length).
+  if (buf.length >= 4 && buf.subarray(0, 4).equals(START_MARKER)) {
+    dataStart = 8
+  }
+
+  // Skip the 8-byte payload header (command, checksum, sessionId, replyId).
+  dataStart += 8
+
+  // The remainder is the packet data.
+  const data = Buffer.from(buf.subarray(dataStart))
+
   const asSent = encodePayload({
     command: p.command, sessionId: p.sessionId, replyId: p.replyId, data,
   })

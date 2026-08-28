@@ -34,6 +34,20 @@ describe('comm-key mixing against the oracles', () => {
     // a real weakness, so it is asserted explicitly rather than left implicit:
     // whichever branch holds, note it in PROVENANCE.md under the verification
     // level, and add comm-key mixing to the first-hardware checklist.
+    //
+    // The absence of a CMD_AUTH packet has two possible causes, and they must
+    // not be conflated:
+    //   1. zkteco-js genuinely has no comm-key support and never tried to
+    //      authenticate — the expected, current state of affairs.
+    //   2. The capture driver died before it sent anything (a crashed spawn,
+    //      a swallowed error) and the fixture is empty for reasons that have
+    //      nothing to do with comm-key support.
+    // `fixture!.packets.length > 0` cannot tell these apart: CMD_CONNECT is
+    // present in every real capture and in nothing else, so asserting on it
+    // specifically is what proves the driver ran at all. Only once that is
+    // established does "and no CMD_AUTH among them" mean what it claims to
+    // mean — an absence has to be demonstrated, not assumed from a fixture
+    // merely being non-empty.
     const fixture = load('auth-tcp-zkteco-js.json')
     expect(fixture).not.toBeNull()
     const auth = fixture!.packets.find((p) => p.command === CMD.AUTH)
@@ -41,7 +55,9 @@ describe('comm-key mixing against the oracles', () => {
       const body = Buffer.from(auth.hex, 'hex').subarray(dataOffset('tcp'))
       expect(body).toEqual(mixCommKey(fixture!.commKey, fixture!.emulatorSessionId))
     } else {
-      expect(fixture!.packets.length).toBeGreaterThan(0)
+      const connect = fixture!.packets.find((p) => p.command === CMD.CONNECT)
+      expect(connect, 'no CMD_CONNECT captured — the driver never ran, this proves nothing about comm-key support').toBeDefined()
+      expect(fixture!.packets.some((p) => p.command === CMD.AUTH)).toBe(false)
     }
   })
 })

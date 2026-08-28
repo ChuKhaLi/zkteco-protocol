@@ -62,4 +62,19 @@ describe('oracle fixtures', () => {
     expect(discriminatingPackets, `need at least one discriminating packet; found ${discriminatingPackets}`).toBeGreaterThan(0)
     expect(flattened.size, `oracles disagree: ${JSON.stringify([...verdicts])}`).toBe(1)
   })
+
+  it('data-bearing packets are classified correctly', () => {
+    // Read a CMD_AUTH packet from the auth fixture. It carries encrypted comm key
+    // data. This test would fail with the old signature (which defaulted
+    // dataHexAfterHeader to '') because the checksum would be computed over an
+    // empty payload, returning 'neither'.
+    const authFixture = JSON.parse(
+      readFileSync(path.join(DIR, 'auth-tcp-pyzk.json'), 'utf8'),
+    ) as OracleFixture
+    // The second packet is CMD_AUTH with 4 bytes of encrypted key data
+    const authPacket = authFixture.packets[1]!
+    expect(authPacket.command).toBe(1102) // CMD_AUTH
+    const result = classifyChecksum(authPacket)
+    expect(result).toBe('self')
+  })
 })
