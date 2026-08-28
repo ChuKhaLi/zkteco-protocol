@@ -619,8 +619,13 @@ When a physical device is first connected, before trusting any reading:
 4. Confirm the `CMD_GET_FREE_SIZES` field offsets in `src/commands/info.ts`
    (`FREE_SIZES_OFFSET`) against a real reply. They are documentation-derived
    and unverified; a wrong `recordCount` silently poisons the framing guard.
-5. Resolve any oracle divergence recorded under §7.3.
-6. Only then add the model to the compatibility table.
+5. Confirm the TCP declared-size cap in `src/codec/framing.ts` is not rejecting legitimate
+   traffic. The cap bounds what this library *requests*, but a device chooses its own size for
+   an inline `ACK_DATA` body and for legacy chunks, and no hardware has ever been observed. A
+   device answering a whole attendance log in one oversized packet would be refused, and the
+   transport turns that into a failure lasting the connection's life.
+6. Resolve any oracle divergence recorded under §7.3.
+7. Only then add the model to the compatibility table.
 
 Until that happens, every line of this library is a hypothesis.
 
@@ -715,7 +720,8 @@ to isolate that specifically (one differing from the baseline only in the low by
 high byte, one with a different comm key) show `pyzk` itself emitting byte-identical `CMD_AUTH`
 payloads for the low-byte-only pair, while the high-byte-only pair's bytes genuinely differ — see
 `PROVENANCE.md` for the full table. The discarded low byte is therefore genuine protocol behaviour,
-confirmed against real external computation, not an implementation bug. `zkteco-js` offered no
+confirmed at one low-byte pair against real external computation rather than only against this
+library's own arithmetic — a single pair plus a structural argument, not a sweep. `zkteco-js` offered no
 second opinion on any of this — it has no comm-key support at all,
 so its `auth-*-zkteco-js.json` fixtures carry no `CMD_AUTH` packet.
 

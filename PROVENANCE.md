@@ -148,7 +148,8 @@ it —
 `0x2e2e` (high-byte-only) capture's `CMD_AUTH` bytes genuinely differ from the
 baseline's, ruling out the trivial (and wrong) explanation that the session id
 is ignored altogether. The low-byte-discard invariance is therefore now
-confirmed against real external computation, not just this library's own
+confirmed at one low-byte pair against real external computation, rather than
+resting on this library's own
 implementation of the same description.
 
 **Caveat: this still rests on a single oracle.** `zkteco-js` has no comm-key

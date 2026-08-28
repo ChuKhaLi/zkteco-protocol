@@ -167,9 +167,19 @@ export async function readBulk(
     // A ZkProtocolError here can occur after PREPARE_BUFFER already
     // succeeded (e.g. a later READ_BUFFER failing the total-bytes check),
     // which leaves the device holding buffer state from the aborted
-    // attempt. Release it before falling back — freeBuffer already swallows
-    // its own errors, so this cannot make a bad situation worse, and is a
-    // no-op if the device never allocated anything in the first place.
+    // attempt. Release it before falling back.
+    //
+    // freeBuffer swallows only ZkProtocolError — it deliberately rethrows a
+    // timeout or a dropped connection, because those leave a reply
+    // unconsumed and the session desynchronised. So this call CAN throw, and
+    // a FREE_DATA timeout during cleanup aborts the whole read rather than
+    // continuing to the legacy path. That is intended: falling back across a
+    // possible desync is worse than failing outright, since a one-packet
+    // shift still satisfies the record-size check and produces misaligned
+    // records no caller can distinguish from good ones. The cost is that
+    // firmware answering an unknown 1503 with silence rather than an error
+    // never reaches the legacy fallback — accepted, and worth revisiting
+    // once a real device has been observed.
     await freeBuffer(session)
     return readBulkLegacy(session, command)
   }
