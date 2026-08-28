@@ -17,3 +17,40 @@ export interface ZkNaiveTime {
   /** "2026-08-27T08:01:00" — deliberately carries no offset. */
   readonly local: string
 }
+
+/** One badge event, exactly as the device reported it. */
+export interface ZkAttendanceLog {
+  /**
+   * The identifier printed on the device. `null` when the device did not send
+   * it and no lookup matched. Never fabricated — a null beats a wrong name.
+   */
+  userId: string | null
+
+  /**
+   * Where `userId` came from:
+   *   'device' — sent verbatim in the record (40-byte dialect). Trustworthy.
+   *   'lookup' — resolved through the user list. MAY BE WRONG: device-internal
+   *              uids are recycled after a user is deleted, so a punch by the
+   *              previous holder resolves against the current table and is
+   *              attributed to the wrong person, with no error anywhere.
+   *   null     — could not be determined.
+   */
+  userIdSource: 'device' | 'lookup' | null
+
+  /** Device-internal key. Recycled after a user is deleted — NOT an identity. */
+  uid: number | null
+
+  timestamp: ZkNaiveTime
+
+  /** Raw status code. Meaning VARIES BY MODEL — deliberately not decoded. */
+  status: number
+
+  /** Raw verification method. Also model-dependent, also not decoded. */
+  verifyMode: number
+
+  /** Which dialect this record was decoded from. */
+  recordSize: 8 | 16 | 40
+
+  /** Hex of the original record bytes, for reconciliation. */
+  raw: string
+}
