@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { UdpTransport } from '../../src/transport/udp.js'
 import { CMD } from '../../src/codec/commands.js'
 import { decodePayload, encodePayload } from '../../src/codec/packet.js'
-import { ZkTimeoutError } from '../../src/errors.js'
+import { ZkConnectionError, ZkTimeoutError } from '../../src/errors.js'
 import { startEmulator, type Emulator } from '../emulator/index.js'
 
 let running: Emulator | null = null
@@ -58,5 +58,17 @@ describe('UdpTransport', () => {
     await transport.close()
     await expect(transport.close()).resolves.toBeUndefined()
     transport = null
+  })
+
+  it('rejects a second concurrent receive without disturbing the first', async () => {
+    running = await startEmulator({ transport: 'udp', sessionId: 0x66 })
+    transport = new UdpTransport({ host: '127.0.0.1', port: running.port })
+    await transport.connect()
+    const first = transport.receive(2000)
+    await expect(transport.receive(2000)).rejects.toBeInstanceOf(ZkConnectionError)
+    await transport.send(connectPayload())
+    const reply = decodePayload(await first)
+    expect(reply.command).toBe(CMD.ACK_OK)
+    expect(reply.sessionId).toBe(0x66)
   })
 })

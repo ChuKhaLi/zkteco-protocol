@@ -83,6 +83,13 @@ export class TcpTransport implements Transport {
   }
 
   receive(timeoutMs: number): Promise<Buffer> {
+    if (this.waiter) {
+      return Promise.reject(
+        new ZkConnectionError(
+          'a receive() is already pending; this transport does not support concurrent receives',
+        ),
+      )
+    }
     const queued = this.queue.shift()
     if (queued) return Promise.resolve(queued)
     if (this.failure) return Promise.reject(this.failure)

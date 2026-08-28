@@ -116,4 +116,16 @@ describe('TcpTransport', () => {
     await expect(transport.close()).resolves.toBeUndefined()
     transport = null
   })
+
+  it('rejects a second concurrent receive without disturbing the first', async () => {
+    running = await startEmulator({ transport: 'tcp', sessionId: 0x55 })
+    transport = new TcpTransport({ host: '127.0.0.1', port: running.port })
+    await transport.connect()
+    const first = transport.receive(2000)
+    await expect(transport.receive(2000)).rejects.toBeInstanceOf(ZkConnectionError)
+    await transport.send(connectPayload())
+    const reply = decodePayload(await first)
+    expect(reply.command).toBe(CMD.ACK_OK)
+    expect(reply.sessionId).toBe(0x55)
+  })
 })
