@@ -67,6 +67,24 @@ function isIgnorableSocketError(err: NodeJS.ErrnoException): boolean {
   return err.code === 'ECONNRESET' || err.code === 'EPIPE'
 }
 
+/** Prefixes a body with the 4-byte totalSize header the device sends. */
+export function withSizeHeader(body: Buffer): Buffer {
+  const head = Buffer.alloc(4)
+  head.writeUInt32LE(body.length, 0)
+  return Buffer.concat([head, body])
+}
+
+/** Builds the attendance body the emulator was configured with. */
+export function attendanceBody(records: EmulatorRecords): Buffer {
+  const rows = Buffer.concat(records.rows)
+  const prefixed = records.junkPrefix
+    ? Buffer.concat([Buffer.from([0xff, 0x32, 0x35, 0x35, 0, 0, 0, 0, 0]), rows])
+    : rows
+  const head = Buffer.alloc(4)
+  head.writeUInt32LE(records.totalSizeOverride ?? prefixed.length, 0)
+  return Buffer.concat([head, prefixed])
+}
+
 /** Builds one reply payload echoing the request's reply id. */
 export function reply(
   state: EmulatorState,
@@ -93,6 +111,36 @@ export function encodeFreeSizes(info: EmulatorState['info']): Buffer {
   return buf
 }
 
+/**
+ * Answers a bulk-read command the legacy way: inline when the body is small,
+ * otherwise PREPARE_DATA, a run of CMD_DATA chunks, and a closing ACK_OK.
+ */
+export function serveDataLegacy(
+  state: EmulatorState,
+  req: DecodedPacket,
+  stream: Buffer,
+): Buffer[] {
+  const chunkSize = state.opts.chunkSize ?? 1024
+  if (stream.length <= chunkSize) return [reply(state, req, CMD.ACK_DATA, stream)]
+
+  const size = Buffer.alloc(4)
+  size.writeUInt32LE(stream.length, 0)
+  const out: Buffer[] = [reply(state, req, CMD.PREPARE_DATA, size)]
+  for (let off = 0; off < stream.length; off += chunkSize) {
+    state.chunksSent += 1
+    if (
+      state.opts.behavior === 'dropMidTransfer' &&
+      state.chunksSent > (state.opts.dropAfterChunk ?? 1)
+    ) {
+      state.dropConnection = true
+      return out
+    }
+    out.push(reply(state, req, CMD.DATA, stream.subarray(off, off + chunkSize)))
+  }
+  out.push(reply(state, req, CMD.ACK_OK))
+  return out
+}
+
 // CMD.AUTH here validates the mixed key using this library's OWN mixCommKey
 // (Task 5). That makes this handler and the tests it backs proof of the
 // authentication FLOW — challenge, mixed reply, ACK — not of whether
@@ -114,6 +162,11 @@ const baseHandlers: HandlerTable = {
   [CMD.GET_FREE_SIZES]: (req, state) => [
     reply(state, req, CMD.ACK_OK, encodeFreeSizes(state.info)),
   ],
+  [CMD.ATTLOG_RRQ]: (req, state) =>
+    serveDataLegacy(state, req, state.records ? attendanceBody(state.records) : withSizeHeader(Buffer.alloc(0))),
+  [CMD.USERTEMP_RRQ]: (req, state) =>
+    serveDataLegacy(state, req, withSizeHeader(Buffer.concat(state.users.map((u) => Buffer.from(u.raw, 'hex'))))),
+  [CMD.FREE_DATA]: (req, state) => [reply(state, req, CMD.ACK_OK)],
 }
 
 function buildState(opts: EmulatorOptions): EmulatorState {

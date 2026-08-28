@@ -77,4 +77,21 @@ describe('oracle fixtures', () => {
     const result = classifyChecksum(authPacket)
     expect(result).toBe('self')
   })
+
+  it('packets with replyId === 0 are classified as ambiguous', () => {
+    // When replyId === 0, one's-complement folding makes a reply-id word of
+    // 0x0000 and (0 - 1) & 0xffff = 0xFFFF produce the same checksum, creating
+    // an arithmetical tie: both 'self' and 'previous-reply-id' hypotheses are
+    // correct. This must be reported as 'ambiguous' to signal that the packet
+    // provides no discriminating evidence.
+    const handshakeFixture = JSON.parse(
+      readFileSync(path.join(DIR, 'handshake-tcp-pyzk.json'), 'utf8'),
+    ) as OracleFixture
+    // The first packet is CMD_CONNECT with replyId=0
+    const connectPacket = handshakeFixture.packets[0]!
+    expect(connectPacket.command).toBe(CMD.CONNECT)
+    expect(connectPacket.replyId).toBe(0)
+    const result = classifyChecksum(connectPacket)
+    expect(result).toBe('ambiguous')
+  })
 })

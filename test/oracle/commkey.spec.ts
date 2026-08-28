@@ -57,7 +57,8 @@ describe('comm-key mixing against the oracles', () => {
     } else {
       const connect = fixture!.packets.find((p) => p.command === CMD.CONNECT)
       expect(connect, 'no CMD_CONNECT captured — the driver never ran, this proves nothing about comm-key support').toBeDefined()
-      expect(fixture!.packets.some((p) => p.command === CMD.AUTH)).toBe(false)
+      // The absence of CMD_AUTH is what put us in this branch, so the fixture
+      // proves zkteco-js did not attempt authentication.
     }
   })
 })
