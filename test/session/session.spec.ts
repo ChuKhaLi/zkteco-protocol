@@ -41,9 +41,20 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       expect(running.received[1]!.sessionId).toBe(0x0abc)
     })
 
-    it('transmits a reply id one ahead of the one its checksum covers', async () => {
-      // The reply-id quirk, observed end to end: the wire packet carries N+1
-      // while its checksum was computed over N. See spec §5.1.
+    // The spec (§5.1) asserted a reply-id quirk: the wire packet carries
+    // N+1 while its checksum was computed over N. Oracle evidence
+    // contradicts that. pyzk and zkteco-js were driven against the emulator
+    // as black boxes on both transports and their wire bytes captured; every
+    // packet's checksum matched the reply id it actually carried, e.g.:
+    //   pyzk      / tcp  cmd 1001 rid 1: observed 56551 | self 56551 | prev 56552 -> SELF
+    //   zkteco-js / tcp  cmd 1000 rid 1: observed 64534 | self 64534 | prev 64535 -> SELF
+    //   zkteco-js / tcp  cmd 1001 rid 2: observed 56550 | self 56550 | prev 56551 -> SELF
+    // ...and identically over UDP. None matched `replyId - 1`, and the two
+    // libraries even start their reply-id counters at different values (0
+    // and 1), so this is agreement across different data, not coincidence.
+    // Session.send() no longer applies the quirk; this test now proves the
+    // opposite of what it originally asserted.
+    it('transmits a checksum that matches the reply id it actually carries', async () => {
       running = await startEmulator({
         transport: transportKind,
         handlers: { [CMD.GET_FREE_SIZES]: (req, state) => [reply(state, req, CMD.ACK_OK)] },
@@ -59,8 +70,8 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       const asChecksummed = encodePayload({
         command: sent.command, sessionId: sent.sessionId, replyId: sent.replyId - 1,
       })
-      expect(sent.checksum).not.toBe(checksum16(asTransmitted))
-      expect(sent.checksum).toBe(checksum16(asChecksummed))
+      expect(sent.checksum).toBe(checksum16(asTransmitted))
+      expect(sent.checksum).not.toBe(checksum16(asChecksummed))
     })
 
     it('increments the reply id across commands', async () => {

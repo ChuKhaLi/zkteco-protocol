@@ -1,5 +1,5 @@
 import { CMD } from '../codec/commands.js'
-import { applyReplyIdQuirk, decodePayload, encodePayload, type DecodedPacket } from '../codec/packet.js'
+import { decodePayload, encodePayload, type DecodedPacket } from '../codec/packet.js'
 import { ZkAuthError, ZkProtocolError } from '../errors.js'
 import type { Transport } from '../transport/Transport.js'
 
@@ -62,11 +62,17 @@ export class Session {
   }
 
   /**
-   * Encodes, applies the reply-id quirk, transmits, and awaits one reply.
+   * Encodes and transmits one request, then awaits its reply.
    *
-   * The checksum is computed over the CURRENT reply id, then the transmitted
-   * packet carries the incremented one with the checksum left alone. That
-   * mismatch is what devices appear to expect — see applyReplyIdQuirk.
+   * Transmits the packet exactly as encoded: no reply-id quirk. The spec
+   * asserted that the transmitted reply id runs one ahead of the one its
+   * checksum covers, but oracle evidence contradicts it — pyzk and
+   * zkteco-js, driven against the emulator as black boxes on both TCP and
+   * UDP, both emit checksums that match the reply id they actually carry,
+   * never `replyId - 1`, even though the two libraries start their reply-id
+   * counters at different values (0 and 1). `applyReplyIdQuirk` stays
+   * exported and tested in src/codec/packet.ts, one call site away, in case
+   * a real device turns out to need it.
    */
   private async send(
     command: number,
@@ -75,9 +81,8 @@ export class Session {
   ): Promise<DecodedPacket> {
     const sessionId = override?.sessionId ?? this.currentSessionId
     const payload = encodePayload({ command, sessionId, replyId: this.replyId, data })
-    const wire = applyReplyIdQuirk(payload, this.replyId + 1)
     this.replyId = (this.replyId + 1) & 0xffff
-    await this.transport.send(wire)
+    await this.transport.send(payload)
     return decodePayload(await this.transport.receive(this.opts.timeoutMs))
   }
 
