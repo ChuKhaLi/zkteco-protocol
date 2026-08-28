@@ -1,0 +1,5 @@
+node_modules/
+dist/
+*.tsbuildinfo
+tools/oracle/.venv/
+tools/oracle/__pycache__/
