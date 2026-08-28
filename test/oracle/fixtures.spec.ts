@@ -49,12 +49,17 @@ describe('oracle fixtures', () => {
     // this test ever fails, do NOT pick a side: record the divergence and
     // leave it for first-hardware verification.
     const verdicts = new Map<string, Set<string>>()
+    let discriminatingPackets = 0
     for (const fixture of fixtures) {
-      const classes = new Set(fixture.packets.map((p) => classifyChecksum(p)))
-      verdicts.set(`${fixture.source}/${fixture.transport}`, classes)
+      const classes = fixture.packets.map((p) => classifyChecksum(p))
+      // Exclude ambiguous packets; they provide no evidence
+      const nonAmbiguous = new Set(classes.filter((c) => c !== 'ambiguous'))
+      verdicts.set(`${fixture.source}/${fixture.transport}`, nonAmbiguous)
+      discriminatingPackets += classes.filter((c) => c !== 'ambiguous').length
     }
     const flattened = new Set([...verdicts.values()].flatMap((s) => [...s]))
     expect(flattened.has('neither')).toBe(false)
+    expect(discriminatingPackets, `need at least one discriminating packet; found ${discriminatingPackets}`).toBeGreaterThan(0)
     expect(flattened.size, `oracles disagree: ${JSON.stringify([...verdicts])}`).toBe(1)
   })
 })
