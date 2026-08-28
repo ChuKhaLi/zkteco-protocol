@@ -293,38 +293,41 @@ relevant `raw` hex where one exists.
 
 ## 5. Codec: risk areas and guards
 
-### 5.1 The reply-id quirk gets its own named function
+### 5.1 The reply-id quirk — asserted by the documentation, refuted by the wire
 
-Reference implementations compute the checksum over a packet carrying the **previous** reply id,
-then overwrite the reply-id field with the incremented value **without recomputing the checksum**.
-The transmitted packet therefore carries a checksum that does not match its own contents.
+**Superseded by oracle evidence. Recorded rather than deleted, because how this was decided
+matters more than the conclusion.**
 
-This looks like a defect. It is not treated as one, because implementations behaving this way have
-worked against real hardware for years — so it appears to be what devices expect.
+The protocol write-ups this project was built from state that reference implementations compute the
+checksum over a packet carrying the **previous** reply id, then overwrite the reply-id field with
+the incremented value without recomputing the checksum — so the transmitted packet carries a
+checksum disagreeing with its own contents. This spec originally instructed that the behaviour be
+preserved, isolated in a named `applyReplyIdQuirk()` function so nobody would later "clean it up".
 
-Burying that inside `encodePayload()` behind a comment guarantees that someone eventually "cleans it
-up" and breaks every device. Instead it becomes two functions, named so the name is the
-documentation:
+It also instructed that the claim be treated as a hypothesis for the oracles to adjudicate, and
+committed to the decision rule before any data existed. The data arrived and the rule fired.
 
-```ts
-const payload = encodePayload({ command, sessionId, replyId, data })
-//   checksum computed correctly over THIS reply id
+Two independent third-party implementations, driven as black boxes against the emulator over both
+transports, emit checksums matching the reply id they actually transmit:
 
-const wire = applyReplyIdQuirk(payload, replyId + 1)
-//   overwrites bytes 6-7. Does NOT recompute the checksum. Intentional.
-//   This function exists so the behaviour cannot be invisible.
-```
+| Oracle | Packet | Observed | Matches self | Matches previous |
+|---|---|---|---|---|
+| `pyzk` | cmd 1001, reply id 1 | 56551 | **56551** | 56552 |
+| `zkteco-js` | cmd 1000, reply id 1 | 64534 | **64534** | 64535 |
+| `zkteco-js` | cmd 1001, reply id 2 | 56550 | **56550** | 56551 |
 
-Both are pure and independently oracle-verifiable.
+The two start their reply-id counters at different values, so this is agreement across different
+data rather than a coincidence. A fourth captured packet — `pyzk` cmd 1000 reply id 0 — is not
+discriminating: one's-complement arithmetic makes reply ids 0 and 0xffff produce the same checksum.
 
-**This quirk is implemented as a hypothesis, not an article of faith.** The oracles adjudicate it
-(§7.3). If both independent implementations emit a packet whose checksum disagrees with its
-transmitted reply id, implement it. If they disagree with each other, stop, consult the published
-protocol documentation, and **record the divergence** — that divergence is the most valuable thing
-this project can contribute back.
+`Session.send` therefore transmits the encoded payload unmodified. `applyReplyIdQuirk()` remains
+exported, documented and tested, and is used by nothing. That is deliberate: the evidence is two
+implementations and a handshake, not a device. If the first real terminal refuses self-consistent
+packets, restoring the behaviour is one call site.
 
-The same rule governs the checksum formula (two competing formulations exist in the wild) and
-comm-key mixing (where one byte is assigned rather than XORed, which reads like a typo).
+Both ways of being wrong here fail loudly — a bad checksum means the device refuses everything,
+which surfaces on first contact rather than corrupting data quietly. That symmetry is what made it
+safe to follow the evidence.
 
 ### 5.2 The 31-day pseudo-calendar can produce dates that do not exist
 
@@ -749,7 +752,7 @@ second`, one byte each. Do not conflate the two.
 
 | Trap | Handling |
 |---|---|
-| Checksum is computed before `replyId` is incremented, so the transmitted packet's checksum does not match its own `replyId` | Preserve it. `applyReplyIdQuirk()`, §5.1 |
+| Checksum said to be computed before `replyId` is incremented | **Refuted by oracle capture** — both implementations emit self-consistent checksums. See §5.1 |
 | A reference implementation's source comment gives the start marker as `0x7282`, but its own constant is 32130 = `0x7D82` | Trust the value, not the comment. `50 50 82 7D` on the wire |
 | `uid` is recycled after a user is deleted | `userIdSource`, §4.2 |
 | Disabling the device before a bulk read locks employees out every poll cycle | Do not send `CMD_DISABLEDEVICE`, §6 |
