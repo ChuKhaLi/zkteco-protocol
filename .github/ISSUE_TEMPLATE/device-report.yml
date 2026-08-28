@@ -1,0 +1,61 @@
+name: Device report
+description: Report how this library behaved against a real ZKTeco device
+title: "[device] "
+labels: ["device-report"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thank you. This is the most useful contribution this project can
+        receive — the compatibility table is empty until reports like yours
+        fill it in.
+  - type: input
+    id: model
+    attributes:
+      label: Model
+      placeholder: e.g. MB360, iClock260, K40
+    validations:
+      required: true
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware version
+      description: Usually under Menu → System Info on the device.
+    validations:
+      required: true
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Transport that worked
+      options: ["tcp", "udp", "both", "neither"]
+    validations:
+      required: true
+  - type: dropdown
+    id: record_size
+    attributes:
+      label: Record size reported
+      description: The `recordSize` field on any returned log.
+      options: ["8", "16", "40", "it threw ZkFramingError", "did not get that far"]
+    validations:
+      required: true
+  - type: dropdown
+    id: comm_key
+    attributes:
+      label: Did the device require a comm key?
+      options: ["no", "yes, and it worked", "yes, and it was rejected"]
+    validations:
+      required: true
+  - type: textarea
+    id: raw
+    attributes:
+      label: Raw hex of one attendance record
+      description: >
+        The `raw` field from any log entry. Please redact nothing — it contains
+        no personal data beyond a user id, and the byte layout is the whole
+        point of the report.
+      render: text
+  - type: textarea
+    id: notes
+    attributes:
+      label: Anything else
+      description: Timestamps off? Names garbled? Errors thrown? Paste them here.
