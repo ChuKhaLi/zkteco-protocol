@@ -11,7 +11,8 @@ from zk import ZK
 def main() -> int:
     port = int(sys.argv[1])
     force_udp = len(sys.argv) > 2 and sys.argv[2] == "udp"
-    conn = ZK("127.0.0.1", port=port, timeout=5, force_udp=force_udp)
+    comm_key = int(sys.argv[3]) if len(sys.argv) > 3 else 0
+    conn = ZK("127.0.0.1", port=port, timeout=5, force_udp=force_udp, password=comm_key)
     try:
         conn.connect()
     except Exception as exc:  # the emulator may answer only part of a session

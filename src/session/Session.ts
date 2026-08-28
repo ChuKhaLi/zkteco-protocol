@@ -1,10 +1,13 @@
 import { CMD } from '../codec/commands.js'
 import { decodePayload, encodePayload, type DecodedPacket } from '../codec/packet.js'
+import { mixCommKey } from '../codec/commkey.js'
 import { ZkAuthError, ZkProtocolError } from '../errors.js'
 import type { Transport } from '../transport/Transport.js'
 
 export interface SessionOptions {
   timeoutMs: number
+  /** Device comm key. 0 means unset. */
+  commKey?: number
 }
 
 /**
@@ -28,19 +31,37 @@ export class Session {
   /**
    * Handshakes and stores the session id the device issues.
    *
-   * On any failure — refused handshake, auth demand, or timeout — the
-   * transport is torn down before the error propagates. Nothing above this
-   * call ever manages to close a session that never finished opening, so
-   * leaving that to the caller would leak the socket.
+   * If the device answers CONNECT with ACK_UNAUTH, it is demanding a comm
+   * key: the configured key is mixed against the session id it just issued
+   * (per `mixCommKey`) and sent back as CMD_AUTH. No key configured, or a
+   * key the device rejects, both surface as ZkAuthError.
+   *
+   * On any failure — refused handshake, rejected/missing comm key, or
+   * timeout — the transport is torn down before the error propagates.
+   * Nothing above this call ever manages to close a session that never
+   * finished opening, so leaving that to the caller would leak the socket.
    */
   async open(): Promise<void> {
     await this.transport.connect()
     this.open_ = true
     try {
       const res = await this.send(CMD.CONNECT, undefined, { sessionId: 0 })
+
       if (res.command === CMD.ACK_UNAUTH) {
-        throw new ZkAuthError('device requires a comm key')
+        const commKey = this.opts.commKey ?? 0
+        if (commKey === 0) {
+          throw new ZkAuthError('device requires a comm key but none was configured')
+        }
+        // The key is mixed against the session id the device just issued.
+        this.currentSessionId = res.sessionId
+        const auth = await this.send(CMD.AUTH, mixCommKey(commKey, res.sessionId))
+        if (auth.command !== CMD.ACK_OK) {
+          throw new ZkAuthError('device rejected the comm key')
+        }
+        this.currentSessionId = auth.sessionId
+        return
       }
+
       if (res.command !== CMD.ACK_OK) {
         throw new ZkProtocolError(`handshake refused with command ${res.command}`)
       }

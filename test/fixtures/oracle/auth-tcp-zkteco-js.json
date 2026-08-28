@@ -1,7 +1,7 @@
 {
   "source": "zkteco-js",
   "transport": "tcp",
-  "commKey": 0,
+  "commKey": 1234,
   "emulatorSessionId": 7982,
   "packets": [
     {

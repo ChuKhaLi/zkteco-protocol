@@ -12,6 +12,7 @@ export interface CapturedPacket {
 export interface OracleFixture {
   source: 'pyzk' | 'zkteco-js'
   transport: 'tcp' | 'udp'
+  commKey: number
   emulatorSessionId: number
   packets: CapturedPacket[]
 }

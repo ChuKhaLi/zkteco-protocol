@@ -6,6 +6,7 @@ import { startEmulator } from '../../test/emulator/index.js'
 
 const OUT_DIR = path.join('test', 'fixtures', 'oracle')
 const EMULATOR_SESSION_ID = 0x1f2e
+const ORACLE_COMM_KEY = 1234
 
 function pythonPath(): string {
   const win = path.join('tools', 'oracle', '.venv', 'Scripts', 'python.exe')
@@ -37,13 +38,20 @@ function run(cmd: string, args: string[], useShell = false): Promise<void> {
 async function capture(
   source: 'pyzk' | 'zkteco-js',
   transport: 'tcp' | 'udp',
+  commKey = 0,
 ): Promise<void> {
-  const emulator = await startEmulator({ transport, sessionId: EMULATOR_SESSION_ID })
+  const emulator = await startEmulator({ transport, sessionId: EMULATOR_SESSION_ID, commKey })
   try {
     if (source === 'pyzk') {
-      await run(pythonPath(), ['tools/oracle/capture_pyzk.py', String(emulator.port), transport])
+      await run(pythonPath(), [
+        'tools/oracle/capture_pyzk.py', String(emulator.port), transport, String(commKey),
+      ])
     } else {
-      await run('npx', ['tsx', 'tools/oracle/capture_zkjs.ts', String(emulator.port), transport], true)
+      await run(
+        'npx',
+        ['tsx', 'tools/oracle/capture_zkjs.ts', String(emulator.port), transport, String(commKey)],
+        true,
+      )
     }
     // Give the last datagram a moment to land before tearing the socket down.
     await new Promise((r) => setTimeout(r, 300))
@@ -55,9 +63,10 @@ async function capture(
       sessionId: p.sessionId,
       replyId: p.replyId,
     }))
-    const fixture = { source, transport, emulatorSessionId: EMULATOR_SESSION_ID, packets }
+    const fixture = { source, transport, commKey, emulatorSessionId: EMULATOR_SESSION_ID, packets }
     mkdirSync(OUT_DIR, { recursive: true })
-    const file = path.join(OUT_DIR, `handshake-${transport}-${source}.json`)
+    const kind = commKey === 0 ? 'handshake' : 'auth'
+    const file = path.join(OUT_DIR, `${kind}-${transport}-${source}.json`)
     writeFileSync(file, `${JSON.stringify(fixture, null, 2)}\n`)
     process.stdout.write(`wrote ${file} (${packets.length} packets)\n`)
   } finally {
@@ -67,6 +76,7 @@ async function capture(
 
 for (const transport of ['tcp', 'udp'] as const) {
   for (const source of ['pyzk', 'zkteco-js'] as const) {
-    await capture(source, transport)
+    await capture(source, transport, 0)
+    await capture(source, transport, ORACLE_COMM_KEY)
   }
 }

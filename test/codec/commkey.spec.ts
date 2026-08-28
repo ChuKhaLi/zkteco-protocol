@@ -19,21 +19,20 @@ describe('mixCommKey', () => {
     expect(mixCommKey(1234, 7)).not.toEqual(mixCommKey(5678, 7))
   })
 
-  it('discards the low byte of the session id — SUSPECTED SPEC DEFECT', () => {
+  it('discards the low byte of the session id — CONFIRMED genuine, not a defect', () => {
     // Adding a small session id changes only byte 0 of the packed value; the
     // half-swap moves that byte to index 2; step 5 then assigns the tick byte
     // to index 2, erasing it. Session ids 1, 2 and 255 are therefore
     // indistinguishable here.
     //
-    // Devices issue small session ids, so if this is real the session plays
-    // almost no part in authentication — which would defeat the point of
-    // mixing it in. More likely the prose this was written from is wrong about
-    // the swap or about which byte is assigned.
-    //
-    // This test characterises current behaviour so the question cannot be
-    // lost. Task 14 captures CMD_AUTH bytes from an independent implementation
-    // and adjudicates it. If they disagree, the algorithm changes and THIS
-    // TEST SHOULD FAIL AND BE DELETED — that is the intended outcome.
+    // This originally read as a likely spec-prose error: devices issue small
+    // session ids, so if genuine, the session plays almost no part in
+    // authentication, defeating the point of mixing it in. Task 14's oracle
+    // capture adjudicated it: pyzk, driven as a black box against the
+    // emulator's comm-key challenge over both TCP and UDP, put CMD_AUTH bytes
+    // on the wire that match mixCommKey's output exactly (see
+    // test/oracle/commkey.spec.ts and the auth-*-pyzk.json fixtures). The
+    // erasure is real device behaviour, not a misreading of the prose.
     expect(mixCommKey(1234, 1)).toEqual(mixCommKey(1234, 2))
     expect(mixCommKey(1234, 1)).toEqual(mixCommKey(1234, 255))
     expect(mixCommKey(1234, 1)).not.toEqual(mixCommKey(1234, 256))

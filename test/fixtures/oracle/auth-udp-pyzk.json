@@ -1,14 +1,21 @@
 {
-  "source": "zkteco-js",
+  "source": "pyzk",
   "transport": "udp",
-  "commKey": 0,
+  "commKey": 1234,
   "emulatorSessionId": 7982,
   "packets": [
     {
-      "hex": "e80316fc00000100",
+      "hex": "e80317fc00000000",
       "command": 1000,
-      "checksum": 64534,
+      "checksum": 64535,
       "sessionId": 0,
+      "replyId": 0
+    },
+    {
+      "hex": "4e040f402e1f010041363266",
+      "command": 1102,
+      "checksum": 16399,
+      "sessionId": 7982,
       "replyId": 1
     },
     {

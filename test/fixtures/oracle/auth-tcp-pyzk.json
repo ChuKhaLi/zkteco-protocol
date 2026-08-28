@@ -1,7 +1,7 @@
 {
   "source": "pyzk",
   "transport": "tcp",
-  "commKey": 0,
+  "commKey": 1234,
   "emulatorSessionId": 7982,
   "packets": [
     {
@@ -12,11 +12,18 @@
       "replyId": 0
     },
     {
-      "hex": "5050827d08000000e903e7dc2e1f0100",
-      "command": 1001,
-      "checksum": 56551,
+      "hex": "5050827d0c0000004e040f402e1f010041363266",
+      "command": 1102,
+      "checksum": 16399,
       "sessionId": 7982,
       "replyId": 1
+    },
+    {
+      "hex": "5050827d08000000e903e6dc2e1f0200",
+      "command": 1001,
+      "checksum": 56550,
+      "sessionId": 7982,
+      "replyId": 2
     }
   ]
 }

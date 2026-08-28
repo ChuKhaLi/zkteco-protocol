@@ -16,8 +16,13 @@ const DEFAULT_TICKS = 50
  * Written from a prose description of the algorithm, never transcribed from a
  * GPL implementation. Pinned by oracle fixtures.
  *
- * UNVERIFIED: the low byte of `sessionId` does not affect the output. See the
- * characterisation test in commkey.spec.ts. Pending oracle adjudication.
+ * The low byte of `sessionId` does not affect the output — see the
+ * characterisation test in commkey.spec.ts for why that falls out of steps 2,
+ * 4 and 5 structurally. CONFIRMED, not a bug: Task 14's oracle capture shows
+ * `pyzk`, driven as a black box, emitting `CMD_AUTH` bytes over both TCP and
+ * UDP that match this function's output exactly (spec §A.4, test/oracle/
+ * commkey.spec.ts). `zkteco-js` has no comm-key support and offered no
+ * second opinion.
  */
 export function mixCommKey(commKey: number, sessionId: number, ticks = DEFAULT_TICKS): Buffer {
   // 1. Reverse the bit order: input bit 0 becomes output bit 31.

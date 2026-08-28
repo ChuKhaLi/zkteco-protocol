@@ -696,6 +696,17 @@ code:
 - With `ticks = 50`, let `B = ticks & 0xFF`. XOR bytes 0, 1 and 3 with `B`. **Byte 2 is assigned `B`
   directly, not XORed** — this reads like a typo and is not one. It is a prime oracle target (§7.3).
 
+**Adjudicated (Task 14).** Implementing this description structurally erases the low byte of the
+session id: adding a small session id changes only byte 0 of the packed value, the half-swap moves
+byte 0 to index 2, and the byte-2 assignment in the last step then overwrites it with the tick byte.
+`mixCommKey(1234, 1)`, `(1234, 2)` and `(1234, 255)` all produce identical output. That looked like
+a defect in the prose above — it is not one. `pyzk`, driven as a black box against the emulator's
+comm-key challenge over both TCP and UDP, put `CMD_AUTH` bytes on the wire that match this
+library's `mixCommKey(commKey, sessionId)` exactly (see `test/oracle/commkey.spec.ts` and the
+`auth-*-pyzk.json` fixtures). The discarded low byte is therefore genuine protocol behaviour, not
+an implementation bug. `zkteco-js` offered no second opinion — it has no comm-key support at all,
+so its `auth-*-zkteco-js.json` fixtures carry no `CMD_AUTH` packet.
+
 ### A.5 Bulk read sequence
 
 1. `CMD_GET_FREE_SIZES` to obtain `recordCount`. **Mandatory first step** — §5.3 depends on it.

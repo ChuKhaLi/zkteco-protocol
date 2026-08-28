@@ -1,6 +1,7 @@
 {
   "source": "pyzk",
   "transport": "udp",
+  "commKey": 0,
   "emulatorSessionId": 7982,
   "packets": [
     {

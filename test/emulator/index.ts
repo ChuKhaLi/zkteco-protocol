@@ -3,6 +3,7 @@ import dgram from 'node:dgram'
 import { CMD } from '../../src/codec/commands.js'
 import { decodePayload, encodePayload, type DecodedPacket } from '../../src/codec/packet.js'
 import { frameTcp, tryUnframeTcp } from '../../src/codec/framing.js'
+import { mixCommKey } from '../../src/codec/commkey.js'
 import type { ZkUser } from '../../src/types.js'
 
 export interface EmulatorRecords {
@@ -73,8 +74,23 @@ export function reply(
   return encodePayload({ command, sessionId: state.sessionId, replyId: req.replyId, data })
 }
 
+// CMD.AUTH here validates the mixed key using this library's OWN mixCommKey
+// (Task 5). That makes this handler and the tests it backs proof of the
+// authentication FLOW — challenge, mixed reply, ACK — not of whether
+// mixCommKey computes the bytes a real device expects. The algorithm itself
+// is pinned separately by the oracle fixtures in test/oracle/commkey.spec.ts.
 const baseHandlers: HandlerTable = {
-  [CMD.CONNECT]: (req, state) => [reply(state, req, CMD.ACK_OK)],
+  [CMD.CONNECT]: (req, state) => [
+    reply(state, req, state.authenticated ? CMD.ACK_OK : CMD.ACK_UNAUTH),
+  ],
+  [CMD.AUTH]: (req, state) => {
+    const expected = mixCommKey(state.commKey, state.sessionId)
+    if (req.data.equals(expected)) {
+      state.authenticated = true
+      return [reply(state, req, CMD.ACK_OK)]
+    }
+    return [reply(state, req, CMD.ACK_UNAUTH)]
+  },
   [CMD.EXIT]: (req, state) => [reply(state, req, CMD.ACK_OK)],
 }
 
