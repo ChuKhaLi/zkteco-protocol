@@ -39,6 +39,8 @@ export interface EmulatorState {
   records: EmulatorRecords | null
   supportsBuffer: boolean
   chunksSent: number
+  /** The body a buffered read (PREPARE_BUFFER/READ_BUFFER) is currently serving. */
+  pendingBuffer: Buffer | null
   /** Set by the transport layer so a handler can end the connection. */
   dropConnection: boolean
   opts: EmulatorOptions
@@ -141,12 +143,50 @@ export function serveDataLegacy(
   return out
 }
 
+/** The body a buffered read is currently serving, keyed by nothing — one at a time. */
+function bufferedStream(state: EmulatorState, command: number): Buffer {
+  if (command === CMD.USERTEMP_RRQ) {
+    return withSizeHeader(Buffer.concat(state.users.map((u) => Buffer.from(u.raw, 'hex'))))
+  }
+  return state.records ? attendanceBody(state.records) : withSizeHeader(Buffer.alloc(0))
+}
+
+const bufferedHandlers: HandlerTable = {
+  [CMD.PREPARE_BUFFER]: (req, state) => {
+    if (!state.supportsBuffer) return [reply(state, req, CMD.ACK_ERROR)]
+    // Request body: <int8 1><int16 command><int32 fct><int32 ext>
+    const command = req.data.readUInt16LE(1)
+    state.pendingBuffer = bufferedStream(state, command)
+    const size = Buffer.alloc(4)
+    size.writeUInt32LE(state.pendingBuffer.length, 0)
+    return [reply(state, req, CMD.ACK_OK, size)]
+  },
+  [CMD.READ_BUFFER]: (req, state) => {
+    if (!state.supportsBuffer || !state.pendingBuffer) {
+      return [reply(state, req, CMD.ACK_ERROR)]
+    }
+    const offset = req.data.readUInt32LE(0)
+    const want = req.data.readUInt32LE(4)
+    state.chunksSent += 1
+    if (
+      state.opts.behavior === 'dropMidTransfer' &&
+      state.chunksSent > (state.opts.dropAfterChunk ?? 1)
+    ) {
+      state.dropConnection = true
+      return []
+    }
+    const slice = state.pendingBuffer.subarray(offset, offset + want)
+    return [reply(state, req, CMD.ACK_DATA, slice)]
+  },
+}
+
 // CMD.AUTH here validates the mixed key using this library's OWN mixCommKey
 // (Task 5). That makes this handler and the tests it backs proof of the
 // authentication FLOW — challenge, mixed reply, ACK — not of whether
 // mixCommKey computes the bytes a real device expects. The algorithm itself
 // is pinned separately by the oracle fixtures in test/oracle/commkey.spec.ts.
 const baseHandlers: HandlerTable = {
+  ...bufferedHandlers,
   [CMD.CONNECT]: (req, state) => [
     reply(state, req, state.authenticated ? CMD.ACK_OK : CMD.ACK_UNAUTH),
   ],
@@ -178,6 +218,7 @@ function buildState(opts: EmulatorOptions): EmulatorState {
     records: opts.records ?? null,
     supportsBuffer: opts.supportsBuffer ?? true,
     chunksSent: 0,
+    pendingBuffer: null,
     dropConnection: false,
     opts,
     info: opts.info ?? { userCount: 0, recordCount: 0, recordCapacity: 0 },
