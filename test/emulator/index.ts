@@ -49,6 +49,7 @@ export interface Emulator {
   readonly transport: 'tcp' | 'udp'
   readonly received: DecodedPacket[]
   readonly receivedRaw: Buffer[]
+  readonly socketErrors: Error[]
   readonly state: EmulatorState
   close(): Promise<void>
 }
@@ -91,6 +92,7 @@ export async function startEmulator(opts: EmulatorOptions): Promise<Emulator> {
   const handlers = { ...baseHandlers, ...(opts.handlers ?? {}) } as HandlerTable
   const received: DecodedPacket[] = []
   const receivedRaw: Buffer[] = []
+  const socketErrors: Error[] = []
 
   const respond = (raw: Buffer, payload: Buffer): Buffer[] | null => {
     receivedRaw.push(Buffer.from(raw))
@@ -120,15 +122,25 @@ export async function startEmulator(opts: EmulatorOptions): Promise<Emulator> {
           acc = acc.subarray(framed.consumed)
           const out = respond(Buffer.from(raw), framed.payload)
           if (out) for (const p of out) sock.write(frameTcp(p))
-          if (state.dropConnection) { state.dropConnection = false; sock.destroy() }
+          if (state.dropConnection) {
+            state.dropConnection = false
+            sock.destroy()
+            break // the socket is gone; a further complete frame in `acc` must not be answered
+          }
         }
       })
-      sock.on('error', () => { /* client-side resets are expected in tests */ })
+      sock.on('error', (err) => {
+        // Abrupt client teardown legitimately produces these; anything else
+        // means the emulator itself is unhealthy and must not go unnoticed.
+        const code = (err as NodeJS.ErrnoException).code
+        if (code === 'ECONNRESET' || code === 'EPIPE') return
+        socketErrors.push(err)
+      })
     })
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const port = (server.address() as net.AddressInfo).port
     return {
-      port, transport: 'tcp', received, receivedRaw, state,
+      port, transport: 'tcp', received, receivedRaw, socketErrors, state,
       close: () => new Promise<void>((resolve) => {
         for (const s of sockets) s.destroy()
         server.close(() => resolve())
@@ -144,7 +156,7 @@ export async function startEmulator(opts: EmulatorOptions): Promise<Emulator> {
   await new Promise<void>((resolve) => sock.bind(0, '127.0.0.1', resolve))
   const port = sock.address().port
   return {
-    port, transport: 'udp', received, receivedRaw, state,
+    port, transport: 'udp', received, receivedRaw, socketErrors, state,
     close: () => new Promise<void>((resolve) => { sock.close(() => resolve()) }),
   }
 }
