@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { ZkDevice } from '../src/ZkDevice.js'
-import { ZkAuthError, ZkFramingError, ZkTimeoutError } from '../src/errors.js'
+import { ZkAuthError, ZkConnectionError, ZkFramingError, ZkTimeoutError } from '../src/errors.js'
 import { USER_RECORD_SIZE } from '../src/codec/records/user.js'
 import { startEmulator, type Emulator } from './emulator/index.js'
 import type { ZkUser } from '../src/types.js'
@@ -205,7 +205,15 @@ describe('scenarios over tcp only', () => {
     })
     device = new ZkDevice({ host: '127.0.0.1', port: running.port, timeoutMs: 2000 })
     await device.connect()
-    await expect(device.getAttendanceLogs()).rejects.toThrow()
+    // Asserted by class, not a generic toThrow(): a bare toThrow() passes on
+    // ANY rejection, including a ZkTimeoutError raised for an unrelated
+    // reason (e.g. a misconfigured transport that never talks to this
+    // emulator at all) — this suite has already been fooled by exactly that
+    // shape once. The socket is destroyed mid-read here, which the transport
+    // surfaces specifically as ZkConnectionError; requiring that class is
+    // what actually proves the drop was detected rather than just some
+    // failure.
+    await expect(device.getAttendanceLogs()).rejects.toBeInstanceOf(ZkConnectionError)
     device = null
   })
 })
