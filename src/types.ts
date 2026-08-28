@@ -54,3 +54,20 @@ export interface ZkAttendanceLog {
   /** Hex of the original record bytes, for reconciliation. */
   raw: string
 }
+
+/** One enrolled user, as the device stores them. */
+export interface ZkUser {
+  /** Device-internal key. Recycled after deletion — NOT an identity. */
+  uid: number
+  /** The identifier printed on the device. A string, so leading zeros survive. */
+  userId: string
+  name: string
+  /** Raw privilege level. Model-dependent, deliberately not decoded. */
+  privilege: number
+  /** True when a password is set. The password itself is never returned. */
+  hasPassword: boolean
+  /** Raw card number, 0 when unset. */
+  cardNumber: number
+  /** Hex of the original record bytes. */
+  raw: string
+}
