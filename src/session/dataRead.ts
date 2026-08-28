@@ -65,13 +65,23 @@ export async function readBulkLegacy(session: Session, command: number): Promise
  * Releases the device-side buffer. Best effort: the read already succeeded
  * and the caller already holds the data, so a failure here must not discard
  * it — it's cleanup, not part of the result.
+ *
+ * Only `ZkProtocolError` is swallowed here — it proves the device answered
+ * (with CMD_ACK_ERROR), so the reply was consumed and the session is still
+ * in sync. `ZkTimeoutError` and `ZkConnectionError` must propagate: a timeout
+ * means FREE_DATA's reply never arrived by the deadline, but it can still
+ * arrive later and sit in the transport queue. Swallowing that would let the
+ * next command's `receive()` consume FREE_DATA's late reply instead of its
+ * own — every reply after that is then off by one, and in a legacy
+ * multi-chunk read a one-packet shift still satisfies `detectRecordSize`
+ * (same byte count, wrong bytes), which is exactly the misaligned parse this
+ * library exists to prevent.
  */
 async function freeBuffer(session: Session): Promise<void> {
   try {
     await session.execute(CMD.FREE_DATA)
-  } catch {
-    // Releasing the device-side buffer is best effort; failing to do so must
-    // not discard data the caller already has in hand.
+  } catch (err) {
+    if (!(err instanceof ZkProtocolError)) throw err
   }
 }
 

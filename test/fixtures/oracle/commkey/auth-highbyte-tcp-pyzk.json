@@ -1,0 +1,29 @@
+{
+  "source": "pyzk",
+  "transport": "tcp",
+  "commKey": 1234,
+  "emulatorSessionId": 11822,
+  "packets": [
+    {
+      "hex": "5050827d08000000e80317fc00000000",
+      "command": 1000,
+      "checksum": 64535,
+      "sessionId": 0,
+      "replyId": 0
+    },
+    {
+      "hex": "5050827d0c0000004e040f402e2e010041363257",
+      "command": 1102,
+      "checksum": 16399,
+      "sessionId": 11822,
+      "replyId": 1
+    },
+    {
+      "hex": "5050827d08000000e903e6cd2e2e0200",
+      "command": 1001,
+      "checksum": 52710,
+      "sessionId": 11822,
+      "replyId": 2
+    }
+  ]
+}

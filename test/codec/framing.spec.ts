@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { START_MARKER, frameTcp, tryUnframeTcp } from '../../src/codec/framing.js'
+import { MAX_CHUNK } from '../../src/codec/commands.js'
 import { ZkProtocolError } from '../../src/errors.js'
 
 const payload = Buffer.from([0xe8, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
@@ -45,5 +46,26 @@ describe('tryUnframeTcp', () => {
     const bad = frameTcp(payload)
     bad.writeUInt8(0x51, 0)
     expect(() => tryUnframeTcp(bad)).toThrow(ZkProtocolError)
+  })
+
+  it('throws rather than waiting forever when the declared size is absurd', () => {
+    // Without this guard, a corrupt length prefix has TcpTransport.absorb()
+    // wait indefinitely for bytes that will never arrive, concatenating
+    // every further chunk into an unbounded buffer while every receive()
+    // times out from here on -- the connection is wedged permanently, not
+    // just for this one packet.
+    const head = Buffer.alloc(8)
+    START_MARKER.copy(head, 0)
+    head.writeUInt32LE(MAX_CHUNK.tcp + 9, 4)
+    expect(() => tryUnframeTcp(head)).toThrow(ZkProtocolError)
+  })
+
+  it('accepts a declared size right at the maximum', () => {
+    const head = Buffer.alloc(8)
+    START_MARKER.copy(head, 0)
+    head.writeUInt32LE(MAX_CHUNK.tcp + 8, 4)
+    // Still incomplete (no body bytes follow), so this must return null
+    // rather than throw -- the size itself is within bounds.
+    expect(tryUnframeTcp(head)).toBeNull()
   })
 })

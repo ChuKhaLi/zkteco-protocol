@@ -6,16 +6,22 @@ import { START_MARKER } from '../../src/codec/framing.js'
 import { CMD } from '../../src/codec/commands.js'
 
 const DIR = path.join('test', 'fixtures', 'oracle')
-// Only the handshake captures. Task 14 adds `auth-*` fixtures alongside these;
-// they are asserted separately because comm-key mixing has its own oracle story.
+// Every captured fixture, handshake and auth alike. This used to be filtered
+// to `handshake-*` only, on the theory that comm-key mixing had its own
+// separate oracle story -- but that filter meant only 6 of the 14
+// discriminating packets PROVENANCE.md claims were ever actually classified.
+// The `auth-*` fixtures are well-formed CMD_AUTH exchanges with their own
+// reply-id checksums, and belong in this adjudication like everything else.
 const fixtures = readdirSync(DIR)
-  .filter((f) => f.startsWith('handshake-') && f.endsWith('.json'))
+  .filter((f) => f.endsWith('.json'))
   .map((f) => JSON.parse(readFileSync(path.join(DIR, f), 'utf8')) as OracleFixture)
 
 describe('oracle fixtures', () => {
   it('exist for both oracles on both transports', () => {
-    const seen = fixtures.map((f) => `${f.source}/${f.transport}`).sort()
-    expect(seen).toEqual([
+    // Deduplicated: each combo now has both a handshake-* and an auth-*
+    // fixture, so this checks presence, not a fixture count.
+    const seen = new Set(fixtures.map((f) => `${f.source}/${f.transport}`))
+    expect([...seen].sort()).toEqual([
       'pyzk/tcp', 'pyzk/udp', 'zkteco-js/tcp', 'zkteco-js/udp',
     ])
   })
@@ -48,6 +54,13 @@ describe('oracle fixtures', () => {
     // independent implementations agree on is what the library implements. If
     // this test ever fails, do NOT pick a side: record the divergence and
     // leave it for first-hardware verification.
+    //
+    // Asserting `flattened.size === 1` alone is not enough: a set of size 1
+    // is satisfied just as well by { 'previous-reply-id' } as by { 'self' }.
+    // A synthetic packet checksummed over `replyId - 1` classifies as
+    // 'previous-reply-id' and would pass a size-1 check while asserting the
+    // opposite of what Session.send actually does. The set must equal
+    // exactly {'self'} -- what it contains, not just how many things it has.
     const verdicts = new Map<string, Set<string>>()
     let discriminatingPackets = 0
     for (const fixture of fixtures) {
@@ -58,9 +71,13 @@ describe('oracle fixtures', () => {
       discriminatingPackets += classes.filter((c) => c !== 'ambiguous').length
     }
     const flattened = new Set([...verdicts.values()].flatMap((s) => [...s]))
-    expect(flattened.has('neither')).toBe(false)
-    expect(discriminatingPackets, `need at least one discriminating packet; found ${discriminatingPackets}`).toBeGreaterThan(0)
-    expect(flattened.size, `oracles disagree: ${JSON.stringify([...verdicts])}`).toBe(1)
+    // 18 packets total across all 8 fixtures, minus the 4 that are
+    // arithmetically ambiguous (replyId === 0): pyzk's initial CMD_CONNECT,
+    // captured once per handshake/auth x TCP/UDP fixture. PROVENANCE.md
+    // claims 14 discriminating packets; this pins that claim to what the
+    // suite actually classifies, now that every fixture is included.
+    expect(discriminatingPackets).toBe(14)
+    expect(flattened, `oracles disagree: ${JSON.stringify([...verdicts])}`).toEqual(new Set(['self']))
   })
 
   it('data-bearing packets are classified correctly', () => {

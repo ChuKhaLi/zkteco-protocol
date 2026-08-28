@@ -76,9 +76,15 @@ function decodeOne(rec: Buffer, size: RecordSize): DecodedAttendanceRecord {
   const raw = rec.toString('hex')
   if (size === 40) {
     const { status, verifyMode } = mapStatusAndVerify(rec.readUInt8(26), rec.readUInt8(31))
+    const printedUserId = readNulTerminated(rec, 2, 24)
     return {
       uid: rec.readUInt16LE(0),
-      userIdFromRecord: readNulTerminated(rec, 2, 24),
+      // A blank field must not be reported as a device-supplied identity —
+      // '' labelled userIdSource: 'device' is exactly the fabricated
+      // identity the public API promises never to hand back (README,
+      // spec §4.2). null instead lets this record flow into the same
+      // lookup-by-uid path as the 8- and 16-byte dialects.
+      userIdFromRecord: printedUserId === '' ? null : printedUserId,
       numericUserId: null,
       timestamp: decodeZkTime(rec.readUInt32LE(27)),
       status,

@@ -1,3 +1,4 @@
+import { ZkProtocolError } from '../errors.js'
 import type { ZkNaiveTime } from '../types.js'
 
 const pad = (n: number, width = 2): string => String(n).padStart(width, '0')
@@ -38,6 +39,19 @@ export function decodeZkTime(t: number): ZkNaiveTime {
  * packed uint32 form above.
  */
 export function decodeZkTime6(buf: Buffer, offset = 0): ZkNaiveTime {
+  // `buf[i]` on a short buffer reads back `undefined`, and the `as number`
+  // casts below would silence the compiler while every field of the
+  // returned ZkNaiveTime — typed as `number` — is actually `undefined`.
+  // decodeZkTime6(Buffer.from([26, 8])) previously returned
+  // `local: "2026-08-undefinedTundefined:undefined:undefined"` instead of
+  // failing. Validate up front and throw rather than hand back a value that
+  // lies about its own type.
+  if (offset < 0 || buf.length < offset + 6) {
+    throw new ZkProtocolError(
+      `decodeZkTime6 needs 6 bytes at offset ${offset}, buffer has ${buf.length}`,
+      buf,
+    )
+  }
   return make(
     2000 + (buf[offset] as number),
     buf[offset + 1] as number,

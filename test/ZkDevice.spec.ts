@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { CMD } from '../src/codec/commands.js'
+import { START_MARKER } from '../src/codec/framing.js'
 import { ZkDevice } from '../src/ZkDevice.js'
 import { ZkConnectionError } from '../src/errors.js'
 import { startEmulator, type Emulator } from './emulator/index.js'
@@ -90,7 +91,12 @@ describe('ZkDevice defaults', () => {
     // Explicit port so the test can reach the emulator; transport is left out.
     device = new ZkDevice({ host: '127.0.0.1', port: running.port })
     await device.connect()
-    expect(running.transport).toBe('tcp')
+    // `running.transport` is 'tcp' by construction (startEmulator was called
+    // with `transport: 'tcp'` above) regardless of what ZkDevice actually
+    // did, so it proves nothing about ZkDevice's own default. Assert on the
+    // bytes ZkDevice put on the wire instead: TCP framing opens with
+    // START_MARKER; a UDP payload would not.
+    expect(running.receivedRaw[0]!.subarray(0, 4)).toEqual(START_MARKER)
     await device.disconnect()
     device = null
   })

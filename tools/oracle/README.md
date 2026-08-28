@@ -9,6 +9,13 @@ bytes they put on the socket are recorded and committed as fixtures under
 `test/fixtures/oracle/`. CI reads only those JSON files — it needs neither
 Python nor either oracle installed.
 
+`test/fixtures/oracle/commkey/` holds a further set of `pyzk`-only captures
+against `(commKey, sessionId)` pairs chosen to isolate the comm-key mixing's
+low-byte-discard invariance (§A.4 in the design spec) specifically — kept out
+of the top-level directory because `test/oracle/fixtures.spec.ts` scans every
+`*.json` directly under it for the reply-id checksum adjudication and asserts
+an exact count of discriminating packets across that corpus.
+
 ## Licensing
 
 `pyzk` is GPL-2.0. It is executed, never read. No file under `site-packages/zk/`

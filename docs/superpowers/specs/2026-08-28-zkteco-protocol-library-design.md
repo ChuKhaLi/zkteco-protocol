@@ -320,10 +320,12 @@ The two start their reply-id counters at different values, so this is agreement 
 data rather than a coincidence. A fourth captured packet — `pyzk` cmd 1000 reply id 0 — is not
 discriminating: one's-complement arithmetic makes reply ids 0 and 0xffff produce the same checksum.
 
-`Session.send` therefore transmits the encoded payload unmodified. `applyReplyIdQuirk()` remains
-exported, documented and tested, and is used by nothing. That is deliberate: the evidence is two
-implementations and a handshake, not a device. If the first real terminal refuses self-consistent
-packets, restoring the behaviour is one call site.
+`Session.send` therefore transmits the encoded payload unmodified. `applyReplyIdQuirk()` is
+retained and tested internally in `src/codec/packet.ts` — not part of the public API, since the
+export surface is a promise that cannot cheaply be withdrawn and an internal escape hatch does not
+belong in it — and is used by nothing. That is deliberate: the evidence is two implementations and
+a handshake, not a device. If the first real terminal refuses self-consistent packets, restoring
+the behaviour is one call site.
 
 Both ways of being wrong here fail loudly — a bad checksum means the device refuses everything,
 which surfaces on first contact rather than corrupting data quietly. That symmetry is what made it
@@ -699,15 +701,22 @@ code:
 - With `ticks = 50`, let `B = ticks & 0xFF`. XOR bytes 0, 1 and 3 with `B`. **Byte 2 is assigned `B`
   directly, not XORed** — this reads like a typo and is not one. It is a prime oracle target (§7.3).
 
-**Adjudicated (Task 14).** Implementing this description structurally erases the low byte of the
-session id: adding a small session id changes only byte 0 of the packed value, the half-swap moves
-byte 0 to index 2, and the byte-2 assignment in the last step then overwrites it with the tick byte.
-`mixCommKey(1234, 1)`, `(1234, 2)` and `(1234, 255)` all produce identical output. That looked like
-a defect in the prose above — it is not one. `pyzk`, driven as a black box against the emulator's
-comm-key challenge over both TCP and UDP, put `CMD_AUTH` bytes on the wire that match this
-library's `mixCommKey(commKey, sessionId)` exactly (see `test/oracle/commkey.spec.ts` and the
-`auth-*-pyzk.json` fixtures). The discarded low byte is therefore genuine protocol behaviour, not
-an implementation bug. `zkteco-js` offered no second opinion — it has no comm-key support at all,
+**Adjudicated (Task 14, strengthened in the final fix wave).** Implementing this description
+structurally erases the low byte of the session id: adding a small session id changes only byte 0
+of the packed value, the half-swap moves byte 0 to index 2, and the byte-2 assignment in the last
+step then overwrites it with the tick byte. `mixCommKey(1234, 1)`, `(1234, 2)` and `(1234, 255)`
+all produce identical output. That looked like a defect in the prose above — it is not one. `pyzk`,
+driven as a black box against the emulator's comm-key challenge over both TCP and UDP, put
+`CMD_AUTH` bytes on the wire that match this library's `mixCommKey(commKey, sessionId)` exactly
+(see `test/oracle/commkey.spec.ts` and the `auth-*-pyzk.json` fixtures). That first round pinned a
+single `(commKey, sessionId)` pair, though, so it could not by itself confirm the low-byte-discard
+invariance — the session id never varied. Three further `pyzk` captures against session ids chosen
+to isolate that specifically (one differing from the baseline only in the low byte, one only in the
+high byte, one with a different comm key) show `pyzk` itself emitting byte-identical `CMD_AUTH`
+payloads for the low-byte-only pair, while the high-byte-only pair's bytes genuinely differ — see
+`PROVENANCE.md` for the full table. The discarded low byte is therefore genuine protocol behaviour,
+confirmed against real external computation, not an implementation bug. `zkteco-js` offered no
+second opinion on any of this — it has no comm-key support at all,
 so its `auth-*-zkteco-js.json` fixtures carry no `CMD_AUTH` packet.
 
 ### A.5 Bulk read sequence

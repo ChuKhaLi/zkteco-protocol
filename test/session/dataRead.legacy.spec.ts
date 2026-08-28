@@ -4,7 +4,7 @@ import { Session } from '../../src/session/Session.js'
 import { TcpTransport } from '../../src/transport/tcp.js'
 import { UdpTransport } from '../../src/transport/udp.js'
 import { CMD } from '../../src/codec/commands.js'
-import { ZkConnectionError, ZkProtocolError } from '../../src/errors.js'
+import { ZkConnectionError, ZkProtocolError, ZkTimeoutError } from '../../src/errors.js'
 import { reply, startEmulator, type Emulator } from '../emulator/index.js'
 
 let running: Emulator | null = null
@@ -94,6 +94,30 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       })
       session = await openSession(running.port)
       await expect(readBulkLegacy(session, CMD.ATTLOG_RRQ)).rejects.toBeInstanceOf(ZkProtocolError)
+    })
+
+    it('rejects rather than returning when FREE_DATA never answers, and leaves the session usable afterwards', async () => {
+      // Regression test for a real desync: freeBuffer() used to catch every
+      // error indiscriminately, including ZkTimeoutError. That let a FREE_DATA
+      // which never answers still resolve the read with the data already in
+      // hand -- masking the fact that the device may answer FREE_DATA late,
+      // after this call has moved on. A late reply then sits in the transport
+      // queue and gets handed to whatever the caller asks for next, silently
+      // shifting every reply after it by one. The read must reject instead.
+      running = await startEmulator({
+        transport: transportKind,
+        records: { size: 8, rows: [rec8(1)] },
+        chunkSize: 4096,
+        handlers: { [CMD.FREE_DATA]: () => null },
+      })
+      session = new Session(makeTransport(running.port), { timeoutMs: 150 })
+      await session.open()
+      await expect(readBulkLegacy(session, CMD.ATTLOG_RRQ)).rejects.toBeInstanceOf(ZkTimeoutError)
+      // The rejection must not leave the session or its transport wedged: an
+      // unrelated command sent right after still gets its own correct reply,
+      // not some leftover state from the failed FREE_DATA call.
+      const res = await session.execute(CMD.GET_FREE_SIZES)
+      expect(res.command).toBe(CMD.ACK_OK)
     })
 
     it('throws when PREPARE_DATA does not carry a size', async () => {

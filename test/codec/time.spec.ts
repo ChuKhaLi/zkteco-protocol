@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { decodeZkTime, decodeZkTime6 } from '../../src/codec/time.js'
+import { ZkProtocolError } from '../../src/errors.js'
 
 describe('decodeZkTime', () => {
   it('decodes zero as the post-power-loss reset value', () => {
@@ -63,5 +64,18 @@ describe('decodeZkTime6', () => {
   it('reads from an offset', () => {
     const buf = Buffer.from([0xff, 0xff, 26, 8, 27, 8, 1, 0])
     expect(decodeZkTime6(buf, 2).local).toBe('2026-08-27T08:01:00')
+  })
+
+  it('throws rather than returning a value with undefined fields on a short buffer', () => {
+    // decodeZkTime6(Buffer.from([26, 8])) used to return
+    // local: "2026-08-undefinedTundefined:undefined:undefined", with four
+    // fields typed `number` actually holding `undefined` -- the `as number`
+    // casts silenced the compiler. This is public via src/index.ts.
+    expect(() => decodeZkTime6(Buffer.from([26, 8]))).toThrow(ZkProtocolError)
+  })
+
+  it('throws when offset plus 6 bytes runs past the end of the buffer', () => {
+    const buf = Buffer.from([0xff, 0xff, 26, 8, 27, 8, 1, 0])
+    expect(() => decodeZkTime6(buf, 3)).toThrow(ZkProtocolError)
   })
 })

@@ -82,6 +82,17 @@ describe('parseAttendanceData', () => {
     expect(parseAttendanceData(data, 1)[0]!.userIdFromRecord).toBe('007')
   })
 
+  it('reports a blank 40-byte user id as null, never as an empty string', () => {
+    // '' labelled userIdSource: 'device' (assigned by the caller from
+    // userIdFromRecord !== null) would be a fabricated identity — spec §4.2
+    // and the README both promise null, never a fabricated one. null is also
+    // what routes the record into the uid lookup path alongside the 8- and
+    // 16-byte dialects, which still carries a usable identifier.
+    const data = withHeader(rec40(5, '', 0, 0, 0))
+    const [r] = parseAttendanceData(data, 1)
+    expect(r).toMatchObject({ uid: 5, userIdFromRecord: null, recordSize: 40 })
+  })
+
   it('decodes a 16-byte record with no printed user id', () => {
     const data = withHeader(rec16(123, 0, 1, 2))
     const [r] = parseAttendanceData(data, 1)

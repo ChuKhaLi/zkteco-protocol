@@ -125,6 +125,25 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       expect(running.received.map((p) => p.command)).not.toContain(CMD.USERTEMP_RRQ)
     })
 
+    it('resolves a blank 40-byte user id through the user list by uid', async () => {
+      // A blank 40-byte userId field decodes to null (not ''), so it must
+      // flow into the same uid-lookup path as the 8-byte dialect rather than
+      // being reported as a device-supplied empty identity.
+      running = await startEmulator({
+        transport: transportKind,
+        info: { userCount: 1, recordCount: 1, recordCapacity: 1000 },
+        users: [emUser(5, '000123', 'Dave')],
+        records: { size: 40, rows: [rec40(5, '', DAY)] },
+      })
+      session = await openSession(running.port)
+      const [log] = await getAttendanceLogs(session, transportKind)
+      // 'lookup' (not 'device', not null) proves the blank field was treated
+      // as an unresolved identity and successfully matched via uid — the old
+      // behaviour reported '' here directly, under userIdSource: 'device',
+      // and never consulted the user list at all.
+      expect(log).toMatchObject({ userId: '000123', userIdSource: 'lookup', uid: 5 })
+    })
+
     it('never looks up users for the 40-byte dialect', async () => {
       running = await startEmulator({
         transport: transportKind,

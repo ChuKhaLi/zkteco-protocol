@@ -22,7 +22,7 @@ for what changes that.
 | ZK Communication Protocol Manual (vendor PDF) | vendor | Command tables, cross-reference. |
 | [ZKTeco/Standalone-SDK](https://github.com/ZKTeco/Standalone-SDK) | none | Lookup only. No code taken. |
 | [Securelist analysis](https://securelist.com/biometric-terminal-vulnerabilities/112800/) | article | Packet structure from a security-research perspective, used to cross-check. |
-| [zkteco-js](https://github.com/coding-libs/zkteco-js) | MIT | Second oracle, and read at source level. It diagnosed a bug in this library's TCP-to-UDP transport fallback. Attributed in the README. |
+| [zkteco-js](https://github.com/coding-libs/zkteco-js) | MIT | Second oracle, and read at source level. Reading its source surfaced a bug in *zkteco-js's own* TCP-to-UDP fallback (its outer catch checks `err.code` on a wrapper object that never carries one) — this library has no such fallback of its own. The oracle capture driver works around it directly; see `tools/oracle/capture_zkjs.ts`. Attributed in the README. |
 | [pyzk](https://github.com/fananimi/pyzk) | **GPL-2.0** | **Black-box execution only.** See below. |
 
 ## The pyzk boundary
@@ -93,15 +93,19 @@ different data, not a coincidence of one implementation's counter. Not one of
 the eighteen supports the previous-reply-id hypothesis.
 
 `Session.send` therefore transmits the encoded payload unmodified.
-`applyReplyIdQuirk()` remains exported, documented, and tested in
-`src/codec/packet.ts` — used by nothing, kept as a one-line escape hatch. If
-the first real device refuses self-consistent packets, restoring the old
-behaviour is one call site. Both ways of being wrong here fail loudly: a bad
-checksum makes the device refuse everything, which surfaces on first contact
-rather than corrupting data quietly. That symmetry is what made it safe to
-follow the evidence rather than the documentation.
+`applyReplyIdQuirk()` is retained and tested internally in
+`src/codec/packet.ts` — used by nothing, kept as a one-line escape hatch. It
+is deliberately not part of the public API: it is absent from `src/index.ts`
+and therefore from `dist/index.d.ts`, unreachable to a consumer, because the
+export surface is a promise that cannot cheaply be withdrawn and an internal
+escape hatch does not belong in it. If the first real device refuses
+self-consistent packets, restoring the old behaviour is one call site. Both
+ways of being wrong here fail loudly: a bad checksum makes the device refuse
+everything, which surfaces on first contact rather than corrupting data
+quietly. That symmetry is what made it safe to follow the evidence rather
+than the documentation.
 
-### 2. The comm-key mixing — vindicated, on a single oracle
+### 2. The comm-key mixing — vindicated, including the low-byte invariance, on a single oracle
 
 As specified, the key-mixing algorithm structurally discards the low byte of
 the session id: `mixCommKey(commKey, 1)`, `mixCommKey(commKey, 2)`, and
@@ -117,13 +121,70 @@ matches this library's `mixCommKey(commKey, sessionId)` output byte for byte
 `test/fixtures/oracle/`). The discarded low byte is genuine protocol
 behaviour, confirmed against a real independent implementation of it.
 
-**Caveat: this rests on a single oracle.** `zkteco-js` has no comm-key support
-at all — its `auth-*-zkteco-js.json` fixtures contain a `CMD_CONNECT` packet
-(proving the capture driver ran) but no `CMD_AUTH` packet whatsoever. There
-was no second implementation available to corroborate the mixing formula
-independently; the vindication above is `pyzk` agreeing with the
-documentation's description, not two oracles agreeing with each other.
-Comm-key mixing is on the first-hardware checklist for this reason.
+That first round of evidence, though, was a single `(commKey, sessionId)`
+pair: `tools/oracle/capture.ts` pinned one fixed session id for every
+capture, so `pyzk` was never actually asked to mix two session ids differing
+only in the low byte. Matching `mixCommKey`'s output byte for byte at one
+point vindicates the algorithm there, but says nothing on its own about
+whether the low byte specifically is what varying it fails to change — that
+invariance rested solely on this library's own code
+(`test/codec/commkey.spec.ts`), not on the oracle.
+
+The capture was extended to close that gap: three further `pyzk` captures
+(TCP only — the invariance under test is structural, not
+transport-dependent), against `(commKey, sessionId)` pairs chosen to isolate
+it —
+
+| Fixture | commKey | sessionId | vs. baseline (`0x1f2e`, key `1234`) |
+|---|---|---|---|
+| `auth-lowbyte-tcp-pyzk.json` | 1234 | `0x1f99` | same high byte, different low byte |
+| `auth-highbyte-tcp-pyzk.json` | 1234 | `0x2e2e` | same low byte, different high byte |
+| `auth-keydiff-tcp-pyzk.json` | 5678 | `0x1f2e` | different key, same session id |
+
+— and `test/oracle/commkey.spec.ts` now asserts two things against them: that
+`mixCommKey` matches all three, and, specifically, that `pyzk`'s captured
+`CMD_AUTH` payload for `0x1f2e` and `0x1f99` (the low-byte-only pair) is
+**byte-for-byte identical**. It is. A control assertion also confirms the
+`0x2e2e` (high-byte-only) capture's `CMD_AUTH` bytes genuinely differ from the
+baseline's, ruling out the trivial (and wrong) explanation that the session id
+is ignored altogether. The low-byte-discard invariance is therefore now
+confirmed against real external computation, not just this library's own
+implementation of the same description.
+
+**Caveat: this still rests on a single oracle.** `zkteco-js` has no comm-key
+support at all — its `auth-*-zkteco-js.json` fixtures contain a `CMD_CONNECT`
+packet (proving the capture driver ran) but no `CMD_AUTH` packet whatsoever.
+There was no second implementation available to corroborate the mixing
+formula, or the low-byte invariance specifically, independently; everything
+above is `pyzk` agreeing with the documentation's description and with
+itself across session ids, not two independent oracles agreeing with each
+other. Comm-key mixing is on the first-hardware checklist for this reason.
+
+## Inbound checksums are not validated
+
+`decodePayload` (`src/codec/packet.ts`) reads the checksum field into
+`DecodedPacket.checksum` but never recomputes it and compares — nothing in
+this library rejects a reply whose checksum doesn't match its own contents.
+Spec §5.3's guard table (declared size vs. actual length, record size
+divides evenly, TCP start marker, and so on) is now fully implemented, but
+checksum validation was never one of its rows, and completing that table
+should not be read as this being covered by it.
+
+This also means `test/scenarios.spec.ts` and every other test that runs a
+session against `test/emulator/` cannot exercise a corrupted-checksum reply
+either way: the emulator's `reply()` helper builds every response with this
+library's own `encodePayload`, so every reply in the whole suite is
+self-consistent by construction. The suite proves the request/response flow,
+framing, and session sequencing; it says nothing about what happens on a
+reply a real device sent with a checksum that doesn't match, because it has
+never been asked to produce one.
+
+No hard reject is added here without a device to test it against: an
+over-eager check that turns out to encode the checksum algorithm wrong (or
+misjudge which fields it covers, per the §5.1 divergence above) would make
+this library reject good replies from real hardware. This is on the
+first-hardware checklist rather than fixed on the same speculative
+approach.
 
 ## Unverified field offsets
 
