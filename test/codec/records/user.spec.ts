@@ -38,7 +38,13 @@ describe('parseUserData', () => {
     const withoutPw = parseUserData(withHeader(userRec(2, '2', 'B')))[0]!
     expect(withPw.hasPassword).toBe(true)
     expect(withoutPw.hasPassword).toBe(false)
-    expect(JSON.stringify(withPw)).not.toContain('secret')
+    // The ASCII form never appears, but that is not the interesting property:
+    // `raw` is hex, so a plaintext search would pass even with the password
+    // fully intact. Assert on the encoded form, and on recovery from `raw`.
+    expect(withPw.raw).not.toContain(Buffer.from('secret', 'ascii').toString('hex'))
+    expect(Buffer.from(withPw.raw, 'hex').subarray(3, 11).every((b) => b === 0)).toBe(true)
+    // Verify non-password bytes survive the redaction
+    expect(withPw).toMatchObject({ uid: 1, name: 'A', userId: '1' })
   })
 
   it('decodes privilege and card number as raw numbers', () => {

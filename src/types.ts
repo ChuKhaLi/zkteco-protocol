@@ -68,6 +68,6 @@ export interface ZkUser {
   hasPassword: boolean
   /** Raw card number, 0 when unset. */
   cardNumber: number
-  /** Hex of the original record bytes. */
+  /** Hex of the record bytes, with the 8-byte password field zeroed. Not a byte-for-byte copy; the password is redacted because `raw` is meant to be persisted and forwarded for reconciliation. */
   raw: string
 }

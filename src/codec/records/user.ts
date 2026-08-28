@@ -5,16 +5,24 @@ import { readNulTerminated } from './shared.js'
 export const USER_RECORD_SIZE = 72
 
 function decodeOne(rec: Buffer): ZkUser {
+  const hasPassword = readNulTerminated(rec, 3, 8).length > 0
+
+  // Zero the password field before hex-encoding for `raw`. The password field
+  // occupies bytes 3–10; we redact it here because `raw` is meant to be
+  // persisted and forwarded for reconciliation, and a credential must not ride
+  // along with that data. This means `raw` is not a byte-for-byte copy of the
+  // record.
+  const rawBuffer = Buffer.from(rec)
+  rawBuffer.fill(0, 3, 11)
+
   return {
     uid: rec.readUInt16LE(0),
     privilege: rec.readUInt8(2),
-    // Whether a password exists is useful; the password itself is never
-    // surfaced, so it cannot leak into a log or an upstream payload.
-    hasPassword: readNulTerminated(rec, 3, 8).length > 0,
+    hasPassword,
     name: readNulTerminated(rec, 11, 24),
     cardNumber: rec.readUInt32LE(35),
     userId: readNulTerminated(rec, 48, 8),
-    raw: rec.toString('hex'),
+    raw: rawBuffer.toString('hex'),
   }
 }
 
