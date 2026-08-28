@@ -1,0 +1,21 @@
+{
+  "source": "zkteco-js",
+  "transport": "udp",
+  "emulatorSessionId": 7982,
+  "packets": [
+    {
+      "hex": "e80316fc00000100",
+      "command": 1000,
+      "checksum": 64534,
+      "sessionId": 0,
+      "replyId": 1
+    },
+    {
+      "hex": "e903e6dc2e1f0200",
+      "command": 1001,
+      "checksum": 56550,
+      "sessionId": 7982,
+      "replyId": 2
+    }
+  ]
+}

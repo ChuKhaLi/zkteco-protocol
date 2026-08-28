@@ -1,0 +1,21 @@
+{
+  "source": "pyzk",
+  "transport": "udp",
+  "emulatorSessionId": 7982,
+  "packets": [
+    {
+      "hex": "e80317fc00000000",
+      "command": 1000,
+      "checksum": 64535,
+      "sessionId": 0,
+      "replyId": 0
+    },
+    {
+      "hex": "e903e7dc2e1f0100",
+      "command": 1001,
+      "checksum": 56551,
+      "sessionId": 7982,
+      "replyId": 1
+    }
+  ]
+}

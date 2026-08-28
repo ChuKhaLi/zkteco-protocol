@@ -20,13 +20,16 @@
     "build": "tsup",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "oracle:capture": "tsx tools/oracle/capture.ts"
   },
   "dependencies": {},
   "devDependencies": {
     "@types/node": "^22.10.0",
     "tsup": "^8.3.5",
+    "tsx": "^4.23.12",
     "typescript": "^5.7.2",
-    "vitest": "^2.1.8"
+    "vitest": "^2.1.8",
+    "zkteco-js": "^1.7.2"
   }
 }
