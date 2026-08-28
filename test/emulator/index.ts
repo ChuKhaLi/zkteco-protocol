@@ -54,6 +54,15 @@ export interface Emulator {
   close(): Promise<void>
 }
 
+/**
+ * Abrupt client teardown legitimately produces these; anything else means the
+ * emulator itself is unhealthy and must not go unnoticed. Shared by the TCP
+ * and UDP error handlers so the ignore list can't drift between them.
+ */
+function isIgnorableSocketError(err: NodeJS.ErrnoException): boolean {
+  return err.code === 'ECONNRESET' || err.code === 'EPIPE'
+}
+
 /** Builds one reply payload echoing the request's reply id. */
 export function reply(
   state: EmulatorState,
@@ -130,10 +139,7 @@ export async function startEmulator(opts: EmulatorOptions): Promise<Emulator> {
         }
       })
       sock.on('error', (err) => {
-        // Abrupt client teardown legitimately produces these; anything else
-        // means the emulator itself is unhealthy and must not go unnoticed.
-        const code = (err as NodeJS.ErrnoException).code
-        if (code === 'ECONNRESET' || code === 'EPIPE') return
+        if (isIgnorableSocketError(err as NodeJS.ErrnoException)) return
         socketErrors.push(err)
       })
     })
@@ -149,6 +155,14 @@ export async function startEmulator(opts: EmulatorOptions): Promise<Emulator> {
   }
 
   const sock = dgram.createSocket('udp4')
+  // Durable for the socket's whole working life (bind and beyond): a dgram
+  // socket with no 'error' listener throws on error and can take the test
+  // process down, and the point of socketErrors is that this never happens
+  // silently either.
+  sock.on('error', (err) => {
+    if (isIgnorableSocketError(err as NodeJS.ErrnoException)) return
+    socketErrors.push(err)
+  })
   sock.on('message', (msg, rinfo) => {
     const out = respond(Buffer.from(msg), Buffer.from(msg))
     if (out) for (const p of out) sock.send(p, rinfo.port, rinfo.address)
