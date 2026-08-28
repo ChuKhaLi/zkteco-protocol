@@ -27,6 +27,13 @@ export interface EmulatorOptions {
   /** When false, the buffered-read commands are refused so the caller must
    *  fall back to the legacy path. */
   supportsBuffer?: boolean
+  /**
+   * Makes the READ_BUFFER reply at the given 1-based call count return
+   * exactly `bytes`, ignoring what was actually requested — fewer to
+   * exercise a valid short read that doesn't end the transfer, or more to
+   * exercise a device that overshoots past the declared total.
+   */
+  bufferChunkOverride?: { atCall: number; bytes: number }
   handlers?: Partial<HandlerTable>
   info?: { userCount: number; recordCount: number; recordCapacity: number }
 }
@@ -175,7 +182,15 @@ const bufferedHandlers: HandlerTable = {
       state.dropConnection = true
       return []
     }
-    const slice = state.pendingBuffer.subarray(offset, offset + want)
+    const override = state.opts.bufferChunkOverride
+    const take = override && state.chunksSent === override.atCall ? override.bytes : want
+    let slice = state.pendingBuffer.subarray(offset, offset + take)
+    // subarray clamps to the buffer's own length, so an override asking for
+    // more bytes than remain there needs padding to actually simulate a
+    // device sending more bytes than were requested.
+    if (slice.length < take) {
+      slice = Buffer.concat([slice, Buffer.alloc(take - slice.length)])
+    }
     return [reply(state, req, CMD.ACK_DATA, slice)]
   },
 }

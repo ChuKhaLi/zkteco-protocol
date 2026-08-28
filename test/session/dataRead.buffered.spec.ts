@@ -4,6 +4,7 @@ import { Session } from '../../src/session/Session.js'
 import { TcpTransport } from '../../src/transport/tcp.js'
 import { UdpTransport } from '../../src/transport/udp.js'
 import { CMD, MAX_CHUNK } from '../../src/codec/commands.js'
+import { ZkProtocolError } from '../../src/errors.js'
 import { startEmulator, type Emulator } from '../emulator/index.js'
 
 let running: Emulator | null = null
@@ -52,6 +53,40 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       const reads = running.received.filter((p) => p.command === CMD.READ_BUFFER)
       expect(reads.length).toBeGreaterThan(1)
       expect(reads[1]!.data.readUInt32LE(0)).toBe(64)
+    })
+
+    it('advances the next offset by what actually arrived, not by what was requested', async () => {
+      // The first READ_BUFFER call is answered with 32 bytes instead of the
+      // 64 requested — a valid short read that does not end the transfer.
+      // The next request must ask for offset 32, the true end of what
+      // arrived; a build that tracks progress as `offset += want` would ask
+      // for offset 64 instead and silently skip 32 bytes of the body.
+      const rows = Array.from({ length: 100 }, (_, i) => rec8(i + 1))
+      running = await startEmulator({
+        transport: transportKind,
+        records: { size: 8, rows },
+        bufferChunkOverride: { atCall: 1, bytes: 32 },
+      })
+      session = await openSession(running.port)
+      const stream = await readBulkBuffered(session, CMD.ATTLOG_RRQ, 64)
+      expect(stream.length).toBe(804)
+      const reads = running.received.filter((p) => p.command === CMD.READ_BUFFER)
+      expect(reads[1]!.data.readUInt32LE(0)).toBe(32)
+    })
+
+    it('throws when a chunk delivers more bytes than the declared total', async () => {
+      // A single-chunk transfer whose only READ_BUFFER reply overshoots past
+      // the size PREPARE_BUFFER declared. This must fail loudly rather than
+      // hand back a silently oversized buffer.
+      running = await startEmulator({
+        transport: transportKind,
+        records: { size: 8, rows: [rec8(1)] },
+        bufferChunkOverride: { atCall: 1, bytes: 40 },
+      })
+      session = await openSession(running.port)
+      await expect(
+        readBulkBuffered(session, CMD.ATTLOG_RRQ, MAX_CHUNK[transportKind]),
+      ).rejects.toThrow(ZkProtocolError)
     })
 
     it('sends the documented PREPARE_BUFFER request shape', async () => {

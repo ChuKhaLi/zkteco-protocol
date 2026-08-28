@@ -121,6 +121,14 @@ export async function readBulkBuffered(
     offset += res.data.length
   }
 
+  // The loop above only guards against a reply that stops short. A reply
+  // that overshoots — more bytes than `want`, past `total` in aggregate — is
+  // the mirror image: it exits the loop just as cleanly, and without this
+  // check would hand back a silently oversized buffer instead of failing.
+  if (offset !== total) {
+    throw new ZkProtocolError(`READ_BUFFER delivered ${offset} bytes total, expected ${total}`)
+  }
+
   await freeBuffer(session)
   return Buffer.concat(chunks)
 }
@@ -146,6 +154,13 @@ export async function readBulk(
     return await readBulkBuffered(session, command, MAX_CHUNK[transport])
   } catch (err) {
     if (!(err instanceof ZkProtocolError)) throw err
+    // A ZkProtocolError here can occur after PREPARE_BUFFER already
+    // succeeded (e.g. a later READ_BUFFER failing the total-bytes check),
+    // which leaves the device holding buffer state from the aborted
+    // attempt. Release it before falling back — freeBuffer already swallows
+    // its own errors, so this cannot make a bad situation worse, and is a
+    // no-op if the device never allocated anything in the first place.
+    await freeBuffer(session)
     return readBulkLegacy(session, command)
   }
 }
