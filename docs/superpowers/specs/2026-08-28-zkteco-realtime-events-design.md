@@ -331,10 +331,18 @@ transport-specific):
 
 1. Subscribe, receive N attendance events, decode each dialect.
 2. A push that lands **after** the `ACK_OK` for `CMD_REG_EVENT` but **before** `listen()` attaches
-   — the race the queue drain in §3.2 exists for. Without the drain this test loses an event. This
-   is the benign ordering: the ack still arrives first, so nothing in the reply stream shifts, and
-   the event is merely parked in the transport queue until the drain hands it over. The other
-   ordering — a push that lands before the ack — is scenario 10, and it is not benign.
+   — the race the queue drain in §3.2 exists for. This is the benign ordering: the ack still
+   arrives first, so nothing in the reply stream shifts, and the event is merely parked in the
+   transport queue until the drain hands it over. The other ordering — a push that lands before
+   the ack — is scenario 10, and it is not benign.
+
+   **This scenario proves delivery, not the drain specifically.** Whether the event is parked
+   and drained, or arrives after `listen()` has attached and goes down the live path, depends on
+   whether the writes coalesce into one read — a kernel behaviour, not a transport property, and
+   one that differs between Linux and Windows. An earlier attempt to pin the drain at session
+   level passed on Windows and failed on Linux for exactly that reason. The drain itself is
+   proven at transport level, where the test calls `listen()` at a moment it chooses instead of
+   betting on arrival timing.
 3. A burst exceeding `bufferLimit` — the stream ends with the overflow error, and does so without
    the queue having grown past the limit.
 4. A packet with `command !== 500` arriving while listening — the stream ends with

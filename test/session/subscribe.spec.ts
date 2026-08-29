@@ -52,36 +52,29 @@ for (const kind of ['tcp', 'udp'] as const) {
       expect(seen[0]?.sessionId).toBe(EVENT_FLAG.ATTENDANCE)
     })
 
-    // TCP-only: this scenario's value is proving the queue-drain path — a
-    // packet parked because it lands after the reply but before listen() is
-    // attached, then handed over on the drain. The emulator can only make
-    // that deterministic on TCP, where the ack and the two events arrive in
-    // one chunk and absorb() drains it in a synchronous loop. Over UDP they
-    // are three independent OS-scheduled datagrams: by the time the second
-    // and third arrive, listen() has typically already run, so the events
-    // take the live-listener path instead of the drain — looping this over
-    // UDP would go green while exercising a different path than the one the
-    // test name claims. The UDP drain path itself is still covered, just by
-    // a test built for it: test/transport/listen.spec.ts, "drains packets
-    // that were queued before listen()", which runs over both transports and
-    // gets its determinism from an explicit wait before listen() rather than
-    // from same-tick arrival.
-    if (kind === 'tcp') {
-      it('delivers events that arrived alongside the registration ack', async () => {
-        running = await startEmulator({
-          transport: kind,
-          pushWithAck: [
-            { eventType: EVENT_FLAG.ATTENDANCE, data: Buffer.from([0x01]) },
-            { eventType: EVENT_FLAG.ATTENDANCE, data: Buffer.from([0x02]) },
-          ],
-        })
-        session = new Session(make(running.port), { timeoutMs: 2000 })
-        await session.open()
-        const seen: DecodedPacket[] = []
-        await session.subscribe(EVENT_FLAG.ATTENDANCE, (pkt) => seen.push(pkt), () => {})
-        expect(seen.map((p) => p.data.toString('hex'))).toEqual(['01', '02'])
-      })
-    }
+    // The queued-before-listen race is NOT constructible at this level. What
+    // stood here was a test that pushed events alongside the registration ack
+    // and asserted they came back through listen()'s queue drain. It passed on
+    // Windows and failed on all three Ubuntu jobs in CI.
+    //
+    // The window it aims at is the microtask boundary between the ack
+    // resolving and Session.subscribe calling transport.listen(), and nothing
+    // on the far side of a socket can target that. On Windows the emulator's
+    // writes happened to coalesce into one TCP segment, so absorb() consumed
+    // the ack and parked the events in a single synchronous pass; on Linux
+    // they arrived as separate reads and the events took the live-listener
+    // path instead. The comment that used to sit here blamed the transport,
+    // TCP versus UDP, for what is really kernel write coalescing — the same
+    // mistake this library calls out zkteco-js for elsewhere, of attributing
+    // to the transport something that belongs to another cause entirely.
+    //
+    // The drain is proven where it can be proven deterministically:
+    // test/transport/listen.spec.ts, "drains packets that were queued before
+    // listen()", over both transports, which gets its determinism from calling
+    // listen() itself at a chosen moment rather than from arrival timing. The
+    // end-to-end delivery claim is covered by test/realtime/scenarios.spec.ts
+    // scenario 2, which waits for delivery and says in its own comment that
+    // waiting is what it proves.
 
     // A device that does not support realtime must cost one call, not the
     // connection: the caller can still poll with it.
