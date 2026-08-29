@@ -64,6 +64,19 @@ export function encodeParamRequest(keyword: string): Buffer {
       `parameter keyword must not contain '=' or NUL, got ${JSON.stringify(keyword)}`,
     )
   }
+  for (let i = 0; i < keyword.length; i++) {
+    if (keyword.charCodeAt(i) > 0xff) {
+      // Buffer.from(keyword, 'latin1') truncates each UTF-16 code unit to its
+      // low byte rather than throwing, so a keyword outside latin1 would be
+      // silently mangled here and the resulting mismatch would surface later
+      // as a ZkProtocolError blaming the device for an echo that does not
+      // match what the caller actually asked for. Rejecting it here keeps a
+      // caller mistake a caller mistake, per this function's own principle.
+      throw new RangeError(
+        `parameter keyword must be representable in latin1 (byte values 0-255), got ${JSON.stringify(keyword)}`,
+      )
+    }
+  }
   return Buffer.from(`${keyword}\0`, 'latin1')
 }
 

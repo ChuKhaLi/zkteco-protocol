@@ -24,6 +24,16 @@ describe('encodeParamRequest', () => {
     expect(() => encodeParamRequest('~OS=x')).toThrow(RangeError)
     expect(() => encodeParamRequest('~OS\0')).toThrow(RangeError)
   })
+
+  it('refuses a keyword outside latin1 rather than silently truncating it', () => {
+    // Buffer.from(keyword, 'latin1') truncates each UTF-16 code unit to its
+    // low byte instead of throwing: '~日' would otherwise become the bytes
+    // for '~å', and the device would (correctly) echo back what it actually
+    // received, surfacing as a ZkProtocolError blaming the device for an
+    // echo mismatch the caller caused. RangeError, not ZkProtocolError: this
+    // is a bad argument, not anything the device did.
+    expect(() => encodeParamRequest('~日')).toThrow(RangeError)
+  })
 })
 
 describe('decodeParamReply', () => {
