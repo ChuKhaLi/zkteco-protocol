@@ -485,8 +485,10 @@ zero-dependency rule, never returning a `Date`, never fabricating an identity, a
 
 1. `pnpm test` and `pnpm typecheck` clean; CI green on Node 20.19/22/24 across Ubuntu and Windows.
 2. All eleven scenarios in §7.2 pass over both transports, each having been shown to fail when the
-   code it guards is broken (§7.3). (Scenarios 10 and 11 were added by the final review; 6 and the
-   idle timeout remain single-transport, explicitly and with a reason, as §7.2 says.)
+   code it guards is broken (§7.3). (Scenarios 10 and 11 were added by the final review.
+   Single-transport, each explicitly and with a stated reason: scenario 6, its UDP-only
+   idle-timeout counterpart, and scenario 9's no-socket-left-open assertion, which has nothing
+   to observe on UDP.)
 3. The §8.1 adjudication is carried out, its raw figures recorded in `PROVENANCE.md`, and the
    implementation follows the rule as written rather than as re-argued afterwards.
 4. Realtime oracle fixtures are filed on the correct side of the `test/fixtures/oracle/` split so
