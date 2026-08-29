@@ -164,15 +164,19 @@ export function decodeRealtimeEvent(pkt: DecodedPacket): ZkRealtimeEvent {
  * Builds the acknowledgment a client is documented to send after each event.
  *
  * The protocol documentation says the client answers every pushed event with
- * CMD_ACK_OK, carrying the session id and a zero reply number. The realtime
- * oracle capture says otherwise, on the only oracle that reached this point:
- * `zkteco-js` registered a subscription on both transports and then sent
- * nothing but CMD_EXIT for the three events the emulator pushed right after
- * — never a CMD_ACK_OK. `pyzk` never sent CMD_REG_EVENT at all, on either
- * transport, so it contributed no evidence either way (design spec §8.1's
- * fourth branch); the finding above is `zkteco-js`'s alone. Applying §8.1 to
- * that single source: this library does not acknowledge. See PROVENANCE.md
- * for the captured figures.
+ * CMD_ACK_OK, carrying the session id and a zero reply number. Reading
+ * `zkteco-js` shows no acknowledgment code path anywhere, on either
+ * transport, and that source reading is what decides this: `pyzk` never sent
+ * CMD_REG_EVENT at all, so it contributed no evidence either way (design spec
+ * §8.1's fourth branch), and §8.1 applied to that single source says this
+ * library does not acknowledge.
+ *
+ * The realtime capture corroborates it only weakly. `zkteco-js` registered on
+ * both transports and then sent nothing further but CMD_EXIT while the
+ * emulator pushed three attendance events — but the same investigation shows
+ * its decoder never recognised those events at all, so it may simply never
+ * have had one to acknowledge. Do not read the capture as the finding; see
+ * PROVENANCE.md §3.
  *
  * `ackEvent` stays here, tested and called from nowhere, exactly as
  * `applyReplyIdQuirk` does — internal to the package, never part of the

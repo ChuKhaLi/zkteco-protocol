@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { CMD } from '../../src/codec/commands.js'
 import { EVENT_FLAG } from '../../src/codec/events.js'
-import { ZkProtocolError } from '../../src/errors.js'
+import { ZkConnectionError, ZkProtocolError } from '../../src/errors.js'
 import { Session } from '../../src/session/Session.js'
 import { TcpTransport } from '../../src/transport/tcp.js'
 import { UdpTransport } from '../../src/transport/udp.js'
@@ -97,6 +97,34 @@ for (const kind of ['tcp', 'udp'] as const) {
       )
       expect(session.subscribed).toBe(false)
       await expect(session.execute(CMD.GET_FREE_SIZES)).resolves.toBeDefined()
+    })
+
+    // The deliberate asymmetry with the test above. A device that pushes an
+    // event before writing its registration ack hands that event to the
+    // waiter the registration is holding and leaves the real ACK_OK in the
+    // queue, so the NEXT request would collect a reply belonging to this one
+    // and every reply after it would be off by one. A refusal costs one call;
+    // a desync must cost the connection, because nothing downstream could
+    // tell that its answers had shifted.
+    it('fails and tears the session down when an event beats the registration ack', async () => {
+      running = await startEmulator({
+        transport: kind,
+        pushBeforeAck: [{ eventType: EVENT_FLAG.ATTENDANCE, data: Buffer.from([0x42]) }],
+      })
+      session = new Session(make(running.port), { timeoutMs: 2000 })
+      await session.open()
+
+      const err = await session
+        .subscribe(EVENT_FLAG.ATTENDANCE, () => {}, () => {})
+        .then(() => null, (e: unknown) => e)
+      expect(err).toBeInstanceOf(ZkProtocolError)
+      // Named as the race it is, NOT as a refusal — the device refused nothing.
+      expect((err as Error).message).toMatch(/out of step/)
+      expect((err as Error).message).not.toMatch(/refused/)
+
+      // Torn down: a desynced session must not still be pollable.
+      expect(session.subscribed).toBe(false)
+      await expect(session.execute(CMD.GET_FREE_SIZES)).rejects.toThrow(ZkConnectionError)
     })
   })
 }

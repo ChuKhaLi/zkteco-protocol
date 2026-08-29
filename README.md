@@ -45,10 +45,19 @@ const device = new ZkDevice({ host: '192.168.1.201' })
 await device.connect()
 const stream = await device.subscribe()          // attendance events by default
 
-for await (const event of stream) {
-  if (event.kind === 'attendance') console.log(event.userId, event.timestamp.local)
+try {
+  for await (const event of stream) {
+    if (event.kind === 'attendance') console.log(event.userId, event.timestamp.local)
+  }
+} finally {
+  await stream.close()                           // releases the connection
 }
 ```
+
+**Close the stream, in a `finally`.** The error path needs it as much as the
+happy one: a stream that ended with an error stops delivering but does not
+release the socket, which stays open with a listener attached until
+`stream.close()` or `device.disconnect()` is called.
 
 **The stream does not reconnect and does not backfill.** A lost connection
 throws out of the `for await` and the events that occur before you subscribe

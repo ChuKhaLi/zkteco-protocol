@@ -215,8 +215,10 @@ checklist.
 The `CMD_REG_EVENT` request payload being a 4-byte little-endian mask is
 **byte-level** evidence: `zkteco-js`'s captured bytes (`01000000`) are a
 direct comparison against this library's own encoding, no device involved.
-The acknowledgment finding above is also byte-level: it rests on which
-packets were or were not observed on the wire, not on decoding anything.
+The acknowledgment finding above rests on which packets were or were not
+observed on the wire, not on decoding anything — but read it together with
+the weak-corroboration note further down, which is the part of this record
+that says how much those absent packets are actually worth.
 
 **The event-type-in-the-session-id-slot claim (`readEventType`,
 `src/codec/events.ts`) is weaker than both: it is behavioural, not a byte
@@ -267,6 +269,20 @@ bytes on the wire. That is still a source-reading claim, not a captured
 observation — datagram framing differs from TCP's coalescing in a way the
 TCP experiment above doesn't settle, so it is recorded with that
 distinction, not folded into the TCP finding.
+
+**It also weakens the captured silence as corroboration of the acknowledgment
+finding, and that bears saying where the finding is, not only here.** If
+`zkteco-js` never recognised any of the three pushed events — its TCP gate
+fired zero times, and its UDP path will not decode anything that is not
+exactly 18 bytes against datagrams that are 44 — then in these captured runs
+it almost certainly never reached the point of having an event to acknowledge,
+so the absence of a `CMD_ACK_OK` afterwards is consistent with "does not
+acknowledge" and equally consistent with "never got that far". The conclusion
+above does not change, because it never rested on the capture: reading
+`zkteco-js`'s source shows no acknowledgment code path anywhere, on either
+transport, and §8.1's fourth branch decides the question on that single
+source. What changes is the weight of the capture — weak corroboration of a
+source-level finding, not independent confirmation of it.
 
 None of this widens the conclusion. It says `zkteco-js`'s realtime path, run
 in this project's specific test conditions, never itself demonstrates the

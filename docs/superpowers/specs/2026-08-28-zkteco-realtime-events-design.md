@@ -330,8 +330,11 @@ Every one over both transports (v0.1 convention; skip explicitly with a reason i
 transport-specific):
 
 1. Subscribe, receive N attendance events, decode each dialect.
-2. A push that lands **between** the `CMD_REG_EVENT` request and its `ACK_OK` — the race the queue
-   drain in §3.2 exists for. Without the drain this test loses an event.
+2. A push that lands **after** the `ACK_OK` for `CMD_REG_EVENT` but **before** `listen()` attaches
+   — the race the queue drain in §3.2 exists for. Without the drain this test loses an event. This
+   is the benign ordering: the ack still arrives first, so nothing in the reply stream shifts, and
+   the event is merely parked in the transport queue until the drain hands it over. The other
+   ordering — a push that lands before the ack — is scenario 10, and it is not benign.
 3. A burst exceeding `bufferLimit` — the stream ends with the overflow error, and does so without
    the queue having grown past the limit.
 4. A packet with `command !== 500` arriving while listening — the stream ends with
@@ -344,6 +347,19 @@ transport-specific):
    delivered to the stream afterwards.
 9. `close()` and `disconnect()` while events are arriving — no socket left open, no unhandled
    rejection.
+10. A push that lands **before** the `ACK_OK` for `CMD_REG_EVENT`, in the window between the device
+    reading the request and writing its reply. The event consumes the waiter the registration is
+    holding and the ack is stranded in the transport queue, where the *next* request would collect
+    it as its own reply and every reply after that would be off by one. `subscribe()` throws
+    `ZkProtocolError` naming the race — not a refusal, the device refused nothing — and the session
+    is **torn down** before the error propagates, so a desynced session cannot be polled (RULING
+    R11). Buffering the early event and replaying it was rejected: it would preserve the punch, but
+    only by building a bounded version of the multiplexing router §3.1 rejected, on a
+    discrimination rule no device has ever confirmed. §1.1 already answers a lost event.
+11. A push too short to be a packet at all (fewer than 8 bytes) while listening — the stream ends
+    with `ZkProtocolError`, rather than the decode throwing out of a socket `'data'` handler where
+    nothing would catch it. Scenario 5 does not cover this: an unknown event type and an unknown
+    payload length both decode fine at the packet layer.
 
 ### 7.3 The countermeasure that actually worked in v0.1
 
@@ -353,8 +369,11 @@ done. Nine "green while proving less than it appears" defects shipped through v0
 one was caught by the suite itself.
 
 Scenario 2 deserves particular care: it passes trivially if the emulator's push lands after the
-listener is attached, which is a timing accident, not a test. It must be scripted to push before
-the ack, deterministically.
+listener is attached, which is a timing accident, not a test. It must be scripted so the push lands
+while no listener is attached yet, deterministically — the emulator writes the events in the same
+handler return as the ack, immediately behind it. Note that this is the ordering scenario 2 needs
+and the *opposite* of scenario 10's, which puts the events ahead of the ack; the two look alike in
+a diff and mean opposite things.
 
 ---
 
@@ -457,8 +476,9 @@ zero-dependency rule, never returning a `Date`, never fabricating an identity, a
 ## 11. Definition of done for v0.2
 
 1. `pnpm test` and `pnpm typecheck` clean; CI green on Node 20.19/22/24 across Ubuntu and Windows.
-2. All nine scenarios in §7.2 pass over both transports, each having been shown to fail when the
-   code it guards is broken (§7.3).
+2. All eleven scenarios in §7.2 pass over both transports, each having been shown to fail when the
+   code it guards is broken (§7.3). (Scenarios 10 and 11 were added by the final review; 6 and the
+   idle timeout remain single-transport, explicitly and with a reason, as §7.2 says.)
 3. The §8.1 adjudication is carried out, its raw figures recorded in `PROVENANCE.md`, and the
    implementation follows the rule as written rather than as re-argued afterwards.
 4. Realtime oracle fixtures are filed on the correct side of the `test/fixtures/oracle/` split so
@@ -483,6 +503,14 @@ Appended to §12 of the v0.1 spec:
 12. Is there a way to cancel a subscription without dropping the connection? (§9.5)
 13. Does the device emit event types outside the requested mask, and does it ever interleave a
     request-response packet into a listening connection? (§9.3)
+14. Does the device ever push an event **before** acknowledging `CMD_REG_EVENT` — a badge in the
+    window between it reading the registration and writing the reply? Symptom if it does:
+    `subscribe()` throws `ZkProtocolError` naming an out-of-step reply stream and the session is
+    torn down, so the consumer sees a failed subscription rather than a working one. That is the
+    designed behaviour, not a bug to fix in the field (§7.2 #10, RULING R11) — but if a real
+    terminal does this routinely rather than rarely, the trade-off in §3.1 is worth revisiting with
+    evidence, because it would mean realtime is unusable on that model without one of the designs
+    that spec rejected. Record how often it happens before changing anything.
 
 Also confirm against a real device: that the event type genuinely occupies the session-id slot
 (§5.1), that the large attendance dialect's four undocumented trailing bytes are padding (§5.2),

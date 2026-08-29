@@ -42,6 +42,16 @@ export interface EmulatorOptions {
    * the ack consumes the pending waiter, the events find none and queue.
    */
   pushWithAck?: Array<{ eventType: number; data: Buffer }>
+  /**
+   * Events written BEFORE the registration ack, in the same handler return —
+   * a device that pushes in the window between reading CMD_REG_EVENT and
+   * writing its acknowledgment. The first event consumes the waiter the
+   * registration is holding and the ack lands behind it, which desynchronises
+   * every later reply on the session. This is the race Session.subscribe
+   * detects and tears the session down for; do not confuse it with
+   * `pushWithAck`, which is the benign queue-drain case.
+   */
+  pushBeforeAck?: Array<{ eventType: number; data: Buffer }>
 }
 
 export interface EmulatorState {
@@ -270,8 +280,9 @@ const baseHandlers: HandlerTable = {
   [CMD.REG_EVENT]: (req, state) => {
     state.eventMask = req.data.length >= 4 ? req.data.readUInt32LE(0) : 0
     const ack = reply(state, req, CMD.ACK_OK)
+    const early = (state.opts.pushBeforeAck ?? []).map((p) => eventPacket(p.eventType, p.data))
     const pushes = state.opts.pushWithAck ?? []
-    return [ack, ...pushes.map((p) => eventPacket(p.eventType, p.data))]
+    return [...early, ack, ...pushes.map((p) => eventPacket(p.eventType, p.data))]
   },
 }
 

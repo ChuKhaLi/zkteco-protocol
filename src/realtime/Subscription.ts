@@ -1,5 +1,5 @@
 import { decodeRealtimeEvent, isEventPacket } from '../codec/events.js'
-import { ZkProtocolError, ZkTimeoutError } from '../errors.js'
+import { ZkConnectionError, ZkProtocolError, ZkTimeoutError } from '../errors.js'
 import type { DecodedPacket } from '../codec/packet.js'
 import type { Session } from '../session/Session.js'
 import type { ZkRealtimeEvent } from '../types.js'
@@ -43,6 +43,13 @@ export interface ZkEventStream extends AsyncIterable<ZkRealtimeEvent> {
  * Exported from this module only; it is not part of the published API.
  */
 export interface ResolvedOptions {
+  /**
+   * Stored, and deliberately never read here: the DEVICE filters by the mask
+   * registered with CMD_REG_EVENT, and this library does not filter again
+   * client-side. An event outside the requested mask is a real observation
+   * about the device — it is on the first-hardware checklist — and dropping
+   * it here would hide the answer.
+   */
   events: number
   bufferLimit: number
   idleTimeoutMs: number
@@ -127,6 +134,17 @@ export class Subscription implements ZkEventStream {
         if (this.failure) return Promise.reject(this.failure)
         if (this.ended || this.closed) {
           return Promise.resolve({ value: undefined, done: true })
+        }
+        if (this.waiter) {
+          // There is one waiter slot. A second concurrent next() would
+          // overwrite the first and orphan its promise forever, so it is
+          // refused instead — the same choice, and the same error, the
+          // transports make for a concurrent receive().
+          return Promise.reject(
+            new ZkConnectionError(
+              'a next() is already pending; this stream does not support concurrent iteration',
+            ),
+          )
         }
         return new Promise<IteratorResult<ZkRealtimeEvent>>((resolve, reject) => {
           this.waiter = resolve

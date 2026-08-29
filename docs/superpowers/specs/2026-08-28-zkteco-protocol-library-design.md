@@ -639,6 +639,13 @@ When a physical device is first connected, before trusting any reading:
 12. Is there a way to cancel a subscription without dropping the connection? (§9.5)
 13. Does the device emit event types outside the requested mask, and does it ever interleave a
     request-response packet into a listening connection? (§9.3)
+14. Does the device ever push an event **before** acknowledging `CMD_REG_EVENT` — a badge in the
+    window between it reading the registration and writing the reply? Symptom if it does:
+    `subscribe()` throws `ZkProtocolError` naming an out-of-step reply stream and the session is
+    torn down, so the consumer sees a failed subscription rather than a working one. That is the
+    designed behaviour, not a bug to fix in the field (realtime spec §7.2 #10, RULING R11) — but if
+    a real terminal does this routinely rather than rarely, the trade-off in §3.1 of that spec is
+    worth revisiting with evidence. Record how often it happens before changing anything.
 
 Also confirm against a real device: that the event type genuinely occupies the session-id slot
 (§5.1), that the large attendance dialect's four undocumented trailing bytes are padding (§5.2),

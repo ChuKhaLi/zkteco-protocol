@@ -15,6 +15,8 @@ export class UdpTransport implements Transport {
   private socket: dgram.Socket | null = null
   private queue: Buffer[] = []
   private waiter: ((payload: Buffer) => void) | null = null
+  private failWaiter: ((err: Error) => void) | null = null
+  private failure: Error | null = null
   private listener: ((payload: Buffer) => void) | null = null
   private listenerError: ((err: Error) => void) | null = null
 
@@ -23,19 +25,54 @@ export class UdpTransport implements Transport {
   connect(): Promise<void> {
     return new Promise((resolve, reject) => {
       const sock = dgram.createSocket('udp4')
-      sock.once('error', (err) => {
+      let connectSettled = false
+      // Durable, not `once`, and it branches on which half of the socket's
+      // life it fired in. The first error before bind IS the connect failure;
+      // anything after connect has settled is a live socket dying, and used
+      // to run this same body — closing the socket and rejecting an
+      // already-settled promise, so the socket vanished with nobody told and
+      // a listening subscription waited forever for events that could no
+      // longer arrive. The flag also stops a second pre-bind error from
+      // closing an already-closed socket, which throws from inside a handler.
+      sock.on('error', (err) => {
+        const failure = new ZkConnectionError(err.message)
+        if (connectSettled) {
+          this.fail(failure)
+          return
+        }
+        connectSettled = true
         sock.close()
-        reject(new ZkConnectionError(err.message))
+        reject(failure)
       })
       sock.on('message', (msg) => {
         const payload = Buffer.from(msg)
         const listener = this.listener
         if (listener) { listener(payload); return }
         const waiter = this.waiter
-        if (waiter) { this.waiter = null; waiter(payload) } else { this.queue.push(payload) }
+        if (waiter) { this.waiter = null; this.failWaiter = null; waiter(payload) }
+        else { this.queue.push(payload) }
       })
-      sock.bind(0, () => { this.socket = sock; resolve() })
+      sock.bind(0, () => { this.socket = sock; connectSettled = true; resolve() })
     })
+  }
+
+  /**
+   * Records a socket failure and tells whoever is waiting on this transport.
+   *
+   * The socket is deliberately not closed here, mirroring TcpTransport: the
+   * owner closes it, and a transport that closed itself would turn a reported
+   * failure back into a silent one for anything that looked afterwards.
+   */
+  private fail(err: Error): void {
+    this.failure = err
+    const failWaiter = this.failWaiter
+    if (failWaiter) {
+      this.waiter = null
+      this.failWaiter = null
+      failWaiter(err)
+    }
+    const listenerError = this.listenerError
+    if (listenerError) listenerError(err)
   }
 
   send(payload: Buffer): Promise<void> {
@@ -63,12 +100,15 @@ export class UdpTransport implements Transport {
     }
     const queued = this.queue.shift()
     if (queued) return Promise.resolve(queued)
+    if (this.failure) return Promise.reject(this.failure)
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.waiter = null
+        this.failWaiter = null
         reject(new ZkTimeoutError(`no reply within ${timeoutMs}ms`))
       }, timeoutMs)
       this.waiter = (payload) => { clearTimeout(timer); resolve(payload) }
+      this.failWaiter = (err) => { clearTimeout(timer); reject(err) }
     })
   }
 
@@ -80,14 +120,19 @@ export class UdpTransport implements Transport {
       throw new ZkConnectionError('cannot listen while a receive() is pending')
     }
     this.listener = onPacket
-    // Retained for symmetry with TCP and for a future datagram error path.
-    // UDP has no connection to lose, so nothing calls it today: a dead device
-    // is indistinguishable from a quiet one here, which is what
-    // SubscribeOptions.idleTimeoutMs exists for.
+    // Called on a socket-level failure — a send that the OS refuses, the
+    // socket erroring after bind. UDP still has no connection to lose, so a
+    // dead DEVICE remains indistinguishable from a quiet one and is what
+    // SubscribeOptions.idleTimeoutMs exists for; a dead SOCKET is not the
+    // same thing and must not be silence.
     this.listenerError = onError
     const queued = this.queue
     this.queue = []
     for (const payload of queued) onPacket(payload)
+    // A failure recorded before listen() would otherwise never be reported:
+    // a listener attached over a dead socket that then waits forever is a
+    // hang, not a failure.
+    if (this.failure) onError(this.failure)
   }
 
   close(): Promise<void> {

@@ -1,7 +1,7 @@
 import { CMD } from '../codec/commands.js'
 import { decodePayload, encodePayload, type DecodedPacket } from '../codec/packet.js'
 import { mixCommKey } from '../codec/commkey.js'
-import { encodeEventMask } from '../codec/events.js'
+import { encodeEventMask, isEventPacket } from '../codec/events.js'
 import { ZkAuthError, ZkProtocolError } from '../errors.js'
 import type { Transport } from '../transport/Transport.js'
 
@@ -96,6 +96,24 @@ export class Session {
    * is why it runs before the mode flip and over the same socket. A refused
    * registration throws and leaves the session in request mode: firmware
    * without realtime support costs one call, not the connection.
+   *
+   * A DESYNCED registration is treated differently, and the asymmetry is
+   * deliberate. If the device pushes an event in the window between reading
+   * this request and writing its ack, that event consumes the pending waiter
+   * and the real ACK_OK is stranded in the transport queue — where the NEXT
+   * request would collect it as its own reply, and every reply after that
+   * would be off by one. A refusal leaves nothing out of step, so the session
+   * stays usable (design spec §3.4); a desync makes every later reply
+   * silently wrong, which is the exact misroute §3.1 rejected the
+   * multiplexing design to avoid. So the session is torn down here, before
+   * the error propagates, and cannot be polled afterwards.
+   *
+   * Buffering the early event and replaying it onto the stream was considered
+   * and rejected (RULING R11). It would preserve the punch, but only by
+   * building a bounded version of that same router, resting on a
+   * discrimination rule no device has ever confirmed. Spec §1.1 already
+   * answers a lost event: polling is the source of truth, and the next poll
+   * recovers it.
    */
   async subscribe(
     mask: number,
@@ -103,6 +121,14 @@ export class Session {
     onError: (err: Error) => void,
   ): Promise<void> {
     const res = await this.send(CMD.REG_EVENT, encodeEventMask(mask))
+    if (isEventPacket(res)) {
+      await this.abandon()
+      throw new ZkProtocolError(
+        'a realtime event arrived where the CMD_REG_EVENT reply was expected: the device pushed ' +
+          'an event before acknowledging the registration, so the reply stream is out of step. ' +
+          'This session has been torn down; reconnect before using it again',
+      )
+    }
     if (res.command !== CMD.ACK_OK) {
       throw new ZkProtocolError(
         `device refused a realtime subscription with command ${res.command}`,
@@ -157,6 +183,23 @@ export class Session {
   /** Receives one further packet in an ongoing multi-packet exchange. */
   async receiveMore(): Promise<DecodedPacket> {
     return decodePayload(await this.transport.receive(this.opts.timeoutMs))
+  }
+
+  /**
+   * Ends a session whose reply stream can no longer be trusted.
+   *
+   * No reply is awaited for the goodbye: the next packet to arrive belongs to
+   * some earlier exchange, so reading one would only deepen the confusion.
+   * The goodbye is still sent — on UDP there is no connection close to tell
+   * the device the session is over, so skipping it would leave the device
+   * holding the session slot. Nothing here throws; the caller is already on
+   * its way to reporting a failure of its own.
+   */
+  private async abandon(): Promise<void> {
+    this.open_ = false
+    this.subscribed_ = false
+    await this.transmit(CMD.EXIT).catch(() => {})
+    await this.transport.close().catch(() => {})
   }
 
   async close(): Promise<void> {

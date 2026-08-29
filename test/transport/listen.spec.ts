@@ -1,3 +1,4 @@
+import dgram from 'node:dgram'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CMD } from '../../src/codec/commands.js'
 import { encodePayload, decodePayload } from '../../src/codec/packet.js'
@@ -13,14 +14,6 @@ afterEach(async () => {
   await transport?.close().catch(() => {}); transport = null
   await running?.close(); running = null
 })
-
-const event = (eventType: number, byte: number): Buffer =>
-  encodePayload({
-    command: CMD.REG_EVENT,
-    sessionId: eventType,
-    replyId: 0,
-    data: Buffer.from([byte]),
-  })
 
 /** Resolves once `count` packets have reached the listener. */
 function collector(count: number): {
@@ -103,9 +96,10 @@ for (const kind of ['tcp', 'udp'] as const) {
 }
 
 describe('Transport.listen over tcp, failure paths', () => {
-  // UDP has no connection to lose and no socket-level failure to replay, so
-  // these two are TCP-only by nature rather than by omission. On UDP a dead
-  // device is silence, which is what SubscribeOptions.idleTimeoutMs is for.
+  // These two are TCP-only because a peer can only die on a connection, and
+  // UDP has none: a dead DEVICE over UDP is silence, which is what
+  // SubscribeOptions.idleTimeoutMs is for. A dead SOCKET is a different
+  // failure and UDP does report it — see the UDP block below.
   it('reports a socket failure to the listener', async () => {
     running = await startEmulator({ transport: 'tcp' })
     transport = new TcpTransport({ host: '127.0.0.1', port: running.port })
@@ -128,4 +122,60 @@ describe('Transport.listen over tcp, failure paths', () => {
     transport.listen(sink.onPacket, sink.onError)
     expect(sink.errors[0]).toBeInstanceOf(ZkConnectionError)
   })
+})
+
+/**
+ * A post-bind dgram socket error, SIMULATED rather than reproduced.
+ *
+ * These emit 'error' on the socket directly. A genuine one — the OS refusing
+ * a send, an ICMP port-unreachable surfacing as ECONNREFUSED — cannot be
+ * provoked deterministically from a test, so the condition is injected at the
+ * point the production code observes it. What that leaves unproven is that
+ * such an error really reaches this handler on a real network; what it does
+ * prove is everything downstream of the handler, which is where the defect
+ * was: the only 'error' listener used to be a pre-connect `once` that closed
+ * the socket and rejected an already-settled promise, so after connect an
+ * error tore the socket down with nobody told, and `listenerError` — assigned
+ * in listen() — was never invoked anywhere in the file.
+ */
+describe('Transport.listen over udp, failure paths', () => {
+  /** The live dgram socket, which UdpTransport keeps private. */
+  const socketOf = (t: Transport): dgram.Socket =>
+    (t as unknown as { socket: dgram.Socket }).socket
+
+  it('reports a socket error to the listener', async () => {
+    running = await startEmulator({ transport: 'udp' })
+    transport = new UdpTransport({ host: '127.0.0.1', port: running.port })
+    await transport.connect()
+    const sink = collector(1)
+    transport.listen(sink.onPacket, sink.onError)
+
+    socketOf(transport).emit('error', new Error('simulated socket failure'))
+
+    expect(sink.errors[0]).toBeInstanceOf(ZkConnectionError)
+    expect(sink.errors[0]?.message).toMatch(/simulated socket failure/)
+  })
+
+  it('reports a failure that was already recorded before listen()', async () => {
+    running = await startEmulator({ transport: 'udp' })
+    transport = new UdpTransport({ host: '127.0.0.1', port: running.port })
+    await transport.connect()
+    socketOf(transport).emit('error', new Error('simulated socket failure'))
+
+    const sink = collector(1)
+    transport.listen(sink.onPacket, sink.onError)
+    expect(sink.errors[0]).toBeInstanceOf(ZkConnectionError)
+  })
+
+  it('fails a pending receive() rather than leaving it to time out', async () => {
+    running = await startEmulator({ transport: 'udp' })
+    transport = new UdpTransport({ host: '127.0.0.1', port: running.port })
+    await transport.connect()
+    // A 30s deadline: a receive() that resolves through the timeout instead of
+    // the failure would blow this test's own budget, so passing means the
+    // failure path is what ended it.
+    const pending = transport.receive(30_000)
+    socketOf(transport).emit('error', new Error('simulated socket failure'))
+    await expect(pending).rejects.toThrow(ZkConnectionError)
+  }, 5000)
 })

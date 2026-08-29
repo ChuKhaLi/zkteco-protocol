@@ -140,6 +140,27 @@ for (const transport of ['tcp', 'udp'] as const) {
       expect(got[2]).toMatchObject({ kind: 'attendance', userId: 'AFTER' })
     })
 
+    // Scenario 10 — an event that lands BEFORE the registration ack, which
+    // desynchronises the reply stream — lives in test/session/subscribe.spec.ts
+    // instead, next to the refused-registration test whose asymmetry it is
+    // the point of: a refusal leaves the session usable, a desync must not.
+    //
+    // Scenario 11 — the try/catch in Session.subscribe, which nothing else in
+    // this suite enters. A malformed push must reach the stream as an error rather than
+    // throw out of a socket 'data' handler, where nothing would catch it —
+    // and scenario 5 above does NOT exercise that: an unknown event type and
+    // an unknown payload length both decode perfectly well at the PACKET
+    // layer and are rejected later, by the codec. Only bytes too short to be
+    // a packet at all reach the guard.
+    it('ends the stream when a push cannot be decoded as a packet at all', async () => {
+      running = await startEmulator({ transport })
+      device = await connect(running)
+      stream = await device.subscribe()
+      running.pushRaw(Buffer.from([0x01, 0x02]))
+      await expect(take(stream, 1)).rejects.toThrow(ZkProtocolError)
+      await expect(take(stream, 1)).rejects.toThrow(/payload shorter than the 8-byte header/)
+    })
+
     // Scenario 7
     it('times out and stays in request mode when the registration is never acked', async () => {
       running = await startEmulator({
@@ -194,6 +215,17 @@ for (const transport of ['tcp', 'udp'] as const) {
         // the socket closes, but the emulator processes it on its own event
         // loop, so this polls for it rather than guessing a fixed delay.
         await pollUntil(() => running!.received.some((p) => p.command === CMD.EXIT))
+        // "No socket left open" — the other half of §7.2 #9, and TCP-only
+        // because `sockets` is always empty on UDP, where asserting it would
+        // prove nothing. Polled first for the same reason the goodbye is: the
+        // client's FIN and the emulator's 'close' handler run on separate
+        // event loops, so a bare assertion would be racing the OS rather than
+        // testing the library. The poll is what fails when a socket leaks;
+        // the expect states the claim.
+        if (transport === 'tcp') {
+          await pollUntil(() => running!.sockets.size === 0)
+          expect(running.sockets.size).toBe(0)
+        }
         // Give a same-tick unhandled rejection a chance to surface before asserting.
         await new Promise((r) => setImmediate(r))
         expect(unhandledRejections).toEqual([])

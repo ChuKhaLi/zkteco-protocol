@@ -125,6 +125,11 @@ export class ZkDevice {
    *
    * While subscribed this device answers no read commands. Closing the stream
    * closes the connection; call connect() again to read.
+   *
+   * Always close the stream — `try { for await ... } finally { close() }`.
+   * That includes the error path: a stream that ended with an error stops
+   * delivering but does NOT release the connection, which stays open with a
+   * listener attached until close() or disconnect() is called.
    */
   async subscribe(opts?: SubscribeOptions): Promise<ZkEventStream> {
     const session = this.requireIdleSession()
@@ -132,6 +137,23 @@ export class ZkDevice {
       events: opts?.events ?? EVENT_FLAG.ATTENDANCE,
       bufferLimit: opts?.bufferLimit ?? DEFAULT_BUFFER_LIMIT,
       idleTimeoutMs: opts?.idleTimeoutMs ?? 0,
+    }
+    // Checked before anything is sent, so a rejected option costs no
+    // registration on the device. `??` only fills in null and undefined, so
+    // `bufferLimit: 0` survives it intact and then overflows the stream on
+    // the very first event — a bound of zero bounds nothing, it just breaks.
+    // Negative and non-finite go the same way, and NaN would slip past a bare
+    // `<= 0` because every comparison against it is false, so the finiteness
+    // test comes first. RangeError, not a Zk* class: these are bad arguments
+    // from the caller, not anything the device did, and the published error
+    // taxonomy stays as v0.1 shipped it.
+    if (!Number.isFinite(resolved.bufferLimit) || resolved.bufferLimit <= 0) {
+      throw new RangeError(`bufferLimit must be a positive number, got ${String(opts?.bufferLimit)}`)
+    }
+    if (!Number.isFinite(resolved.idleTimeoutMs) || resolved.idleTimeoutMs < 0) {
+      throw new RangeError(
+        `idleTimeoutMs must be a non-negative number, got ${String(opts?.idleTimeoutMs)}`,
+      )
     }
     const subscription = new Subscription(session, resolved)
     await session.subscribe(

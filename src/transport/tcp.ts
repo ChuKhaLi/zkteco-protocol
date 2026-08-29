@@ -3,7 +3,7 @@ import { frameTcp, tryUnframeTcp } from '../codec/framing.js'
 import { ZkConnectionError, ZkTimeoutError } from '../errors.js'
 import type { Transport, TransportOptions } from './Transport.js'
 
-/** Idle seconds before the OS probes a listening connection. */
+/** Idle milliseconds before the OS probes a listening connection. */
 const KEEPALIVE_DELAY_MS = 30_000
 
 export class TcpTransport implements Transport {
