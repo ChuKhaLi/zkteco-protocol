@@ -74,11 +74,15 @@ export class ZkDevice {
   /**
    * Handshakes, authenticating with the comm key when the device asks.
    *
-   * Safe to call again on an already-connected instance: any existing session
-   * is closed first, so a second connect() cannot leak the first socket.
+   * Safe to call again on an already-connected instance: any existing
+   * subscription is ended and any existing session is closed first, so a
+   * second connect() cannot leak the first socket, nor leave a caller's
+   * earlier stream awaiting an event that will never arrive.
    */
   async connect(): Promise<void> {
+    const stream = this.stream
     this.stream = null
+    if (stream) await stream.close()
     if (this.session) {
       await this.session.close()
       this.session = null
