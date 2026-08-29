@@ -78,3 +78,39 @@ export interface ZkDeviceInfo {
   recordCount: number
   recordCapacity: number
 }
+
+/**
+ * One event a device pushed while a subscription was active.
+ *
+ * Deliberately NOT a `ZkAttendanceLog`. The realtime payload carries no
+ * in/out status field and belongs to no 8/16/40-byte record dialect, so
+ * reusing that type would mean fabricating both `status` and `recordSize`.
+ */
+export type ZkRealtimeEvent =
+  | {
+      kind: 'attendance'
+      /** The EVENT_FLAG value the device pushed this under. */
+      eventType: number
+      /**
+       * The identifier printed on the device. `null` when the dialect carried
+       * none — never an empty string, and never resolved through the user
+       * list: device-internal uids are recycled after a deletion, so a lookup
+       * can attribute a punch to the wrong person with no error anywhere.
+       */
+      userId: string | null
+      /** 'device' when the record itself supplied the id, null when it did not. */
+      userIdSource: 'device' | null
+      /** Device-internal key. Recycled after a user is deleted — NOT an identity. */
+      uid: number | null
+      timestamp: ZkNaiveTime
+      /** Raw verification method. Model-dependent, deliberately not decoded. */
+      verifyMode: number | null
+      /** Hex of the event payload. */
+      raw: string
+    }
+  | {
+      kind: 'unknown'
+      eventType: number
+      /** Hex of the event payload, undecoded and complete. */
+      raw: string
+    }

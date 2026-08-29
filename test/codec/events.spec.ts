@@ -100,3 +100,45 @@ describe('realtime attendance dialects', () => {
     expect(decodeRealtimeAttendance(Buffer.alloc(0))).toBeNull()
   })
 })
+
+import { decodeRealtimeEvent } from '../../src/codec/events.js'
+
+describe('decodeRealtimeEvent', () => {
+  const push = (eventType: number, data: Buffer) =>
+    decodePayload(encodePayload({ command: CMD.REG_EVENT, sessionId: eventType, replyId: 0, data }))
+
+  it('marks a printed identity as coming from the device itself', () => {
+    const ev = decodeRealtimeEvent(push(EVENT_FLAG.ATTENDANCE, largeEvent('0001234', 1)))
+    expect(ev).toMatchObject({
+      kind: 'attendance',
+      eventType: EVENT_FLAG.ATTENDANCE,
+      userId: '0001234',
+      userIdSource: 'device',
+      uid: null,
+      verifyMode: 1,
+    })
+  })
+
+  it('leaves userIdSource null when no identity was sent', () => {
+    const ev = decodeRealtimeEvent(push(EVENT_FLAG.ATTENDANCE, smallEvent(9)))
+    expect(ev).toMatchObject({ kind: 'attendance', userId: null, userIdSource: null, uid: 9 })
+  })
+
+  it('surfaces an event type it cannot decode, with its bytes intact', () => {
+    const data = Buffer.from([0xde, 0xad, 0xbe, 0xef])
+    expect(decodeRealtimeEvent(push(EVENT_FLAG.ALARM, data))).toEqual({
+      kind: 'unknown',
+      eventType: EVENT_FLAG.ALARM,
+      raw: 'deadbeef',
+    })
+  })
+
+  it('surfaces an attendance payload of unknown length rather than decoding part of it', () => {
+    const data = Buffer.alloc(20, 0x11)
+    expect(decodeRealtimeEvent(push(EVENT_FLAG.ATTENDANCE, data))).toEqual({
+      kind: 'unknown',
+      eventType: EVENT_FLAG.ATTENDANCE,
+      raw: '11'.repeat(20),
+    })
+  })
+})

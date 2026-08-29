@@ -1,7 +1,7 @@
 import { CMD } from './commands.js'
 import type { DecodedPacket } from './packet.js'
 import { decodeZkTime6 } from './time.js'
-import type { ZkNaiveTime } from '../types.js'
+import type { ZkNaiveTime, ZkRealtimeEvent } from '../types.js'
 
 /**
  * Realtime event flags, as published.
@@ -133,4 +133,29 @@ export function decodeRealtimeAttendance(data: Buffer): RealtimeAttendance | nul
     }
   }
   return null
+}
+
+/**
+ * Maps a pushed packet onto the public event type.
+ *
+ * Anything not decodable becomes `kind: 'unknown'` carrying its bytes.
+ * Nothing is ever decoded partially, and an unknown event never ends a
+ * stream — an unfamiliar dialect should be reportable, not invisible.
+ */
+export function decodeRealtimeEvent(pkt: DecodedPacket): ZkRealtimeEvent {
+  const eventType = readEventType(pkt)
+  const raw = pkt.data.toString('hex')
+  if (eventType !== EVENT_FLAG.ATTENDANCE) return { kind: 'unknown', eventType, raw }
+  const decoded = decodeRealtimeAttendance(pkt.data)
+  if (!decoded) return { kind: 'unknown', eventType, raw }
+  return {
+    kind: 'attendance',
+    eventType,
+    userId: decoded.userId,
+    userIdSource: decoded.userId === null ? null : 'device',
+    uid: decoded.uid,
+    timestamp: decoded.timestamp,
+    verifyMode: decoded.verifyMode,
+    raw,
+  }
 }
