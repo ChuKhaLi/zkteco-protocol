@@ -200,5 +200,24 @@ describe('terminal read handlers', () => {
     } finally {
       await session.close()
     }
+    await running.close()
+
+    // Neither firmware nor deviceTimeRaw is configured on this second
+    // instance, so both commands must fall back to ACK_ERROR.
+    running = await startEmulator({ transport: 'tcp' })
+    const unconfigured = new Session(
+      new TcpTransport({ host: '127.0.0.1', port: running.port }),
+      { timeoutMs: 2000 },
+    )
+    await unconfigured.open()
+    try {
+      const fw = await unconfigured.tryExecute(CMD.GET_VERSION)
+      expect(fw.command).toBe(CMD.ACK_ERROR)
+
+      const clock = await unconfigured.tryExecute(CMD.GET_TIME)
+      expect(clock.command).toBe(CMD.ACK_ERROR)
+    } finally {
+      await unconfigured.close()
+    }
   })
 })
