@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CMD } from '../../src/codec/commands.js'
-import { EVENT_FLAG, encodeEventMask, isEventPacket, readEventType } from '../../src/codec/events.js'
+import { EVENT_FLAG, encodeEventMask, isEventPacket, readEventType, decodeRealtimeAttendance } from '../../src/codec/events.js'
 import { decodePayload, encodePayload } from '../../src/codec/packet.js'
 
 describe('event mask encoding', () => {
@@ -35,5 +35,68 @@ describe('event packet recognition', () => {
 
   it('reads the event type out of the session-id slot', () => {
     expect(readEventType(pushed(EVENT_FLAG.ALARM, Buffer.alloc(0)))).toBe(EVENT_FLAG.ALARM)
+  })
+})
+
+/** The large dialect: 9-byte printed id, 15 zero bytes, verify type, 6-byte time. */
+function largeEvent(userId: string, verifyMode: number, trailing = 4): Buffer {
+  const buf = Buffer.alloc(32 + trailing)
+  buf.write(userId, 0, 9, 'ascii')
+  buf.writeUInt16LE(verifyMode, 24)
+  buf.set([26, 8, 27, 8, 1, 30], 26) // 2026-08-27T08:01:30
+  return buf
+}
+
+/** The small dialect: uid, three unknown bytes, 6-byte time. */
+function smallEvent(uid: number): Buffer {
+  const buf = Buffer.alloc(10)
+  buf.writeUInt8(uid, 0)
+  buf.set([26, 8, 27, 8, 1, 30], 4)
+  return buf
+}
+
+describe('realtime attendance dialects', () => {
+  it('decodes the large dialect, printed identity and all', () => {
+    const got = decodeRealtimeAttendance(largeEvent('0001234', 1))
+    expect(got).toEqual({
+      userId: '0001234',
+      uid: null,
+      verifyMode: 1,
+      timestamp: expect.objectContaining({ local: '2026-08-27T08:01:30' }),
+    })
+  })
+
+  it('decodes the large dialect at exactly 32 bytes, with no trailing bytes', () => {
+    expect(decodeRealtimeAttendance(largeEvent('7', 0, 0))?.userId).toBe('7')
+  })
+
+  it('reports no identity when the printed id field is empty, rather than an empty string', () => {
+    const got = decodeRealtimeAttendance(largeEvent('', 0))
+    expect(got?.userId).toBeNull()
+    expect(got?.timestamp.local).toBe('2026-08-27T08:01:30')
+  })
+
+  // Node's 'ascii' decoding masks the high bit, so 0xc1 would read back as
+  // 'A'. A byte that is not printable ASCII must not become a plausible
+  // identifier; it must become no identifier at all.
+  it('reports no identity when the id field holds bytes outside printable ASCII', () => {
+    const buf = largeEvent('', 0)
+    buf.set([0xc1, 0xc2, 0xc3], 0)
+    expect(decodeRealtimeAttendance(buf)?.userId).toBeNull()
+  })
+
+  it('decodes the small dialect, which carries a uid and no printed identity', () => {
+    expect(decodeRealtimeAttendance(smallEvent(5))).toEqual({
+      userId: null,
+      uid: 5,
+      verifyMode: null,
+      timestamp: expect.objectContaining({ local: '2026-08-27T08:01:30' }),
+    })
+  })
+
+  it('refuses to decode a length matching neither dialect', () => {
+    expect(decodeRealtimeAttendance(Buffer.alloc(20))).toBeNull()
+    expect(decodeRealtimeAttendance(Buffer.alloc(31))).toBeNull()
+    expect(decodeRealtimeAttendance(Buffer.alloc(0))).toBeNull()
   })
 })

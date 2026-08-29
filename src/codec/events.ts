@@ -1,5 +1,7 @@
 import { CMD } from './commands.js'
 import type { DecodedPacket } from './packet.js'
+import { decodeZkTime6 } from './time.js'
+import type { ZkNaiveTime } from '../types.js'
 
 /**
  * Realtime event flags, as published.
@@ -50,4 +52,85 @@ export function isEventPacket(pkt: DecodedPacket): boolean {
  */
 export function readEventType(pkt: DecodedPacket): number {
   return pkt.sessionId
+}
+
+/** Smallest payload that can hold the documented large layout. */
+const LARGE_MIN_LENGTH = 32
+/** The only length the small dialect has ever been observed at. */
+const SMALL_LENGTH = 10
+const PRINTED_ID_LENGTH = 9
+const PRINTED_ID_OFFSET = 0
+const VERIFY_MODE_OFFSET = 24
+const LARGE_TIME_OFFSET = 26
+const SMALL_UID_OFFSET = 0
+const SMALL_TIME_OFFSET = 4
+
+export interface RealtimeAttendance {
+  /** The identifier printed on the device, or null when none was sent. */
+  userId: string | null
+  /** Device-internal key. Recycled after a user is deleted — NOT an identity. */
+  uid: number | null
+  timestamp: ZkNaiveTime
+  /** Raw verification method. Model-dependent, deliberately not decoded. */
+  verifyMode: number | null
+}
+
+/**
+ * Reads a fixed-width identifier field, or returns null if it holds anything
+ * that is not a printable identifier.
+ *
+ * Deliberately not `readNulTerminated` from records/shared.ts: that decodes
+ * with Node's 'ascii', which MASKS THE HIGH BIT, so a field of 0xc1 0xc2 0xc3
+ * reads back as "ABC" — a fabricated identity that no caller could tell from
+ * a real one. The bytes are validated before they are decoded.
+ */
+function readPrintableId(buf: Buffer, start: number, length: number): string | null {
+  const field = buf.subarray(start, start + length)
+  const nul = field.indexOf(0)
+  const body = field.subarray(0, nul === -1 ? field.length : nul)
+  if (body.length === 0) return null
+  for (const byte of body) {
+    if (byte < 0x20 || byte > 0x7e) return null
+  }
+  return body.toString('ascii')
+}
+
+/**
+ * Decodes a realtime attendance payload, or returns null when its length
+ * matches no known dialect.
+ *
+ * Dialect selection is by LENGTH, never by transport. zkteco-js picks its
+ * decoder by transport — one layout on TCP, another on UDP — which conflates
+ * a model-dependent record dialect with the socket it arrived on. Record
+ * dialects in this protocol already vary by model (8/16/40-byte attendance
+ * records), and nothing about a datagram makes a device pack a timestamp
+ * differently.
+ *
+ * The large dialect is documented at exactly 32 bytes; observed packets carry
+ * 36. The four extra bytes are undocumented, are not interpreted, and survive
+ * in the caller's `raw`. Hence `>=` rather than `===`: a device with trailing
+ * bytes is decoded rather than discarded. First-hardware checklist item.
+ */
+export function decodeRealtimeAttendance(data: Buffer): RealtimeAttendance | null {
+  if (data.length >= LARGE_MIN_LENGTH) {
+    return {
+      userId: readPrintableId(data, PRINTED_ID_OFFSET, PRINTED_ID_LENGTH),
+      uid: null,
+      verifyMode: data.readUInt16LE(VERIFY_MODE_OFFSET),
+      timestamp: decodeZkTime6(data, LARGE_TIME_OFFSET),
+    }
+  }
+  if (data.length === SMALL_LENGTH) {
+    // The uid field's width rests on a SINGLE source, which read one byte.
+    // One source cannot distinguish a uint8 from a uint16 LE holding a small
+    // value, and the protocol documentation does not describe this dialect at
+    // all. First-hardware checklist item.
+    return {
+      userId: null,
+      uid: data.readUInt8(SMALL_UID_OFFSET),
+      verifyMode: null,
+      timestamp: decodeZkTime6(data, SMALL_TIME_OFFSET),
+    }
+  }
+  return null
 }
