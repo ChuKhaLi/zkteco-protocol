@@ -1,11 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest'
-import { getParameters } from '../../src/commands/device.js'
+import { getIdentity, getParameters, getTime } from '../../src/commands/device.js'
 import { Session } from '../../src/session/Session.js'
 import { TcpTransport } from '../../src/transport/tcp.js'
 import { UdpTransport } from '../../src/transport/udp.js'
 import { CMD } from '../../src/codec/commands.js'
 import { ZkProtocolError, ZkTimeoutError } from '../../src/errors.js'
-import { startEmulator, type Emulator } from '../emulator/index.js'
+import { reply, startEmulator, type Emulator } from '../emulator/index.js'
 
 let running: Emulator | null = null
 let session: Session | null = null
@@ -100,6 +100,116 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       })
       session = await connect(running.port, 150)
       await expect(getParameters(session, ['~SerialNumber'])).rejects.toBeInstanceOf(ZkTimeoutError)
+    })
+  })
+
+  describe(`getIdentity over ${transportKind}`, () => {
+    const FULL = {
+      transport: transportKind,
+      params: {
+        '~SerialNumber': 'OAJ7194600263',
+        '~DeviceName': 'MB360',
+        '~Platform': 'ZMM220_TFT',
+        '~OS': 'Linux',
+      },
+      firmware: 'Ver 6.60 Jun 10 2019',
+    } as const
+
+    it('returns all five fields when the device answers everything', async () => {
+      running = await startEmulator(FULL)
+      session = await connect(running.port)
+      expect(await getIdentity(session)).toEqual({
+        serialNumber: 'OAJ7194600263',
+        deviceName: 'MB360',
+        platform: 'ZMM220_TFT',
+        os: 'Linux',
+        firmwareVersion: 'Ver 6.60 Jun 10 2019',
+      })
+    })
+
+    it('nulls only the refused field and leaves the other four intact', async () => {
+      running = await startEmulator({
+        transport: transportKind,
+        params: {
+          '~SerialNumber': 'OAJ7194600263',
+          '~DeviceName': 'MB360',
+          '~Platform': 'ZMM220_TFT',
+        },
+        firmware: 'Ver 6.60 Jun 10 2019',
+      })
+      session = await connect(running.port)
+      const id = await getIdentity(session)
+      expect(id.os).toBeNull()
+      expect(id.serialNumber).toBe('OAJ7194600263')
+      expect(id.deviceName).toBe('MB360')
+      expect(id.platform).toBe('ZMM220_TFT')
+      expect(id.firmwareVersion).toBe('Ver 6.60 Jun 10 2019')
+    })
+
+    it("keeps an empty value as '' rather than collapsing it to null", async () => {
+      running = await startEmulator({
+        transport: transportKind,
+        params: { ...FULL.params, '~OS': '' },
+        firmware: 'Ver 6.60 Jun 10 2019',
+      })
+      session = await connect(running.port)
+      expect((await getIdentity(session)).os).toBe('')
+    })
+
+    it('nulls firmware when the device refuses CMD_GET_VERSION', async () => {
+      running = await startEmulator({ transport: transportKind, params: FULL.params })
+      session = await connect(running.port)
+      expect((await getIdentity(session)).firmwareVersion).toBeNull()
+    })
+
+    it('returns five nulls on a device that exposes nothing', async () => {
+      // Exists so the timeout test below cannot pass by accident: five nulls
+      // is a REAL, reachable answer, so "it returned nulls" proves nothing on
+      // its own about which failure produced them.
+      running = await startEmulator({ transport: transportKind })
+      session = await connect(running.port)
+      expect(await getIdentity(session)).toEqual({
+        serialNumber: null,
+        deviceName: null,
+        platform: null,
+        os: null,
+        firmwareVersion: null,
+      })
+    })
+
+    it('THROWS on a timeout and does not return nulls', async () => {
+      running = await startEmulator({
+        transport: transportKind,
+        params: FULL.params,
+        handlers: { [CMD.OPTIONS_RRQ]: () => [] },
+      })
+      session = await connect(running.port, 150)
+      await expect(getIdentity(session)).rejects.toBeInstanceOf(ZkTimeoutError)
+    })
+  })
+
+  describe(`getTime over ${transportKind}`, () => {
+    it('decodes a known packed value to known fields', async () => {
+      // 2026-08-27T08:01:00 in the device's 31-day pseudo-calendar.
+      const packed =
+        ((26 * 12 + (8 - 1)) * 31 + (27 - 1)) * 86_400 + 8 * 3600 + 1 * 60 + 0
+      running = await startEmulator({ transport: transportKind, deviceTimeRaw: packed })
+      session = await connect(running.port)
+      expect(await getTime(session)).toEqual({
+        year: 2026, month: 8, day: 27, hour: 8, minute: 1, second: 0,
+        local: '2026-08-27T08:01:00',
+      })
+    })
+
+    it('throws when the reply is too short to hold a packed timestamp', async () => {
+      running = await startEmulator({
+        transport: transportKind,
+        handlers: {
+          [CMD.GET_TIME]: (req, state) => [reply(state, req, CMD.ACK_OK, Buffer.alloc(2))],
+        },
+      })
+      session = await connect(running.port)
+      await expect(getTime(session)).rejects.toBeInstanceOf(ZkProtocolError)
     })
   })
 }

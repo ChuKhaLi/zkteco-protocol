@@ -1,6 +1,10 @@
 import { CMD } from '../codec/commands.js'
-import { decodeParamReply, encodeParamRequest } from '../codec/params.js'
+import { DEVICE_PARAM, decodeParamReply, encodeParamRequest } from '../codec/params.js'
+import { decodeZkTime } from '../codec/time.js'
+import { readNulTerminated } from '../codec/records/shared.js'
+import { ZkProtocolError } from '../errors.js'
 import type { Session } from '../session/Session.js'
+import type { ZkDeviceIdentity, ZkNaiveTime } from '../types.js'
 
 /**
  * Reads named device parameters.
@@ -38,4 +42,76 @@ export async function getParameters(
     out[key] = decodeParamReply(key, res.data)
   }
   return out
+}
+
+/** The parameter keyword behind each ZkDeviceIdentity field. */
+const IDENTITY_KEYS = {
+  serialNumber: DEVICE_PARAM.SERIAL_NUMBER,
+  deviceName: DEVICE_PARAM.DEVICE_NAME,
+  platform: DEVICE_PARAM.PLATFORM,
+  os: DEVICE_PARAM.OS,
+} as const
+
+/**
+ * Reads the firmware version.
+ *
+ * CMD_GET_VERSION is NOT a parameter read: it takes an empty payload and
+ * answers with the firmware string as the whole body — no keyword, no '=',
+ * and so nothing to check the echo of. Do not fold this into the parameter
+ * path; the echo guard would have nothing to verify and would reject a
+ * perfectly good reply.
+ */
+async function readFirmware(session: Session): Promise<string | null> {
+  const res = await session.tryExecute(CMD.GET_VERSION)
+  if (res.command === CMD.ACK_ERROR) return null
+  return readNulTerminated(res.data, 0, res.data.length)
+}
+
+/**
+ * Reads what the device says about itself: five fields, five round trips,
+ * strictly sequential because the transport rejects overlapping receives.
+ *
+ * A consumer that needs only one field should call getParameters with just
+ * that keyword and pay for one round trip. This is the convenience, not the
+ * primitive.
+ */
+export async function getIdentity(session: Session): Promise<ZkDeviceIdentity> {
+  const params = await getParameters(session, Object.values(IDENTITY_KEYS))
+  const firmwareVersion = await readFirmware(session)
+  // `?? null` fills in only for a key getParameters OMITTED, which is exactly
+  // the ACK_ERROR refusal. An empty-string value is neither null nor
+  // undefined, so it survives this intact and stays distinguishable from a
+  // refusal — see the ZkDeviceIdentity docblock.
+  return {
+    serialNumber: params[IDENTITY_KEYS.serialNumber] ?? null,
+    deviceName: params[IDENTITY_KEYS.deviceName] ?? null,
+    platform: params[IDENTITY_KEYS.platform] ?? null,
+    os: params[IDENTITY_KEYS.os] ?? null,
+    firmwareVersion,
+  }
+}
+
+/**
+ * Reads the device's own clock.
+ *
+ * Returns ZkNaiveTime, never a Date: the device records naive local time with
+ * no offset, and a Date would bind it to the decoding process's timezone —
+ * right by accident near the device, hours wrong in CI, silent either way.
+ *
+ * Uses execute(), not tryExecute(): unlike a parameter keyword, a device with
+ * no clock command is a protocol failure rather than an answer, and the
+ * return type is not nullable.
+ *
+ * The 31-day pseudo-calendar can legitimately decode to a date like
+ * 2026-02-31. That is returned verbatim — see decodeZkTime.
+ */
+export async function getTime(session: Session): Promise<ZkNaiveTime> {
+  const res = await session.execute(CMD.GET_TIME)
+  if (res.data.length < 4) {
+    throw new ZkProtocolError(
+      `CMD_GET_TIME reply is ${res.data.length} bytes, need at least 4`,
+      res.data,
+    )
+  }
+  return decodeZkTime(res.data.readUInt32LE(0))
 }

@@ -114,3 +114,29 @@ export type ZkRealtimeEvent =
       /** Hex of the event payload, undecoded and complete. */
       raw: string
     }
+
+/**
+ * What a device reports about itself.
+ *
+ * Every field is `string | null`, and `null` means exactly one thing: THE
+ * DEVICE ANSWERED AND SAID NO — it refused that keyword with ACK_ERROR. It
+ * never means the read was not attempted, and it never means the connection
+ * failed; a timeout, a dropped socket or a malformed reply all throw out of
+ * getIdentity() instead.
+ *
+ * An empty string is a different answer from null: the device supplied the
+ * key with no value. Which of the two a firmware uses for a parameter it does
+ * not support is unknown — see the first-hardware checklist.
+ *
+ * No `raw` field, unlike ZkUser: strings here are decoded latin1, which is
+ * byte-preserving, so `Buffer.from(value, 'latin1')` already recovers exactly
+ * what the device sent.
+ */
+export interface ZkDeviceIdentity {
+  serialNumber: string | null
+  deviceName: string | null
+  platform: string | null
+  os: string | null
+  /** Read with CMD_GET_VERSION, not as a parameter — it has no keyword echo. */
+  firmwareVersion: string | null
+}
