@@ -64,6 +64,8 @@ export interface Emulator {
   readonly receivedRaw: Buffer[]
   readonly socketErrors: Error[]
   readonly state: EmulatorState
+  /** Live client sockets. TCP only; empty on UDP. Lets a test write raw bytes. */
+  readonly sockets: ReadonlySet<net.Socket>
   close(): Promise<void>
 }
 
@@ -301,7 +303,7 @@ export async function startEmulator(opts: EmulatorOptions): Promise<Emulator> {
     await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
     const port = (server.address() as net.AddressInfo).port
     return {
-      port, transport: 'tcp', received, receivedRaw, socketErrors, state,
+      port, transport: 'tcp', received, receivedRaw, socketErrors, state, sockets,
       close: () => new Promise<void>((resolve) => {
         for (const s of sockets) s.destroy()
         server.close(() => resolve())
@@ -325,7 +327,7 @@ export async function startEmulator(opts: EmulatorOptions): Promise<Emulator> {
   await new Promise<void>((resolve) => sock.bind(0, '127.0.0.1', resolve))
   const port = sock.address().port
   return {
-    port, transport: 'udp', received, receivedRaw, socketErrors, state,
+    port, transport: 'udp', received, receivedRaw, socketErrors, state, sockets: new Set<net.Socket>(),
     close: () => new Promise<void>((resolve) => { sock.close(() => resolve()) }),
   }
 }

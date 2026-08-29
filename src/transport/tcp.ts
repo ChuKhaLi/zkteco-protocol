@@ -46,6 +46,11 @@ export class TcpTransport implements Transport {
       try {
         framed = tryUnframeTcp(this.buffered)
       } catch (err) {
+        // Release the accumulator along with failing the connection. The
+        // bytes cannot be re-parsed — the frame they belong to was rejected —
+        // and holding them keeps a rejected oversized length costing memory
+        // for the life of the object.
+        this.buffered = Buffer.alloc(0)
         this.fail(err as Error)
         return
       }

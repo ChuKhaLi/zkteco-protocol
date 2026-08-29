@@ -3,8 +3,8 @@ import { afterEach, describe, expect, it } from 'vitest'
 import { TcpTransport } from '../../src/transport/tcp.js'
 import { CMD } from '../../src/codec/commands.js'
 import { decodePayload, encodePayload } from '../../src/codec/packet.js'
-import { frameTcp } from '../../src/codec/framing.js'
-import { ZkConnectionError, ZkTimeoutError } from '../../src/errors.js'
+import { frameTcp, START_MARKER } from '../../src/codec/framing.js'
+import { ZkConnectionError, ZkProtocolError, ZkTimeoutError } from '../../src/errors.js'
 import { startEmulator, type Emulator } from '../emulator/index.js'
 
 let running: Emulator | null = null
@@ -127,5 +127,25 @@ describe('TcpTransport', () => {
     const reply = decodePayload(await first)
     expect(reply.command).toBe(CMD.ACK_OK)
     expect(reply.sessionId).toBe(0x55)
+  })
+
+  // A rejected declared length used to leave every byte of the offending
+  // chunk in the accumulator forever: the permanent-hang defect was fixed in
+  // v0.1 but the growth was not. `buffered` is private, and this asserts on
+  // it deliberately — the finding is specifically about that field, and a
+  // behavioural proxy would pass while the leak remained.
+  it('releases the accumulator when a declared length is rejected', async () => {
+    running = await startEmulator({ transport: 'tcp' })
+    transport = new TcpTransport({ host: '127.0.0.1', port: running.port })
+    await transport.connect()
+    const pending = transport.receive(2000)
+
+    const bogus = Buffer.alloc(8 + 64)
+    START_MARKER.copy(bogus, 0)
+    bogus.writeUInt32LE(0xffffff, 4) // far past MAX_DECLARED_SIZE
+    for (const socket of running.sockets) socket.write(bogus)
+
+    await expect(pending).rejects.toThrow(ZkProtocolError)
+    expect((transport as unknown as { buffered: Buffer }).buffered.length).toBe(0)
   })
 })
