@@ -4,7 +4,7 @@ import { EVENT_FLAG } from '../../src/codec/events.js'
 import { encodePayload } from '../../src/codec/packet.js'
 import { ZkConnectionError, ZkProtocolError, ZkTimeoutError } from '../../src/errors.js'
 import { ZkDevice } from '../../src/ZkDevice.js'
-import { reply, startEmulator, type Emulator } from '../emulator/index.js'
+import { startEmulator, type Emulator } from '../emulator/index.js'
 import type { ZkEventStream } from '../../src/realtime/Subscription.js'
 import type { ZkRealtimeEvent } from '../../src/types.js'
 
@@ -40,6 +40,24 @@ async function take(s: ZkEventStream, count: number): Promise<ZkRealtimeEvent[]>
     if (got.length >= count) break
   }
   return got
+}
+
+/**
+ * Polls `check` until it is true, or throws once `timeoutMs` has elapsed.
+ *
+ * A bounded poll rather than a fixed sleep: the condition it waits for
+ * (a packet the emulator has processed) is normally satisfied within a
+ * millisecond or two, so a poll settles fast on the happy path and only
+ * burns the full timeout when the thing being proven is actually missing.
+ */
+async function pollUntil(check: () => boolean, timeoutMs = 2000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!check()) {
+    if (Date.now() >= deadline) {
+      throw new Error(`condition not met within ${timeoutMs}ms`)
+    }
+    await new Promise((r) => setTimeout(r, 5))
+  }
 }
 
 for (const transport of ['tcp', 'udp'] as const) {
@@ -146,16 +164,43 @@ for (const transport of ['tcp', 'udp'] as const) {
     })
 
     // Scenario 9
+    //
+    // "Closes cleanly" means two things (design spec §7.2): no socket left
+    // open, and no unhandled rejection. `socketErrors` alone proves neither —
+    // isIgnorableSocketError filters exactly the codes an UNCLEAN close
+    // produces (ECONNRESET, EPIPE) on the server side, while a genuinely
+    // clean close produces no server-side error at all, so both outcomes
+    // leave that array empty. What actually distinguishes a clean shutdown is
+    // asserted directly below: the emulator sees the CMD_EXIT goodbye, and
+    // nothing anywhere rejects unobserved.
     it('closes cleanly while events are still arriving', async () => {
-      running = await startEmulator({ transport })
-      device = await connect(running)
-      const open = await device.subscribe()
-      for (let i = 0; i < 5; i += 1) running.pushEvent(EVENT_FLAG.ATTENDANCE, large(`C${i}`))
-      await open.close()
-      stream = null
-      await device.disconnect()
-      device = null
-      expect(running.socketErrors).toEqual([])
+      const unhandledRejections: unknown[] = []
+      const onUnhandledRejection = (reason: unknown): void => { unhandledRejections.push(reason) }
+      process.on('unhandledRejection', onUnhandledRejection)
+      try {
+        running = await startEmulator({ transport })
+        device = await connect(running)
+        const open = await device.subscribe()
+        for (let i = 0; i < 5; i += 1) running.pushEvent(EVENT_FLAG.ATTENDANCE, large(`C${i}`))
+        await open.close()
+        stream = null
+        await device.disconnect()
+        device = null
+        // Session.close() on a subscribed session transmits CMD_EXIT without
+        // awaiting a reply — the socket is listening, so a reply could never
+        // be read — but it is still sent: on UDP there is no connection close
+        // to tell the device the session is over, so skipping it would leave
+        // the device holding the session slot. The write is flushed before
+        // the socket closes, but the emulator processes it on its own event
+        // loop, so this polls for it rather than guessing a fixed delay.
+        await pollUntil(() => running!.received.some((p) => p.command === CMD.EXIT))
+        // Give a same-tick unhandled rejection a chance to surface before asserting.
+        await new Promise((r) => setImmediate(r))
+        expect(unhandledRejections).toEqual([])
+        expect(running.socketErrors).toEqual([])
+      } finally {
+        process.off('unhandledRejection', onUnhandledRejection)
+      }
     })
   })
 }

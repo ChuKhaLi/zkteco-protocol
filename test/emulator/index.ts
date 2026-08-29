@@ -85,9 +85,21 @@ export interface Emulator {
  * Abrupt client teardown legitimately produces these; anything else means the
  * emulator itself is unhealthy and must not go unnoticed. Shared by the TCP
  * and UDP error handlers so the ignore list can't drift between them.
+ *
+ * ECONNABORTED belongs here for a specific reason, not as a general widening:
+ * the CMD_EXIT handler below writes its ACK_OK back in the same tick it
+ * decodes the request, and a subscribed session's `Session.close()` sends
+ * EXIT without awaiting a reply (the socket is listening, so a reply would
+ * arrive at the listener, not at a receive()) and then destroys the client
+ * socket. That write-back can lose the race against the destroy, and on
+ * Windows — where this was observed — the loser sees ECONNABORTED rather
+ * than the ECONNRESET/EPIPE this project had already seen for the same kind
+ * of abrupt goodbye elsewhere. It is a platform code for an existing case,
+ * not a new one: do not add further codes here without the same kind of
+ * traced mechanism.
  */
 function isIgnorableSocketError(err: NodeJS.ErrnoException): boolean {
-  return err.code === 'ECONNRESET' || err.code === 'EPIPE'
+  return err.code === 'ECONNRESET' || err.code === 'EPIPE' || err.code === 'ECONNABORTED'
 }
 
 /** Prefixes a body with the 4-byte totalSize header the device sends. */
