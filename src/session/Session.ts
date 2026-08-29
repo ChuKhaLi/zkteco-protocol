@@ -80,9 +80,27 @@ export class Session {
     }
   }
 
+  /**
+   * Sends one command and returns the reply, ACK_ERROR included.
+   *
+   * For call sites where a device refusing the command is a normal answer
+   * rather than a failure — reading a parameter keyword a firmware does not
+   * expose, for instance. The alternative, catching ZkProtocolError around
+   * execute(), would also swallow a genuine protocol error raised anywhere
+   * below and turn it into a "the device said no". That is the defect shape
+   * this project has caught nine times in v0.1 and again in v0.2: code that
+   * reports success while proving less than it appears to.
+   *
+   * Only ACK_ERROR becomes readable here. A timeout, a dropped connection and
+   * a malformed packet all still propagate.
+   */
+  async tryExecute(command: number, data?: Buffer): Promise<DecodedPacket> {
+    return this.send(command, data)
+  }
+
   /** Sends one command and returns the reply. Throws only on ACK_ERROR. */
   async execute(command: number, data?: Buffer): Promise<DecodedPacket> {
-    const res = await this.send(command, data)
+    const res = await this.tryExecute(command, data)
     if (res.command === CMD.ACK_ERROR) {
       throw new ZkProtocolError(`device rejected command ${command}`)
     }

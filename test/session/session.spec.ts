@@ -135,5 +135,34 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       await expect(session.close()).resolves.toBeUndefined()
       session = null
     })
+
+    describe('tryExecute', () => {
+      it('returns an ACK_ERROR reply instead of throwing, while execute still throws', async () => {
+        running = await startEmulator({
+          transport: transportKind,
+          handlers: {
+            [CMD.OPTIONS_RRQ]: (req, state) => [reply(state, req, CMD.ACK_ERROR)],
+          },
+        })
+        session = new Session(makeTransport(running.port), { timeoutMs: 2000 })
+        await session.open()
+
+        const res = await session.tryExecute(CMD.OPTIONS_RRQ, Buffer.from('~OS', 'latin1'))
+        expect(res.command).toBe(CMD.ACK_ERROR)
+
+        await expect(
+          session.execute(CMD.OPTIONS_RRQ, Buffer.from('~OS', 'latin1')),
+        ).rejects.toBeInstanceOf(ZkProtocolError)
+      })
+
+      it('still surfaces a timeout as a timeout, not as a readable reply', async () => {
+        // The whole point of tryExecute is that ONLY ACK_ERROR becomes readable.
+        // Everything else must keep propagating.
+        running = await startEmulator({ transport: transportKind, behavior: 'silent' })
+        session = new Session(makeTransport(running.port), { timeoutMs: 150 })
+        await expect(session.open()).rejects.toBeInstanceOf(ZkTimeoutError)
+        session = null
+      })
+    })
   })
 }
