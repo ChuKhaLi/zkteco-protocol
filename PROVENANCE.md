@@ -312,7 +312,13 @@ for `zkteco-js` — the two libraries expose different method sets, so they were
 identical keywords, which does not bear on the shape question):
 
 - **`zkteco-js`** sends the keyword bare, exactly as the spec assumed: e.g. `~SerialNumber` is 13
-  bytes, no terminator, no NUL anywhere in the payload.
+  bytes, no terminator, no NUL anywhere in the payload — but only on TCP, the only transport on
+  which it reaches `CMD_OPTIONS_RRQ` at all. On UDP it produced **zero** `CMD_OPTIONS_RRQ` packets:
+  its parameter and firmware methods are wired with a TCP callback and no UDP callback (design spec
+  §8.2), so the UDP run never sent one to disagree or agree with anything. `CMD_GET_TIME` is the
+  named exception in §8.2 and is unaffected by this — it has a real UDP implementation, and
+  zkteco-js does reach it on UDP; the TCP-only limitation is specific to the parameter and firmware
+  commands.
 - **`pyzk`** appends exactly one trailing NUL to every keyword, on both TCP and UDP: the same
   request is 14 bytes, `~SerialNumber\0`. This was observed on the wire only — `pyzk`'s source was
   never opened to explain why (see the pyzk boundary above); the fact recorded here is what its

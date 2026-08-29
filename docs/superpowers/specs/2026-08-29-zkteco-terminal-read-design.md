@@ -544,10 +544,13 @@ Appended to §12 of `2026-08-28-zkteco-protocol-library-design.md` as items 15�
 17. **Which parameter keywords does this firmware actually expose?** `DEVICE_PARAM` is an observed
     list, not a contract (§4.3).
 18. Is the keyword payload accepted as a **bare string** — no NUL terminator, no length prefix? The
-    oracles diverged under §8.1: `zkteco-js` sends it bare, `pyzk` appends exactly one trailing NUL
-    on both transports. `encodeParamRequest` implements `pyzk`'s NUL-terminated form as the more
-    likely tolerated default (see `PROVENANCE.md` §4), but neither shape has been confirmed against
-    real hardware — this stays open until one is.
+    oracles diverged under §8.1: `zkteco-js` sends it bare on TCP, the only transport on which it
+    reaches this command at all — on UDP it produced no `CMD_OPTIONS_RRQ` packets whatsoever, since
+    its parameter and firmware methods have no UDP callback (§8.2; `CMD_GET_TIME` is unaffected —
+    zkteco-js does reach the clock command on UDP, that limitation is specific to the other two).
+    `pyzk` appends exactly one trailing NUL on both transports. `encodeParamRequest` implements
+    `pyzk`'s NUL-terminated form as the more likely tolerated default (see `PROVENANCE.md` §4), but
+    neither shape has been confirmed against real hardware — this stays open until one is.
 19. Does the device accept a checksum over an **odd-length payload**? That branch of `checksum16`
     has never had external confirmation, and it already carries `CMD_PREPARE_BUFFER` on the main
     bulk-read path shipped in v0.1 (§5.4). A refusal here would break far more than this scope.
