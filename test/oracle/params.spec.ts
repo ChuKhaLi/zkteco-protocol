@@ -3,6 +3,7 @@ import path from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { CMD } from '../../src/codec/commands.js'
 import { encodeParamRequest } from '../../src/codec/params.js'
+import { classifyChecksum } from '../../tools/oracle/analyze.js'
 
 interface Packet {
   hex: string
@@ -25,6 +26,14 @@ const fixtures = readdirSync(DIR)
 
 describe('CMD_OPTIONS_RRQ request shape', () => {
   it('has fixtures for all four source/transport combinations', () => {
+    // toHaveLength(4) alone would pass on two copies of one combination; the
+    // following assertion is what actually pins "all four", since the next
+    // test in this file indexes fixtures by (source, transport) and would
+    // silently misbehave on a duplicate rather than fail loudly here.
+    const combos = new Set(fixtures.map((f) => `${f.source}/${f.transport}`))
+    expect(combos).toEqual(
+      new Set(['pyzk/tcp', 'pyzk/udp', 'zkteco-js/tcp', 'zkteco-js/udp']),
+    )
     expect(fixtures).toHaveLength(4)
   })
 
@@ -111,5 +120,18 @@ describe('CMD_OPTIONS_RRQ request shape', () => {
       .flatMap((f) => f.packets)
       .filter((p) => Buffer.from(p.hex, 'hex').length % 2 === 1)
     expect(odd.length).toBeGreaterThan(0)
+
+    // The count above only shows the opportunity to pin the branch — an
+    // odd-length packet existing proves nothing about checksum16 unless its
+    // checksum is actually compared against one an oracle transmitted.
+    // classifyChecksum recomputes the checksum this library's own
+    // checksum16 (which contains the branch under test) produces for each
+    // packet's reconstructed payload and reports whether it matches what was
+    // actually sent. 'self' is the only value that pins the branch; anything
+    // else means checksum16 disagrees with the oracle on an odd-length
+    // payload, which is exactly the case this test exists to catch.
+    for (const p of odd) {
+      expect(classifyChecksum(p)).toBe('self')
+    }
   })
 })
