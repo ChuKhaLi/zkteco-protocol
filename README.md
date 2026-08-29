@@ -38,6 +38,36 @@ const logs = await dev.getAttendanceLogs()
 await dev.disconnect()
 ```
 
+### Realtime events
+
+```ts
+const device = new ZkDevice({ host: '192.168.1.201' })
+await device.connect()
+const stream = await device.subscribe()          // attendance events by default
+
+for await (const event of stream) {
+  if (event.kind === 'attendance') console.log(event.userId, event.timestamp.local)
+}
+```
+
+**The stream does not reconnect and does not backfill.** A lost connection
+throws out of the `for await` and the events that occur before you subscribe
+again are gone — the device buffers nothing for a subscriber that went away.
+Realtime is a latency improvement on top of polling, not a replacement for it:
+keep reading the log on a schedule, and let it recover whatever the stream
+missed.
+
+**One device, one mode.** While subscribed, `getInfo()`, `getUsers()` and
+`getAttendanceLogs()` throw. To poll and listen at the same time, construct a
+second `ZkDevice` — which opens a second connection, and the number of
+concurrent connections a terminal accepts has never been verified against
+hardware.
+
+**Some models send no identity.** The larger event payload carries the printed
+user id; the smaller one carries only a device-internal `uid`, which is
+recycled after a user is deleted and is therefore not an identity. `userId` is
+`null` there rather than a guess.
+
 ## Two things worth knowing before you use this
 
 ### Timestamps are naive, and stay that way

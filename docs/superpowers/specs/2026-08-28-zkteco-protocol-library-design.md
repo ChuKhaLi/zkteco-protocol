@@ -607,6 +607,10 @@ Publication to npm is a separate decision, deliberately outside this list.
 
 ## 12. First-hardware checklist
 
+Items 8 onward, and their §-cross-references, come from §12 of the realtime
+design spec (`docs/superpowers/specs/2026-08-28-zkteco-realtime-events-design.md`),
+not from this document.
+
 The target device is a Multi-Bio-class terminal exposing both TCP/IP pull on 4370 and push
 protocols, chosen so a firmware that refuses port 4370 does not require buying a second unit.
 
@@ -626,6 +630,19 @@ When a physical device is first connected, before trusting any reading:
    transport turns that into a failure lasting the connection's life.
 6. Resolve any oracle divergence recorded under §7.3.
 7. Only then add the model to the compatibility table.
+8. Does the device require an acknowledgment for each realtime event? Symptom if it does and we do
+   not send one: exactly one event arrives, then silence (§8.1).
+9. Does a subscription survive an idle period, or does the device drop it? (§9.2)
+10. Does the device accept a second concurrent connection on 4370? This decides whether a consumer
+    can poll and subscribe at the same time (§3.1).
+11. Is the small dialect's `uid` one byte or two? (§5.3)
+12. Is there a way to cancel a subscription without dropping the connection? (§9.5)
+13. Does the device emit event types outside the requested mask, and does it ever interleave a
+    request-response packet into a listening connection? (§9.3)
+
+Also confirm against a real device: that the event type genuinely occupies the session-id slot
+(§5.1), that the large attendance dialect's four undocumented trailing bytes are padding (§5.2),
+and which of the two dialects the model emits.
 
 Until that happens, every line of this library is a hypothesis.
 

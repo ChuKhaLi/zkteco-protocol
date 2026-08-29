@@ -54,6 +54,47 @@ body:
         no personal data beyond a user id, and the byte layout is the whole
         point of the report.
       render: text
+  - type: markdown
+    attributes:
+      value: |
+        ### Realtime events (optional)
+
+        Skip this section if you did not try `ZkDevice.subscribe()`.
+  - type: dropdown
+    id: realtime_events
+    attributes:
+      label: Do realtime events arrive?
+      description: >
+        This library never sends an acknowledgment back for a received event.
+        If a real device expects one, the symptom is the third option below —
+        exactly one event, then nothing more.
+      options:
+        ["did not test", "no events received at all", "exactly one event, then nothing more", "events keep arriving normally"]
+  - type: dropdown
+    id: realtime_payload_length
+    attributes:
+      label: Realtime event payload length
+      description: The byte length of one pushed event's payload. Paste the raw hex below if you have it.
+      options: ["did not test", "10 bytes (small dialect)", "36 bytes (large dialect)", "other length"]
+  - type: dropdown
+    id: realtime_idle
+    attributes:
+      label: Does a subscription survive an hour of idle time?
+      description: Subscribe, then wait an hour with nobody badging, and check whether the stream is still open.
+      options: ["did not test", "yes, still open after an hour", "no, the connection dropped"]
+  - type: dropdown
+    id: second_connection
+    attributes:
+      label: Does the device accept a second simultaneous connection on port 4370?
+      description: Open one connection and, while it is still open, try opening a second one from another client.
+      options:
+        ["did not test", "yes, both connections worked at once", "no, the second connection was refused", "no, opening the second one dropped the first"]
+  - type: textarea
+    id: realtime_raw
+    attributes:
+      label: Raw hex of one realtime event payload
+      description: The `raw` field from any received `ZkRealtimeEvent`, if you have one.
+      render: text
   - type: textarea
     id: notes
     attributes:
