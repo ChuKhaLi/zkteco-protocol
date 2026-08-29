@@ -5,11 +5,15 @@ import { ZkProtocolError } from '../../src/errors.js'
 const body = (s: string): Buffer => Buffer.from(s, 'latin1')
 
 describe('encodeParamRequest', () => {
-  it('sends the keyword bare: no NUL terminator, no length prefix', () => {
+  it('sends the keyword NUL-terminated, with no length prefix', () => {
+    // See the docblock on encodeParamRequest and PROVENANCE.md: the two
+    // oracles disagreed on this (pyzk terminates, zkteco-js does not), and
+    // this is the form chosen from that disagreement, per design spec §8.1.
     const out = encodeParamRequest('~SerialNumber')
-    expect(out).toEqual(Buffer.from('~SerialNumber', 'latin1'))
-    expect(out.length).toBe(13)
-    expect(out.includes(0)).toBe(false)
+    expect(out).toEqual(Buffer.from('~SerialNumber\0', 'latin1'))
+    expect(out.length).toBe(14)
+    expect(out.subarray(0, -1).includes(0)).toBe(false)
+    expect(out.at(-1)).toBe(0)
   })
 
   it('refuses an empty keyword', () => {

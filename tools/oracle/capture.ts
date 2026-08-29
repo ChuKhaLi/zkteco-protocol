@@ -39,6 +39,14 @@ const SECOND_COMM_KEY = 5678
 // change a number that test pins on purpose.
 const REALTIME_DIR = path.join(OUT_DIR, 'realtime')
 
+// Parameter captures live in their own directory, NOT in OUT_DIR, for the
+// same reason as COMMKEY_DIR and REALTIME_DIR: test/oracle/fixtures.spec.ts
+// scans every *.json directly under OUT_DIR and asserts an exact count of
+// discriminating packets for the reply-id adjudication. These fixtures answer
+// a different question and would silently change a number that test pins on
+// purpose.
+const PARAMS_DIR = path.join(OUT_DIR, 'params')
+
 function pythonPath(): string {
   const win = path.join('tools', 'oracle', '.venv', 'Scripts', 'python.exe')
   const posix = path.join('tools', 'oracle', '.venv', 'bin', 'python')
@@ -217,5 +225,57 @@ await capture('pyzk', 'tcp', SECOND_COMM_KEY, EMULATOR_SESSION_ID, 'auth-keydiff
 for (const transport of ['tcp', 'udp'] as const) {
   for (const source of ['pyzk', 'zkteco-js'] as const) {
     await captureRealtime(source, transport)
+  }
+}
+
+/**
+ * Records what an oracle puts on the wire for the terminal read commands.
+ *
+ * The emulator is configured to answer every keyword either driver asks for,
+ * so a driver that reaches the command produces a request packet regardless
+ * of whether it can make sense of the reply. What is being captured is the
+ * REQUEST shape — zkteco-js's reply parser cannot discriminate the reply
+ * layout at all (design spec §8.2).
+ */
+async function captureParams(
+  source: 'pyzk' | 'zkteco-js',
+  transport: 'tcp' | 'udp',
+): Promise<void> {
+  const emulator = await startEmulator({
+    transport,
+    sessionId: EMULATOR_SESSION_ID,
+    params: {
+      '~SerialNumber': 'ORACLE0000001',
+      '~DeviceName': 'ORACLE-MB360',
+      '~Platform': 'ZMM220_TFT',
+      '~OS': 'Linux',
+      '~ZKFPVersion': '10',
+      'MAC': '00:17:61:01:02:03',
+    },
+    firmware: 'Ver 6.60 Jun 10 2019',
+    deviceTimeRaw: 0x2b1f_c4d0,
+  })
+  try {
+    await runOracleScript(
+      source,
+      'tools/oracle/capture_pyzk_params.py',
+      'tools/oracle/capture_zkjs_params.ts',
+      [String(emulator.port), transport],
+    )
+    await writeFixture(
+      emulator,
+      PARAMS_DIR,
+      `params-${transport}-${source}.json`,
+      { source, transport, emulatorSessionId: EMULATOR_SESSION_ID },
+      true,
+    )
+  } finally {
+    await emulator.close()
+  }
+}
+
+for (const transport of ['tcp', 'udp'] as const) {
+  for (const source of ['pyzk', 'zkteco-js'] as const) {
+    await captureParams(source, transport)
   }
 }

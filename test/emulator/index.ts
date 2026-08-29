@@ -280,7 +280,14 @@ const bufferedHandlers: HandlerTable = {
  */
 const terminalHandlers: HandlerTable = {
   [CMD.OPTIONS_RRQ]: (req, state) => {
-    const keyword = req.data.toString('latin1')
+    // Strips a single trailing NUL, if present, before matching. pyzk and
+    // zkteco-js disagree on whether the request carries one — see
+    // encodeParamRequest's docblock and PROVENANCE.md — so this models a
+    // device tolerant of either form (design spec §8.1's "they disagree"
+    // branch) rather than baking in only the shape this library happens to
+    // send.
+    const raw = req.data.toString('latin1')
+    const keyword = raw.endsWith('\0') ? raw.slice(0, -1) : raw
     const params = state.opts.params ?? {}
     if (!Object.hasOwn(params, keyword)) return [reply(state, req, CMD.ACK_ERROR)]
     const echoed = state.opts.paramEchoOverride ?? keyword

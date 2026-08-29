@@ -1,0 +1,71 @@
+{
+  "source": "zkteco-js",
+  "transport": "tcp",
+  "emulatorSessionId": 7982,
+  "packets": [
+    {
+      "hex": "5050827d08000000e80316fc00000100",
+      "command": 1000,
+      "checksum": 64534,
+      "sessionId": 0,
+      "replyId": 1,
+      "data": ""
+    },
+    {
+      "hex": "5050827d150000000b00c1972e1f02007e53657269616c4e756d626572",
+      "command": 11,
+      "checksum": 38849,
+      "sessionId": 7982,
+      "replyId": 2,
+      "data": "7e53657269616c4e756d626572"
+    },
+    {
+      "hex": "5050827d130000000b004b062e1f03007e4465766963654e616d65",
+      "command": 11,
+      "checksum": 1611,
+      "sessionId": 7982,
+      "replyId": 3,
+      "data": "7e4465766963654e616d65"
+    },
+    {
+      "hex": "5050827d110000000b0087552e1f04007e506c6174666f726d",
+      "command": 11,
+      "checksum": 21895,
+      "sessionId": 7982,
+      "replyId": 4,
+      "data": "7e506c6174666f726d"
+    },
+    {
+      "hex": "5050827d0b0000000b00f0902e1f05007e4f53",
+      "command": 11,
+      "checksum": 37104,
+      "sessionId": 7982,
+      "replyId": 5,
+      "data": "7e4f53"
+    },
+    {
+      "hex": "5050827d080000004c047fdc2e1f0600",
+      "command": 1100,
+      "checksum": 56447,
+      "sessionId": 7982,
+      "replyId": 6,
+      "data": ""
+    },
+    {
+      "hex": "5050827d08000000c90001e02e1f0700",
+      "command": 201,
+      "checksum": 57345,
+      "sessionId": 7982,
+      "replyId": 7,
+      "data": ""
+    },
+    {
+      "hex": "5050827d08000000e903e0dc2e1f0800",
+      "command": 1001,
+      "checksum": 56544,
+      "sessionId": 7982,
+      "replyId": 8,
+      "data": ""
+    }
+  ]
+}

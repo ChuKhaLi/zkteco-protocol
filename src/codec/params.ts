@@ -28,11 +28,24 @@ export const DEVICE_PARAM = {
 } as const
 
 /**
- * Encodes a CMD_OPTIONS_RRQ request body: the keyword, bare.
+ * Encodes a CMD_OPTIONS_RRQ request body: the keyword, NUL-terminated.
  *
- * No NUL terminator and no length prefix — that is what both oracles put on
- * the wire. Whether a real device also accepts a NUL-terminated form is item
- * 18 on the first-hardware checklist.
+ * The two oracles DISAGREE on this shape: `zkteco-js` (MIT, read at source
+ * level) sends the keyword bare, with no terminator and no length prefix.
+ * `pyzk` (GPL-2.0, executed as a black box only) appends exactly one
+ * trailing NUL to every keyword it sends — observed on the wire, both
+ * transports, four keywords, in `test/fixtures/oracle/params/`. Design spec
+ * §8.1's second branch governs a disagreement: record both figures (see
+ * PROVENANCE.md), and implement the form a device tolerating either would
+ * accept. The NUL-terminated form is the choice made here, because it is a
+ * strict superset of the bare form for a device that null-terminates its own
+ * copy of a length-delimited payload before comparing it (ordinary, safe C
+ * practice) or that scans a keyword table for a bare-or-NUL-padded match; it
+ * loses only against a device that requires an EXACT byte-length match with
+ * no tolerance for a trailing NUL, which the bare form would instead satisfy.
+ * Neither hypothesis has been confirmed against real hardware — that is item
+ * 18 on the first-hardware checklist, deliberately left open rather than
+ * closed by this capture.
  *
  * RangeError rather than a Zk* class: a malformed keyword is a bad argument
  * from the caller, not anything the device did, and the published error
@@ -45,12 +58,13 @@ export function encodeParamRequest(keyword: string): Buffer {
   if (keyword.includes('=') || keyword.includes('\0')) {
     // A keyword containing '=' would make the echo check in decodeParamReply
     // ambiguous: there would be no way to tell the requested keyword's own
-    // separator from the reply's.
+    // separator from the reply's. A keyword containing NUL is rejected as a
+    // caller error too, since this function appends its own terminator.
     throw new RangeError(
       `parameter keyword must not contain '=' or NUL, got ${JSON.stringify(keyword)}`,
     )
   }
-  return Buffer.from(keyword, 'latin1')
+  return Buffer.from(`${keyword}\0`, 'latin1')
 }
 
 /**

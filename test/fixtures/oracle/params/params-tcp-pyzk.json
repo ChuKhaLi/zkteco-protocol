@@ -1,0 +1,71 @@
+{
+  "source": "pyzk",
+  "transport": "tcp",
+  "emulatorSessionId": 7982,
+  "packets": [
+    {
+      "hex": "5050827d08000000e80317fc00000000",
+      "command": 1000,
+      "checksum": 64535,
+      "sessionId": 0,
+      "replyId": 0,
+      "data": ""
+    },
+    {
+      "hex": "5050827d160000000b00c2972e1f01007e53657269616c4e756d62657200",
+      "command": 11,
+      "checksum": 38850,
+      "sessionId": 7982,
+      "replyId": 1,
+      "data": "7e53657269616c4e756d62657200"
+    },
+    {
+      "hex": "5050827d140000000b004c062e1f02007e4465766963654e616d6500",
+      "command": 11,
+      "checksum": 1612,
+      "sessionId": 7982,
+      "replyId": 2,
+      "data": "7e4465766963654e616d6500"
+    },
+    {
+      "hex": "5050827d120000000b0088552e1f03007e506c6174666f726d00",
+      "command": 11,
+      "checksum": 21896,
+      "sessionId": 7982,
+      "replyId": 3,
+      "data": "7e506c6174666f726d00"
+    },
+    {
+      "hex": "5050827d150000000b00609f2e1f04007e5a4b465056657273696f6e00",
+      "command": 11,
+      "checksum": 40800,
+      "sessionId": 7982,
+      "replyId": 4,
+      "data": "7e5a4b465056657273696f6e00"
+    },
+    {
+      "hex": "5050827d080000004c0480dc2e1f0500",
+      "command": 1100,
+      "checksum": 56448,
+      "sessionId": 7982,
+      "replyId": 5,
+      "data": ""
+    },
+    {
+      "hex": "5050827d08000000c90002e02e1f0600",
+      "command": 201,
+      "checksum": 57346,
+      "sessionId": 7982,
+      "replyId": 6,
+      "data": ""
+    },
+    {
+      "hex": "5050827d08000000e903e1dc2e1f0700",
+      "command": 1001,
+      "checksum": 56545,
+      "sessionId": 7982,
+      "replyId": 7,
+      "data": ""
+    }
+  ]
+}

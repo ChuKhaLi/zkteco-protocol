@@ -298,6 +298,48 @@ here or in `zkteco-js`'s written logic disagrees with the documentation on
 where it goes. That is materially weaker than a byte-level match, and it
 stays on the first-hardware checklist.
 
+### 4. The CMD_OPTIONS_RRQ trailing NUL — genuinely disagreed, decided without hardware confirmation
+
+The design spec fixed a decision rule for this question before any capture was taken (§8.1): does
+`CMD_OPTIONS_RRQ` carry the requested keyword as a bare string — no NUL terminator, no length
+prefix? The spec's own working assumption, `keyword, bare ASCII` in Appendix A.1, was reached by
+reading `zkteco-js` (MIT, permitted) — `pyzk` is GPL-2.0 and could not be consulted the same way, so
+that assumption went untested against it until this capture.
+
+The two oracles disagree. Driven against the emulator over both transports, with four parameter
+keywords each (`~SerialNumber`, `~DeviceName`, `~Platform`, plus `~ZKFPVersion` for `pyzk` or `~OS`
+for `zkteco-js` — the two libraries expose different method sets, so they were not asked for
+identical keywords, which does not bear on the shape question):
+
+- **`zkteco-js`** sends the keyword bare, exactly as the spec assumed: e.g. `~SerialNumber` is 13
+  bytes, no terminator, no NUL anywhere in the payload.
+- **`pyzk`** appends exactly one trailing NUL to every keyword, on both TCP and UDP: the same
+  request is 14 bytes, `~SerialNumber\0`. This was observed on the wire only — `pyzk`'s source was
+  never opened to explain why (see the pyzk boundary above); the fact recorded here is what its
+  black-box execution actually transmits, four times per transport, consistently.
+
+Per §8.1's second branch, the disagreement is not resolved by preferring one oracle's silence over
+the other's evidence, and it is not left unresolved either: `encodeParamRequest`
+(`src/codec/params.ts`) now sends the **NUL-terminated** form. That choice was made, not derived,
+for two reasons: it is a strict superset of the bare form for a device that null-terminates its own
+copy of a length-delimited payload before comparing it — ordinary, safe C practice, under which a
+bare or NUL-terminated request compare identically — and `pyzk` is the more field-tested of the two
+libraries at this specific call (its device-information reads are wired for both transports and are
+not the TCP-only, apparently less-exercised code path `zkteco-js` uses here). Neither reasoning
+amounts to hardware confirmation. A device that requires an exact byte-length match with no
+tolerance for a trailing NUL would reject this library's request and accept `zkteco-js`'s instead;
+that hypothesis is exactly as plausible on the evidence available and is not ruled out.
+
+The test emulator (`test/emulator/index.ts`) was updated in lockstep: its `CMD_OPTIONS_RRQ` handler
+strips a single trailing NUL, if present, before matching a keyword, so it models a device tolerant
+of either shape rather than only the one this library happens to send. `test/oracle/params.spec.ts`
+records both figures directly from the fixtures rather than asserting one uniform shape, which is
+what the brief for this capture explicitly warned against: adjusting the test to fit a belief the
+data had already refuted.
+
+This is item 18 on the first-hardware checklist, and it stays open. The choice made here is a
+default that can be reversed at one call site if the first real device disagrees with it.
+
 ## Inbound checksums are not validated
 
 `decodePayload` (`src/codec/packet.ts`) reads the checksum field into

@@ -1,0 +1,71 @@
+{
+  "source": "pyzk",
+  "transport": "udp",
+  "emulatorSessionId": 7982,
+  "packets": [
+    {
+      "hex": "e80317fc00000000",
+      "command": 1000,
+      "checksum": 64535,
+      "sessionId": 0,
+      "replyId": 0,
+      "data": ""
+    },
+    {
+      "hex": "0b00c2972e1f01007e53657269616c4e756d62657200",
+      "command": 11,
+      "checksum": 38850,
+      "sessionId": 7982,
+      "replyId": 1,
+      "data": "7e53657269616c4e756d62657200"
+    },
+    {
+      "hex": "0b004c062e1f02007e4465766963654e616d6500",
+      "command": 11,
+      "checksum": 1612,
+      "sessionId": 7982,
+      "replyId": 2,
+      "data": "7e4465766963654e616d6500"
+    },
+    {
+      "hex": "0b0088552e1f03007e506c6174666f726d00",
+      "command": 11,
+      "checksum": 21896,
+      "sessionId": 7982,
+      "replyId": 3,
+      "data": "7e506c6174666f726d00"
+    },
+    {
+      "hex": "0b00609f2e1f04007e5a4b465056657273696f6e00",
+      "command": 11,
+      "checksum": 40800,
+      "sessionId": 7982,
+      "replyId": 4,
+      "data": "7e5a4b465056657273696f6e00"
+    },
+    {
+      "hex": "4c0480dc2e1f0500",
+      "command": 1100,
+      "checksum": 56448,
+      "sessionId": 7982,
+      "replyId": 5,
+      "data": ""
+    },
+    {
+      "hex": "c90002e02e1f0600",
+      "command": 201,
+      "checksum": 57346,
+      "sessionId": 7982,
+      "replyId": 6,
+      "data": ""
+    },
+    {
+      "hex": "e903e1dc2e1f0700",
+      "command": 1001,
+      "checksum": 56545,
+      "sessionId": 7982,
+      "replyId": 7,
+      "data": ""
+    }
+  ]
+}
