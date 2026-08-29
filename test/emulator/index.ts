@@ -66,6 +66,10 @@ export interface Emulator {
   readonly state: EmulatorState
   /** Live client sockets. TCP only; empty on UDP. Lets a test write raw bytes. */
   readonly sockets: ReadonlySet<net.Socket>
+  /** Pushes an unsolicited realtime event to the connected client. */
+  pushEvent(eventType: number, data: Buffer): void
+  /** Pushes arbitrary bytes as one packet — for the not-an-event scenario. */
+  pushRaw(payload: Buffer): void
   close(): Promise<void>
 }
 
@@ -94,6 +98,18 @@ export function attendanceBody(records: EmulatorRecords): Buffer {
   const head = Buffer.alloc(4)
   head.writeUInt32LE(records.totalSizeOverride ?? prefixed.length, 0)
   return Buffer.concat([head, prefixed])
+}
+
+/**
+ * Builds one unsolicited realtime event.
+ *
+ * NOTE: this uses the LIBRARY'S OWN encoder, so a test that only round-trips
+ * through the emulator proves the plumbing, not the layout. What makes the
+ * event-type-in-the-session-id-slot claim evidence is an independent
+ * implementation decoding these bytes — see test/oracle/realtime.spec.ts.
+ */
+export function eventPacket(eventType: number, data: Buffer): Buffer {
+  return encodePayload({ command: CMD.REG_EVENT, sessionId: eventType, replyId: 0, data })
 }
 
 /** Builds one reply payload echoing the request's reply id. */
@@ -304,6 +320,10 @@ export async function startEmulator(opts: EmulatorOptions): Promise<Emulator> {
     const port = (server.address() as net.AddressInfo).port
     return {
       port, transport: 'tcp', received, receivedRaw, socketErrors, state, sockets,
+      pushRaw: (payload) => { for (const s of sockets) s.write(frameTcp(payload)) },
+      pushEvent: (eventType, data) => {
+        for (const s of sockets) s.write(frameTcp(eventPacket(eventType, data)))
+      },
       close: () => new Promise<void>((resolve) => {
         for (const s of sockets) s.destroy()
         server.close(() => resolve())
@@ -320,7 +340,9 @@ export async function startEmulator(opts: EmulatorOptions): Promise<Emulator> {
     if (isIgnorableSocketError(err as NodeJS.ErrnoException)) return
     socketErrors.push(err)
   })
+  let lastClient: { port: number; address: string } | null = null
   sock.on('message', (msg, rinfo) => {
+    lastClient = { port: rinfo.port, address: rinfo.address }
     const out = respond(Buffer.from(msg), Buffer.from(msg))
     if (out) for (const p of out) sock.send(p, rinfo.port, rinfo.address)
   })
@@ -328,6 +350,12 @@ export async function startEmulator(opts: EmulatorOptions): Promise<Emulator> {
   const port = sock.address().port
   return {
     port, transport: 'udp', received, receivedRaw, socketErrors, state, sockets: new Set<net.Socket>(),
+    pushRaw: (payload) => {
+      if (lastClient) sock.send(payload, lastClient.port, lastClient.address)
+    },
+    pushEvent: (eventType, data) => {
+      if (lastClient) sock.send(eventPacket(eventType, data), lastClient.port, lastClient.address)
+    },
     close: () => new Promise<void>((resolve) => { sock.close(() => resolve()) }),
   }
 }

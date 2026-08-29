@@ -15,6 +15,8 @@ export class UdpTransport implements Transport {
   private socket: dgram.Socket | null = null
   private queue: Buffer[] = []
   private waiter: ((payload: Buffer) => void) | null = null
+  private listener: ((payload: Buffer) => void) | null = null
+  private listenerError: ((err: Error) => void) | null = null
 
   constructor(private readonly opts: TransportOptions) {}
 
@@ -27,6 +29,8 @@ export class UdpTransport implements Transport {
       })
       sock.on('message', (msg) => {
         const payload = Buffer.from(msg)
+        const listener = this.listener
+        if (listener) { listener(payload); return }
         const waiter = this.waiter
         if (waiter) { this.waiter = null; waiter(payload) } else { this.queue.push(payload) }
       })
@@ -45,6 +49,11 @@ export class UdpTransport implements Transport {
   }
 
   receive(timeoutMs: number): Promise<Buffer> {
+    if (this.listener) {
+      return Promise.reject(
+        new ZkConnectionError('this transport is listening for events; receive() is not available'),
+      )
+    }
     if (this.waiter) {
       return Promise.reject(
         new ZkConnectionError(
@@ -61,6 +70,24 @@ export class UdpTransport implements Transport {
       }, timeoutMs)
       this.waiter = (payload) => { clearTimeout(timer); resolve(payload) }
     })
+  }
+
+  listen(onPacket: (payload: Buffer) => void, onError: (err: Error) => void): void {
+    if (this.listener) {
+      throw new ZkConnectionError('this transport is already listening')
+    }
+    if (this.waiter) {
+      throw new ZkConnectionError('cannot listen while a receive() is pending')
+    }
+    this.listener = onPacket
+    // Retained for symmetry with TCP and for a future datagram error path.
+    // UDP has no connection to lose, so nothing calls it today: a dead device
+    // is indistinguishable from a quiet one here, which is what
+    // SubscribeOptions.idleTimeoutMs exists for.
+    this.listenerError = onError
+    const queued = this.queue
+    this.queue = []
+    for (const payload of queued) onPacket(payload)
   }
 
   close(): Promise<void> {
