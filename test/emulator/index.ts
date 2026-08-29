@@ -35,6 +35,30 @@ export interface EmulatorOptions {
    */
   bufferChunkOverride?: { atCall: number; bytes: number }
   handlers?: Partial<HandlerTable>
+  /**
+   * Device parameters, keyed by keyword. A keyword NOT present here is
+   * answered with ACK_ERROR — which is how a firmware that does not expose a
+   * parameter is modelled. Whether real devices refuse or answer with an
+   * empty value is checklist item 16; configure `'~OS': ''` to model the
+   * other branch.
+   */
+  params?: Record<string, string>
+  /** Firmware string for CMD_GET_VERSION. Absent or null answers ACK_ERROR. */
+  firmware?: string | null
+  /**
+   * The packed uint32 CMD_GET_TIME answers with, supplied directly.
+   *
+   * Deliberately raw: this library has no time ENCODER and does not need one,
+   * so a test pins a fixed packed value against fixed decoded fields rather
+   * than round-tripping through code under test. Absent answers ACK_ERROR.
+   */
+  deviceTimeRaw?: number
+  /**
+   * Makes a CMD_OPTIONS_RRQ reply echo THIS keyword instead of the one that
+   * was requested — a device answering the wrong question. Exists so the
+   * echo guard in src/codec/params.ts has something to catch.
+   */
+  paramEchoOverride?: string
   info?: { userCount: number; recordCount: number; recordCapacity: number }
   /**
    * Events written in the SAME handler return as the registration ack, so
@@ -243,6 +267,42 @@ const bufferedHandlers: HandlerTable = {
   },
 }
 
+/**
+ * Terminal read commands.
+ *
+ * NOTE: these format their replies using THIS LIBRARY'S OWN convention for
+ * `keyword=value` — a NUL-terminated latin1 string. So a test that only
+ * round-trips through the emulator proves the request/response plumbing, NOT
+ * that a real device formats its replies this way. What makes the request
+ * shape evidence is an independent implementation sending the same bytes; see
+ * test/oracle/params.spec.ts. The reply layout has no such backing at all,
+ * because zkteco-js's parser cannot discriminate it (design spec §8.2).
+ */
+const terminalHandlers: HandlerTable = {
+  [CMD.OPTIONS_RRQ]: (req, state) => {
+    const keyword = req.data.toString('latin1')
+    const params = state.opts.params ?? {}
+    if (!Object.hasOwn(params, keyword)) return [reply(state, req, CMD.ACK_ERROR)]
+    const echoed = state.opts.paramEchoOverride ?? keyword
+    const body = Buffer.from(`${echoed}=${params[keyword]}\0`, 'latin1')
+    return [reply(state, req, CMD.ACK_OK, body)]
+  },
+  [CMD.GET_VERSION]: (req, state) => {
+    const firmware = state.opts.firmware
+    if (firmware === undefined || firmware === null) {
+      return [reply(state, req, CMD.ACK_ERROR)]
+    }
+    return [reply(state, req, CMD.ACK_OK, Buffer.from(firmware, 'latin1'))]
+  },
+  [CMD.GET_TIME]: (req, state) => {
+    const raw = state.opts.deviceTimeRaw
+    if (raw === undefined) return [reply(state, req, CMD.ACK_ERROR)]
+    const body = Buffer.alloc(4)
+    body.writeUInt32LE(raw >>> 0, 0)
+    return [reply(state, req, CMD.ACK_OK, body)]
+  },
+}
+
 // CMD.AUTH here validates the mixed key using this library's OWN mixCommKey
 // (Task 5). That makes this handler and the tests it backs proof of the
 // authentication FLOW — challenge, mixed reply, ACK — not of whether
@@ -250,6 +310,7 @@ const bufferedHandlers: HandlerTable = {
 // is pinned separately by the oracle fixtures in test/oracle/commkey.spec.ts.
 const baseHandlers: HandlerTable = {
   ...bufferedHandlers,
+  ...terminalHandlers,
   [CMD.CONNECT]: (req, state) => {
     // A CONNECT begins a fresh session, so it must not inherit whatever a
     // PREVIOUS connection to this same emulator instance settled: without

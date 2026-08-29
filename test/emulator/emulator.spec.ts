@@ -6,6 +6,7 @@ import { CMD } from '../../src/codec/commands.js'
 import { decodePayload, encodePayload } from '../../src/codec/packet.js'
 import { frameTcp, tryUnframeTcp } from '../../src/codec/framing.js'
 import { TcpTransport } from '../../src/transport/tcp.js'
+import { Session } from '../../src/session/Session.js'
 
 let running: Emulator | null = null
 afterEach(async () => { await running?.close(); running = null })
@@ -132,5 +133,72 @@ describe('emulator', () => {
     // The event arrived too, and is waiting.
     expect(decodePayload(await transport.receive(2000)).command).toBe(CMD.REG_EVENT)
     await transport.close()
+  })
+})
+
+// TCP only. The emulator has one handler table shared by both dispatch
+// paths — respond() is the common code the TCP and UDP branches both call
+// into — so exercising a handler over TCP exercises the same code UDP would
+// reach too. test/commands/device.spec.ts drives these same handlers over
+// both transports once the client-facing terminal-read commands exist.
+describe('terminal read handlers', () => {
+  it('answers a configured keyword and refuses an unconfigured one', async () => {
+    running = await startEmulator({
+      transport: 'tcp',
+      params: { '~OS': 'Linux' },
+    })
+    const session = new Session(new TcpTransport({ host: '127.0.0.1', port: running.port }), {
+      timeoutMs: 2000,
+    })
+    await session.open()
+    try {
+      const ok = await session.tryExecute(CMD.OPTIONS_RRQ, Buffer.from('~OS', 'latin1'))
+      expect(ok.command).toBe(CMD.ACK_OK)
+      expect(ok.data.toString('latin1').replace(/\0+$/, '')).toBe('~OS=Linux')
+
+      const refused = await session.tryExecute(CMD.OPTIONS_RRQ, Buffer.from('~SSR', 'latin1'))
+      expect(refused.command).toBe(CMD.ACK_ERROR)
+    } finally {
+      await session.close()
+    }
+  })
+
+  it('echoes a different keyword when paramEchoOverride is set', async () => {
+    running = await startEmulator({
+      transport: 'tcp',
+      params: { '~DeviceName': 'Gate' },
+      paramEchoOverride: '~Platform',
+    })
+    const session = new Session(new TcpTransport({ host: '127.0.0.1', port: running.port }), {
+      timeoutMs: 2000,
+    })
+    await session.open()
+    try {
+      const res = await session.tryExecute(CMD.OPTIONS_RRQ, Buffer.from('~DeviceName', 'latin1'))
+      expect(res.data.toString('latin1').replace(/\0+$/, '')).toBe('~Platform=Gate')
+    } finally {
+      await session.close()
+    }
+  })
+
+  it('serves firmware and the clock, and refuses both when unconfigured', async () => {
+    running = await startEmulator({
+      transport: 'tcp',
+      firmware: 'Ver 6.60 Jun 10 2019',
+      deviceTimeRaw: 0x2b1f_c4d0,
+    })
+    const session = new Session(new TcpTransport({ host: '127.0.0.1', port: running.port }), {
+      timeoutMs: 2000,
+    })
+    await session.open()
+    try {
+      const fw = await session.tryExecute(CMD.GET_VERSION)
+      expect(fw.data.toString('latin1')).toBe('Ver 6.60 Jun 10 2019')
+
+      const clock = await session.tryExecute(CMD.GET_TIME)
+      expect(clock.data.readUInt32LE(0)).toBe(0x2b1f_c4d0)
+    } finally {
+      await session.close()
+    }
   })
 })
