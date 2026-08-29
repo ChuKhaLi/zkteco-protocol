@@ -669,6 +669,13 @@ and which of the two dialects the model emits.
     `pyzk` appends exactly one trailing NUL on both transports. `encodeParamRequest` implements
     `pyzk`'s NUL-terminated form as the more likely tolerated default (see `PROVENANCE.md` §4), but
     neither shape has been confirmed against real hardware — this stays open until one is.
+    **If this default is wrong, it does not fail loudly.** `CMD_GET_VERSION` carries an empty
+    payload and is untouched by this decision, so a device that rejects the wrong shape presents as
+    four `ACK_ERROR` refusals on the parameter reads plus a real `firmwareVersion` from
+    `getIdentity()` — a plausible, reportable device profile, not an obvious malfunction. That is
+    indistinguishable from the answer item 16 exists to collect, so a report of "this firmware
+    exposes its version but no parameters" must not be logged as an item-16 answer without first
+    ruling out a request-shape mismatch here.
 19. Does the device accept a checksum over an **odd-length payload**? That branch of `checksum16`
     has never had external confirmation, and it already carries `CMD_PREPARE_BUFFER` on the main
     bulk-read path shipped in v0.1 (§5.4). A refusal here would break far more than this scope.
@@ -678,6 +685,18 @@ and which of the two dialects the model emits.
 21. Does `CMD_GET_TIME` return the packed uint32 at payload offset 0, and **how far does the device
     clock drift** from the collecting server? Drift is the most likely explanation for attendance
     timestamps a user reports as wrong.
+22. Does a terminal ever answer **after** this library's per-request deadline has already expired,
+    and if a caller retries on `ZkTimeoutError`, does that retry's `receive()` collect the late
+    reply to the *previous* request instead of the new one? `TcpTransport.receive` clears its
+    waiter on timeout rather than discarding a reply that arrives after, so a late packet queues
+    and the next `receive()` on that session collects it as its own. `getIdentity()` makes five
+    requests where `getInfo()` makes one, so a caller that retries after a timeout has roughly five
+    times the exposure to this than it did before this scope. On the parameter path the echo guard
+    (§5.1) makes a stale reply loud; `readFirmware()` and `getTime()` have no equivalent guard, and
+    `getTime()` is the sharpest case, since `decodeZkTime` turns any four bytes into a
+    plausible-looking date with nothing to contradict it. This is v0.1 transport architecture, not
+    something this scope introduced, and no code change is proposed here — record what a real
+    device does before deciding whether one is warranted.
 
 Until that happens, every line of this library is a hypothesis.
 
