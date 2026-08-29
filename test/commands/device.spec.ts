@@ -77,6 +77,13 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       await expect(getParameters(session, ['~DeviceName'])).rejects.toBeInstanceOf(ZkProtocolError)
     })
 
+    it('reports a refused prototype-named key as absent, not inherited', async () => {
+      running = await startEmulator({ transport: transportKind, params: PARAMS })
+      session = await connect(running.port)
+      const out = await getParameters(session, ['toString'])
+      expect('toString' in out).toBe(false)
+    })
+
     it('propagates a timeout instead of omitting the key', async () => {
       // The defect this guards: a getParameters that treated every failure as
       // "the device does not have this" would return {} here, and {} is also
