@@ -76,3 +76,25 @@ describe('parseUserData', () => {
     expect(() => parseUserData(data.subarray(0, 20))).toThrow(ZkFramingError)
   })
 })
+
+describe('non-ASCII names', () => {
+  it('preserves bytes above 0x7f instead of stripping the high bit', () => {
+    // A 72-byte user record whose name field (bytes 11..34) holds bytes that
+    // are not valid ASCII. Node's 'ascii' decoder masks them to & 0x7f, which
+    // silently returns a different, plausible-looking name with no way back
+    // to what the device actually sent.
+    const rec = Buffer.alloc(USER_RECORD_SIZE)
+    rec.writeUInt16LE(7, 0)
+    const nameBytes = Buffer.from([0xc3, 0x94, 0xc3, 0xa9, 0xd0, 0x96])
+    nameBytes.copy(rec, 11)
+    rec.write('1001', 48, 'latin1')
+
+    const body = Buffer.alloc(4 + USER_RECORD_SIZE)
+    body.writeUInt32LE(USER_RECORD_SIZE, 0)
+    rec.copy(body, 4)
+
+    const [user] = parseUserData(body)
+    expect(user).toBeDefined()
+    expect(Buffer.from(user!.name, 'latin1')).toEqual(nameBytes)
+  })
+})
