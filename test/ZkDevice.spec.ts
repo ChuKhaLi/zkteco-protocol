@@ -82,6 +82,44 @@ for (const transport of ['tcp', 'udp'] as const) {
       await expect(device.getInfo()).rejects.toBeInstanceOf(ZkConnectionError)
       device = null
     })
+
+    describe('read commands while subscribed', () => {
+      // The guard must be identified by ITS OWN message. Asserting only
+      // ZkConnectionError would pass with the guard deleted, because the
+      // transport throws the same class one layer down once it is listening.
+      const SUBSCRIBED = /subscribed to realtime events/
+
+      it('refuses getIdentity, getParameters and getTime with the guard\'s own message', async () => {
+        running = await startEmulator({ transport, params: { '~OS': 'Linux' } })
+        device = new ZkDevice({ host: '127.0.0.1', port: running.port, transport })
+        await device.connect()
+        const stream = await device.subscribe()
+        try {
+          await expect(device.getIdentity()).rejects.toThrow(SUBSCRIBED)
+          await expect(device.getParameters(['~OS'])).rejects.toThrow(SUBSCRIBED)
+          await expect(device.getTime()).rejects.toThrow(SUBSCRIBED)
+        } finally {
+          await stream.close()
+        }
+      })
+
+      it('answers all three once the stream is closed and the device reconnects', async () => {
+        running = await startEmulator({
+          transport,
+          params: { '~SerialNumber': 'OAJ7194600263' },
+          firmware: 'Ver 6.60',
+          deviceTimeRaw: 0x2b1f_c4d0,
+        })
+        device = new ZkDevice({ host: '127.0.0.1', port: running.port, transport })
+        await device.connect()
+        const stream = await device.subscribe()
+        await stream.close()
+        await device.connect()
+        expect((await device.getIdentity()).serialNumber).toBe('OAJ7194600263')
+        expect(await device.getParameters(['~SerialNumber'])).toHaveProperty('~SerialNumber')
+        expect((await device.getTime()).year).toBeTypeOf('number')
+      })
+    })
   })
 }
 

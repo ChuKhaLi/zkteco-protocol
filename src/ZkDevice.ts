@@ -1,4 +1,5 @@
 import { getAttendanceLogs, type GetAttendanceOptions } from './commands/attendance.js'
+import { getIdentity, getParameters, getTime } from './commands/device.js'
 import { getInfo } from './commands/info.js'
 import { getUsers } from './commands/users.js'
 import { EVENT_FLAG } from './codec/events.js'
@@ -8,7 +9,7 @@ import { Session } from './session/Session.js'
 import { TcpTransport } from './transport/tcp.js'
 import { UdpTransport } from './transport/udp.js'
 import type { Transport } from './transport/Transport.js'
-import type { ZkAttendanceLog, ZkDeviceInfo, ZkUser } from './types.js'
+import type { ZkAttendanceLog, ZkDeviceInfo, ZkDeviceIdentity, ZkNaiveTime, ZkUser } from './types.js'
 
 export interface ZkDeviceOptions {
   host: string
@@ -97,6 +98,43 @@ export class ZkDevice {
 
   async getInfo(): Promise<ZkDeviceInfo> {
     return getInfo(this.requireIdleSession())
+  }
+
+  /**
+   * Reads what the device says about itself: serial number, name, platform,
+   * OS and firmware version.
+   *
+   * Five sequential round trips. A field is `null` when the device REFUSED
+   * that keyword — never when the read failed, which throws instead. Which
+   * keywords a given firmware exposes is model-dependent and unverified.
+   *
+   * Named getIdentity rather than getDeviceInfo because ZkDeviceInfo already
+   * means the storage counters that getInfo() returns.
+   */
+  async getIdentity(): Promise<ZkDeviceIdentity> {
+    return getIdentity(this.requireIdleSession())
+  }
+
+  /**
+   * Reads named device parameters.
+   *
+   * A key the device refused is absent from the result; a key it answered
+   * with no value is present as ''. Use DEVICE_PARAM for the keywords that
+   * have been observed, or pass any string.
+   */
+  async getParameters(keys: readonly string[]): Promise<Record<string, string>> {
+    return getParameters(this.requireIdleSession(), keys)
+  }
+
+  /**
+   * Reads the device's own clock, as naive local time with no offset.
+   *
+   * Useful mainly for detecting drift: a device whose clock has slipped
+   * produces attendance timestamps that look wrong for no visible reason.
+   * Setting the clock is a write path and is deliberately not implemented.
+   */
+  async getTime(): Promise<ZkNaiveTime> {
+    return getTime(this.requireIdleSession())
   }
 
   async getUsers(): Promise<ZkUser[]> {
