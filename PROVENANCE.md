@@ -215,10 +215,12 @@ checklist.
 The `CMD_REG_EVENT` request payload being a 4-byte little-endian mask is
 **byte-level** evidence: `zkteco-js`'s captured bytes (`01000000`) are a
 direct comparison against this library's own encoding, no device involved.
-The acknowledgment finding above rests on which packets were or were not
-observed on the wire, not on decoding anything — but read it together with
-the weak-corroboration note further down, which is the part of this record
-that says how much those absent packets are actually worth.
+The acknowledgment finding above does **not** rest on the capture, and an
+earlier version of this sentence said it did. It rests on the source
+reading: `zkteco-js` has no acknowledgment code path on either transport.
+The captured silence is weak corroboration only, for the reason the note
+further down gives — the oracle's own gates never recognised the pushed
+events, so it most likely never saw one it could have acknowledged.
 
 **The event-type-in-the-session-id-slot claim (`readEventType`,
 `src/codec/events.ts`) is weaker than both: it is behavioural, not a byte
