@@ -22,7 +22,11 @@
 - **An identity is never fabricated.** `userId` is `null` unless the device sent a printable one. An empty string is not an identity (spec §4.4, §5.2).
 - **Parse nothing that cannot be validated.** An unrecognised payload becomes `{ kind: 'unknown', ... }` with intact `raw` — never a partial decode (spec §4.3).
 - **`pyzk` source is never read, opened, searched, translated, or paraphrased.** It is executed as a black box through its public API only (v0.1 spec §8). `zkteco-js` is MIT and may be read.
-- **Every test runs over both transports** unless the scenario is genuinely transport-specific, in which case skip it explicitly with a stated reason (v0.1 convention). This plan adds exactly one such skip, in Task 10.
+- **Every test runs over both transports** unless the scenario is genuinely transport-specific, in which case skip it explicitly with a stated reason (v0.1 convention). This plan adds **two**
+  such skips: Task 10 scenario 6, and — per controller RULING R3 during execution — Task 7's
+  pushWithAck scenario, which cannot be made deterministic over UDP because the ack and the
+  events are independent datagrams. See that test's comment for what still covers the UDP
+  drain path.
 - **The break-it discipline (spec §7.3):** for every regression test, temporarily break the code it guards, confirm the test goes red, and confirm it goes red on the *intended* assertion rather than collaterally. Restore the code. State in the commit message that this was done. This plan writes that step out explicitly; do not skip it.
 - **Public export surface grows by exactly four names and one method** (spec §4). Nothing else in `src/index.ts`.
 - **Do not run `npm publish`.** Publication remains a separate decision.
