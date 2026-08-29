@@ -5,6 +5,7 @@ import { startEmulator, type Emulator } from './index.js'
 import { CMD } from '../../src/codec/commands.js'
 import { decodePayload, encodePayload } from '../../src/codec/packet.js'
 import { frameTcp, tryUnframeTcp } from '../../src/codec/framing.js'
+import { TcpTransport } from '../../src/transport/tcp.js'
 
 let running: Emulator | null = null
 afterEach(async () => { await running?.close(); running = null })
@@ -93,5 +94,43 @@ describe('emulator', () => {
   it('binds an ephemeral port and reports it', async () => {
     running = await startEmulator({ transport: 'tcp' })
     expect(running.port).toBeGreaterThan(0)
+  })
+
+  it('acknowledges a subscription and records the mask it was given', async () => {
+    running = await startEmulator({ transport: 'tcp' })
+    const transport = new TcpTransport({ host: '127.0.0.1', port: running.port })
+    await transport.connect()
+    await transport.send(
+      encodePayload({
+        command: CMD.REG_EVENT,
+        sessionId: 1,
+        replyId: 0,
+        data: Buffer.from([0x01, 0x00, 0x00, 0x00]),
+      }),
+    )
+    const reply = decodePayload(await transport.receive(2000))
+    expect(reply.command).toBe(CMD.ACK_OK)
+    expect(running.state.eventMask).toBe(1)
+    await transport.close()
+  })
+
+  // The registration ack and the events are written in one tick, so the
+  // client's absorb() consumes the ack with its pending waiter and finds no
+  // waiter for the events, which land in the queue. That is the queued-packet
+  // race the listen() drain exists for, made deterministic.
+  it('can push events in the same write as the registration ack', async () => {
+    running = await startEmulator({
+      transport: 'tcp',
+      pushWithAck: [{ eventType: 1, data: Buffer.from([0x01]) }],
+    })
+    const transport = new TcpTransport({ host: '127.0.0.1', port: running.port })
+    await transport.connect()
+    await transport.send(
+      encodePayload({ command: CMD.REG_EVENT, sessionId: 1, replyId: 0, data: Buffer.alloc(4) }),
+    )
+    expect(decodePayload(await transport.receive(2000)).command).toBe(CMD.ACK_OK)
+    // The event arrived too, and is waiting.
+    expect(decodePayload(await transport.receive(2000)).command).toBe(CMD.REG_EVENT)
+    await transport.close()
   })
 })

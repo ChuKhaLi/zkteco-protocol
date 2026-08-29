@@ -36,6 +36,12 @@ export interface EmulatorOptions {
   bufferChunkOverride?: { atCall: number; bytes: number }
   handlers?: Partial<HandlerTable>
   info?: { userCount: number; recordCount: number; recordCapacity: number }
+  /**
+   * Events written in the SAME handler return as the registration ack, so
+   * they land while the client still has no listener attached. Deterministic:
+   * the ack consumes the pending waiter, the events find none and queue.
+   */
+  pushWithAck?: Array<{ eventType: number; data: Buffer }>
 }
 
 export interface EmulatorState {
@@ -52,6 +58,8 @@ export interface EmulatorState {
   dropConnection: boolean
   opts: EmulatorOptions
   info: { userCount: number; recordCount: number; recordCapacity: number }
+  /** The mask the client last registered with, or null if it never did. */
+  eventMask: number | null
 }
 
 export type Handler = (req: DecodedPacket, state: EmulatorState) => Buffer[] | null
@@ -247,6 +255,12 @@ const baseHandlers: HandlerTable = {
   [CMD.USERTEMP_RRQ]: (req, state) =>
     serveDataLegacy(state, req, withSizeHeader(Buffer.concat(state.users.map((u) => Buffer.from(u.raw, 'hex'))))),
   [CMD.FREE_DATA]: (req, state) => [reply(state, req, CMD.ACK_OK)],
+  [CMD.REG_EVENT]: (req, state) => {
+    state.eventMask = req.data.length >= 4 ? req.data.readUInt32LE(0) : 0
+    const ack = reply(state, req, CMD.ACK_OK)
+    const pushes = state.opts.pushWithAck ?? []
+    return [ack, ...pushes.map((p) => eventPacket(p.eventType, p.data))]
+  },
 }
 
 function buildState(opts: EmulatorOptions): EmulatorState {
@@ -262,6 +276,7 @@ function buildState(opts: EmulatorOptions): EmulatorState {
     dropConnection: false,
     opts,
     info: opts.info ?? { userCount: 0, recordCount: 0, recordCapacity: 0 },
+    eventMask: null,
   }
 }
 
