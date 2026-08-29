@@ -1,6 +1,7 @@
 import { CMD } from '../codec/commands.js'
 import { decodePayload, encodePayload, type DecodedPacket } from '../codec/packet.js'
 import { mixCommKey } from '../codec/commkey.js'
+import { encodeEventMask } from '../codec/events.js'
 import { ZkAuthError, ZkProtocolError } from '../errors.js'
 import type { Transport } from '../transport/Transport.js'
 
@@ -18,6 +19,7 @@ export class Session {
   private currentSessionId = 0
   private replyId = 0
   private open_ = false
+  private subscribed_ = false
 
   constructor(
     private readonly transport: Transport,
@@ -26,6 +28,11 @@ export class Session {
 
   get sessionId(): number {
     return this.currentSessionId
+  }
+
+  /** True once this session has switched its transport to listening. */
+  get subscribed(): boolean {
+    return this.subscribed_
   }
 
   /**
@@ -83,6 +90,49 @@ export class Session {
   }
 
   /**
+   * Registers for realtime events and switches the transport to listening.
+   *
+   * The registration itself is an ordinary request-response exchange, which
+   * is why it runs before the mode flip and over the same socket. A refused
+   * registration throws and leaves the session in request mode: firmware
+   * without realtime support costs one call, not the connection.
+   */
+  async subscribe(
+    mask: number,
+    onPacket: (pkt: DecodedPacket) => void,
+    onError: (err: Error) => void,
+  ): Promise<void> {
+    const res = await this.send(CMD.REG_EVENT, encodeEventMask(mask))
+    if (res.command !== CMD.ACK_OK) {
+      throw new ZkProtocolError(
+        `device refused a realtime subscription with command ${res.command}`,
+      )
+    }
+    this.subscribed_ = true
+    this.transport.listen((payload) => {
+      // A malformed push must reach the subscription as an error rather than
+      // throw inside a socket data handler, where nothing would catch it.
+      try {
+        onPacket(decodePayload(payload))
+      } catch (err) {
+        onError(err as Error)
+      }
+    }, onError)
+  }
+
+  /** Encodes and transmits one request without awaiting a reply. */
+  private async transmit(
+    command: number,
+    data?: Buffer,
+    override?: { sessionId: number },
+  ): Promise<void> {
+    const sessionId = override?.sessionId ?? this.currentSessionId
+    const payload = encodePayload({ command, sessionId, replyId: this.replyId, data })
+    this.replyId = (this.replyId + 1) & 0xffff
+    await this.transport.send(payload)
+  }
+
+  /**
    * Encodes and transmits one request, then awaits its reply.
    *
    * Transmits the packet exactly as encoded: no reply-id quirk. The spec
@@ -100,10 +150,7 @@ export class Session {
     data?: Buffer,
     override?: { sessionId: number },
   ): Promise<DecodedPacket> {
-    const sessionId = override?.sessionId ?? this.currentSessionId
-    const payload = encodePayload({ command, sessionId, replyId: this.replyId, data })
-    this.replyId = (this.replyId + 1) & 0xffff
-    await this.transport.send(payload)
+    await this.transmit(command, data, override)
     return decodePayload(await this.transport.receive(this.opts.timeoutMs))
   }
 
@@ -115,6 +162,16 @@ export class Session {
   async close(): Promise<void> {
     if (!this.open_) return
     this.open_ = false
+    if (this.subscribed_) {
+      // The socket is listening, so a reply could never be read — the goodbye
+      // is sent without awaiting one. It is still sent: on UDP there is no
+      // connection close to tell the device the session is over, so skipping
+      // it would leave the device holding the session slot.
+      await this.transmit(CMD.EXIT).catch(() => {})
+      this.subscribed_ = false
+      await this.transport.close()
+      return
+    }
     try {
       await this.send(CMD.EXIT)
     } catch {
