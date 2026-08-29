@@ -121,8 +121,18 @@ export type ZkRealtimeEvent =
  * Every field is `string | null`, and `null` means exactly one thing: THE
  * DEVICE ANSWERED AND SAID NO — it refused that keyword with ACK_ERROR. It
  * never means the read was not attempted, and it never means the connection
- * failed; a timeout, a dropped socket or a malformed reply all throw out of
- * getIdentity() instead.
+ * failed; a timeout, a dropped socket, a malformed reply, or an ACK_UNAUTH
+ * reply all throw out of getIdentity() instead — ACK_UNAUTH is the one
+ * non-acknowledgment reply this library can recognise, and it is never
+ * accepted as an answer.
+ *
+ * That is the guarantee this library can make; it is not a claim that
+ * ACK_OK is the only successful acknowledgment a real device sends. Any
+ * reply command other than ACK_ERROR and ACK_UNAUTH is currently accepted
+ * and decoded as the answer — see getParameters() and readFirmware() in
+ * src/commands/device.ts. Whether real firmware ever acknowledges these
+ * reads with something other than ACK_OK is unconfirmed and unconstrained
+ * on purpose.
  *
  * An empty string is a different answer from null: the device supplied the
  * key with no value. Which of the two a firmware uses for a parameter it does

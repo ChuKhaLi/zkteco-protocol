@@ -22,6 +22,19 @@ import type { ZkDeviceIdentity, ZkNaiveTime } from '../types.js'
  * turned five failures into five absences would be indistinguishable from a
  * device that exposes nothing.
  *
+ * ACK_UNAUTH is treated as ZkProtocolError, not as a refusal or a value.
+ * tryExecute() only throws on ACK_ERROR, so without this check any other
+ * reply command — including ACK_UNAUTH — would reach decodeParamReply() and
+ * either be parsed as a plausible value or (with an empty body) mistaken for
+ * an empty-value answer. ACK_UNAUTH is singled out, and only it: it is the
+ * one non-acknowledgment code this codebase already assigns a meaning to
+ * (Session.open handles it during the comm-key handshake), so it cannot be a
+ * genuine parameter reply under any reading. Tightening this further to
+ * "only ACK_OK counts as success" is deliberately NOT done — nothing
+ * confirms real firmware acknowledges CMD_OPTIONS_RRQ with ACK_OK rather
+ * than, say, ACK_DATA, and inventing that constraint would be exactly the
+ * kind of unevidenced hypothesis this project avoids.
+ *
  * Strictly sequential. The transport rejects a second receive() while one is
  * already in flight.
  */
@@ -39,6 +52,9 @@ export async function getParameters(
   for (const key of keys) {
     const res = await session.tryExecute(CMD.OPTIONS_RRQ, encodeParamRequest(key))
     if (res.command === CMD.ACK_ERROR) continue
+    if (res.command === CMD.ACK_UNAUTH) {
+      throw new ZkProtocolError(`CMD_OPTIONS_RRQ for ${key} answered ACK_UNAUTH`, res.data)
+    }
     out[key] = decodeParamReply(key, res.data)
   }
   return out
@@ -60,10 +76,20 @@ const IDENTITY_KEYS = {
  * and so nothing to check the echo of. Do not fold this into the parameter
  * path; the echo guard would have nothing to verify and would reject a
  * perfectly good reply.
+ *
+ * This is the read in the library with no other validation of any kind — no
+ * echo, no length check, nothing but the ACK_ERROR branch below — so an
+ * ACK_UNAUTH reply here is the case with nothing else to catch it: an empty
+ * body would otherwise decode to firmwareVersion: '', indistinguishable from
+ * a device that genuinely answered with no value. See the ACK_UNAUTH comment
+ * on getParameters() above; the same reasoning applies here.
  */
 async function readFirmware(session: Session): Promise<string | null> {
   const res = await session.tryExecute(CMD.GET_VERSION)
   if (res.command === CMD.ACK_ERROR) return null
+  if (res.command === CMD.ACK_UNAUTH) {
+    throw new ZkProtocolError('CMD_GET_VERSION answered ACK_UNAUTH', res.data)
+  }
   return readNulTerminated(res.data, 0, res.data.length)
 }
 

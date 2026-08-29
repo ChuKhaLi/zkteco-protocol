@@ -84,6 +84,24 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       expect('toString' in out).toBe(false)
     })
 
+    it('throws ZkProtocolError rather than decoding an ACK_UNAUTH reply as a value', async () => {
+      // ACK_UNAUTH is the one non-acknowledgment reply this codebase already
+      // assigns a meaning to (Session.open handles it during the comm-key
+      // handshake). tryExecute() only throws on ACK_ERROR, so without this
+      // check the reply would fall through to decodeParamReply() and either
+      // be parsed as a plausible value or, empty-bodied, be mistaken for a
+      // legitimate empty-value answer.
+      running = await startEmulator({
+        transport: transportKind,
+        params: PARAMS,
+        handlers: { [CMD.OPTIONS_RRQ]: (req, state) => [reply(state, req, CMD.ACK_UNAUTH)] },
+      })
+      session = await connect(running.port)
+      await expect(getParameters(session, ['~SerialNumber'])).rejects.toBeInstanceOf(
+        ZkProtocolError,
+      )
+    })
+
     it('propagates a timeout instead of omitting the key', async () => {
       // The defect this guards: a getParameters that treated every failure as
       // "the device does not have this" would return {} here, and {} is also
@@ -160,6 +178,21 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       running = await startEmulator({ transport: transportKind, params: FULL.params })
       session = await connect(running.port)
       expect((await getIdentity(session)).firmwareVersion).toBeNull()
+    })
+
+    it('throws ZkProtocolError when CMD_GET_VERSION answers ACK_UNAUTH with an empty body', async () => {
+      // readFirmware is the sharpest case: it is the only read in this scope
+      // with no other validation (no echo, no length check), so an
+      // ACK_UNAUTH with an EMPTY body would otherwise decode to
+      // firmwareVersion: '' — indistinguishable from a device that genuinely
+      // answered with no value.
+      running = await startEmulator({
+        transport: transportKind,
+        params: FULL.params,
+        handlers: { [CMD.GET_VERSION]: (req, state) => [reply(state, req, CMD.ACK_UNAUTH)] },
+      })
+      session = await connect(running.port)
+      await expect(getIdentity(session)).rejects.toBeInstanceOf(ZkProtocolError)
     })
 
     it('returns five nulls on a device that exposes nothing', async () => {
