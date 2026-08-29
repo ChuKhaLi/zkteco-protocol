@@ -9,12 +9,24 @@ bytes they put on the socket are recorded and committed as fixtures under
 `test/fixtures/oracle/`. CI reads only those JSON files — it needs neither
 Python nor either oracle installed.
 
-`test/fixtures/oracle/commkey/` holds a further set of `pyzk`-only captures
-against `(commKey, sessionId)` pairs chosen to isolate the comm-key mixing's
-low-byte-discard invariance (§A.4 in the design spec) specifically — kept out
-of the top-level directory because `test/oracle/fixtures.spec.ts` scans every
-`*.json` directly under it for the reply-id checksum adjudication and asserts
-an exact count of discriminating packets across that corpus.
+Three subdirectories hold fixtures kept out of the top-level directory for the
+same reason: `test/oracle/fixtures.spec.ts` scans every `*.json` directly
+under `test/fixtures/oracle/` for the reply-id checksum adjudication and
+asserts an exact count of discriminating packets across that corpus, so any
+fixture that is not part of that adjudication goes in a subdirectory instead
+of silently changing the count.
+
+- `test/fixtures/oracle/commkey/` — `pyzk`-only captures against
+  `(commKey, sessionId)` pairs chosen to isolate the comm-key mixing's
+  low-byte-discard invariance (§A.4 in the design spec) specifically.
+- `test/fixtures/oracle/realtime/` — both oracles' captures for the realtime
+  acknowledgment adjudication (design spec v0.2, PROVENANCE.md §3).
+- `test/fixtures/oracle/params/` — both oracles' captures for the
+  `CMD_OPTIONS_RRQ` request-shape adjudication (design spec §8,
+  PROVENANCE.md §4).
+
+`tools/oracle/capture.ts` documents both of the newer subdirectories inline;
+this is the file someone reads first, so it says so here too.
 
 ## Licensing
 

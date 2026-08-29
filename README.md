@@ -66,11 +66,11 @@ Realtime is a latency improvement on top of polling, not a replacement for it:
 keep reading the log on a schedule, and let it recover whatever the stream
 missed.
 
-**One device, one mode.** While subscribed, `getInfo()`, `getUsers()` and
-`getAttendanceLogs()` throw. To poll and listen at the same time, construct a
-second `ZkDevice` — which opens a second connection, and the number of
-concurrent connections a terminal accepts has never been verified against
-hardware.
+**One device, one mode.** While subscribed, `getInfo()`, `getUsers()`,
+`getAttendanceLogs()`, `getIdentity()`, `getParameters()` and `getTime()`
+throw. To poll and listen at the same time, construct a second `ZkDevice` —
+which opens a second connection, and the number of concurrent connections a
+terminal accepts has never been verified against hardware.
 
 **Some models send no identity.** The larger event payload carries the printed
 user id; the smaller one carries only a device-internal `uid`, which is
@@ -101,9 +101,10 @@ if ('WorkCode' in params) { /* the device answered */ }
 Keys the device refused are **absent** from the result rather than undefined,
 so `in` answers exactly whether it replied. `getParameters` returns a
 null-prototype object, so `in` is not just the convenient check but the
-correct one — `result.hasOwnProperty(key)` throws on it. `DEVICE_PARAM` lists
-the keywords that have been observed; it is not a promise that any given
-model exposes them.
+correct one — `result.hasOwnProperty(key)` throws on it; use
+`Object.hasOwn(result, key)` if you want that form instead of `in`.
+`DEVICE_PARAM` lists the keywords that have been observed; it is not a
+promise that any given model exposes them.
 
 ```ts
 const clock = await device.getTime()   // ZkNaiveTime, never a Date
@@ -113,11 +114,15 @@ Useful mainly for spotting drift: a device whose clock has slipped produces
 attendance timestamps that look wrong for no visible reason. Setting the clock
 is a write path and is deliberately not implemented.
 
-**Strings are decoded as latin1, not ASCII.** Node's `'ascii'` strips the high
-bit, which silently corrupts any name outside ASCII with no way to recover it.
-latin1 is byte-preserving: if a device sends text in another encoding, the
-original bytes are `Buffer.from(value, 'latin1')` away. Which encoding devices
-actually use is an open question — see the first-hardware checklist.
+**Strings are decoded as latin1, not ASCII.** Changed in 0.3.0 — before this
+release, `ZkUser.name` and `ZkUser.userId` were decoded as `'ascii'`, which
+in Node strips the high bit. That silently corrupted any name outside ASCII
+with no way to recover it. latin1 is byte-preserving: if a device sends text
+in another encoding, the original bytes are `Buffer.from(value, 'latin1')`
+away. On a pure-ASCII device the output is unchanged; on any other device, a
+previously wrong-looking-but-plausible name now looks odd (mojibake) instead,
+and the exact bytes are one call away. Which encoding devices actually use is
+an open question — see the first-hardware checklist.
 
 ## Two things worth knowing before you use this
 

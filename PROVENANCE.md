@@ -40,16 +40,27 @@ not a dependency of this package in any form — `pyzk` does not appear in
 Python virtual environment that holds it is git-ignored and excluded from the
 published package.
 
-It was used in exactly one way: executed as a separate process, driven only
-through its public constructor and lifecycle methods (`ZK(...)`,
-`.connect()`, `.disconnect()`), against the test emulator in `test/emulator/`,
-with the bytes it put on the socket recorded as fixtures under
-`test/fixtures/oracle/`. The driver script is
-[`tools/oracle/capture_pyzk.py`](tools/oracle/capture_pyzk.py) — the whole of
-it is nine lines that call `ZK`, `connect`, and `disconnect`, and nothing
-else. An independent reviewer audited that script and confirmed it calls only
-that public API, with no internals, structures, or naming that could only
-have come from the source.
+It is executed as a separate process, driven only through its own public
+constructor, lifecycle methods, and documented instance methods — never
+through anything internal — against the test emulator in `test/emulator/`,
+with the bytes it puts on the socket recorded as fixtures under
+`test/fixtures/oracle/`. There are now three driver scripts, one per capture
+added in v0.1, v0.2 and v0.3, and each calls a larger slice of that public
+surface than the one before it:
+
+| Script | Added | Public API called, beyond `ZK(...)`, `.connect()`, `.disconnect()` |
+|---|---|---|
+| [`tools/oracle/capture_pyzk.py`](tools/oracle/capture_pyzk.py) | v0.1 | none — nine lines, connect and disconnect only |
+| [`tools/oracle/capture_pyzk_realtime.py`](tools/oracle/capture_pyzk_realtime.py) | v0.2 | `.live_capture()` |
+| [`tools/oracle/capture_pyzk_params.py`](tools/oracle/capture_pyzk_params.py) | v0.3 | `.get_serialnumber()`, `.get_device_name()`, `.get_platform()`, `.get_fp_version()`, `.get_firmware_version()`, `.get_time()` — each probed with `getattr` first, so a method pyzk does not expose is recorded as producing no evidence rather than assumed away |
+
+All three scripts were read for this v0.3 fix pass and confirmed to call only
+public, documented constructor, lifecycle, and instance methods, with no
+internals, structures, or naming that could only have come from pyzk's
+source. This supersedes the earlier statement that named only
+`capture_pyzk.py` and an audit that covered it alone — that statement went
+stale at v0.2 and staler at v0.3, when the other two drivers were added
+without this passage being revisited.
 
 That is observation, not copying. GPL-2.0 §0 restricts copying, distribution
 and modification — not execution — and covers a program's output only where
@@ -350,12 +361,18 @@ the other's evidence, and it is not left unresolved either: `encodeParamRequest`
 (`src/codec/params.ts`) now sends the **NUL-terminated** form. That choice was made, not derived,
 for two reasons: it is a strict superset of the bare form for a device that null-terminates its own
 copy of a length-delimited payload before comparing it — ordinary, safe C practice, under which a
-bare or NUL-terminated request compare identically — and `pyzk` is the more field-tested of the two
-libraries at this specific call (its device-information reads are wired for both transports and are
-not the TCP-only, apparently less-exercised code path `zkteco-js` uses here). Neither reasoning
-amounts to hardware confirmation. A device that requires an exact byte-length match with no
-tolerance for a trailing NUL would reject this library's request and accept `zkteco-js`'s instead;
-that hypothesis is exactly as plausible on the evidence available and is not ruled out.
+bare or NUL-terminated request compare identically — and both `pyzk` and `zkteco-js` are libraries
+run against real ZKTeco hardware in the field, not only against this project's emulator: `pyzk`
+sends the NUL-terminated form there and works, which is the real tiebreaker — external evidence,
+from outside this project's own captures, that devices evidently tolerate a trailing NUL rather
+than reject it. Taken alone that deployment argument is symmetric and proves less than it might
+appear to: `zkteco-js` is equally field-deployed and sends the bare form, so it shows only that
+each shape works on the devices its own users happen to own, not that NUL is a superset of bare —
+that direction rests on the parser-family reasoning above. Neither reasoning amounts to hardware
+confirmation against a device this project has actually seen. A device that requires an exact
+byte-length match with no tolerance for a trailing NUL would reject this library's request and
+accept `zkteco-js`'s instead; that hypothesis is exactly as plausible on the evidence available and
+is not ruled out.
 
 The test emulator (`test/emulator/index.ts`) was updated in lockstep: its `CMD_OPTIONS_RRQ` handler
 strips a single trailing NUL, if present, before matching a keyword, so it models a device tolerant

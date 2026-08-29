@@ -121,6 +121,13 @@ export class ZkDevice {
    * A key the device refused is absent from the result; a key it answered
    * with no value is present as ''. Use DEVICE_PARAM for the keywords that
    * have been observed, or pass any string.
+   *
+   * Returns a null-prototype object, so `key in result` is correct even for a
+   * key that collides with an Object.prototype member name (e.g. 'toString')
+   * — a plain object would report `true` there via the prototype chain even
+   * though the device never answered. The cost: `result.hasOwnProperty(key)`
+   * throws, because there is no `hasOwnProperty` on the prototype chain to
+   * call. Use `key in result`, or `Object.hasOwn(result, key)`.
    */
   async getParameters(keys: readonly string[]): Promise<Record<string, string>> {
     return getParameters(this.requireIdleSession(), keys)

@@ -288,8 +288,17 @@ no oracle ever sent an odd-length request, because neither reference implementat
 buffered read.
 
 What this scope changes is that the gap becomes **closable**. `~SerialNumber` is thirteen bytes, so
-its payload is twenty-one — and unlike `CMD_PREPARE_BUFFER`, both oracles do issue this request.
-The capture in §8 therefore pins the odd-byte branch against an independent implementation for the
+`zkteco-js`'s bare payload for it is twenty-one — odd-length; `pyzk`'s NUL-terminated form makes
+that one even (twenty-two) instead, but `~ZKFPVersion`, at twelve bytes, becomes thirteen once
+`pyzk` appends its terminator, so `pyzk` contributes an odd-length packet of its own. Unlike
+`CMD_PREPARE_BUFFER`, both oracles do issue this request, and both land on an odd-length payload
+somewhere in the capture.
+
+`test/oracle/params.spec.ts` reconstructs each odd-length packet's payload and asserts
+`checksum16` reproduces the checksum the sending oracle actually transmitted (via
+`classifyChecksum`, which returns `'self'` only when it does). That is what makes the pin real
+rather than nominal: six odd-length packets across both oracles, all six matching `checksum16`.
+The capture therefore pins the odd-byte branch against an independent implementation for the
 first time in the project's life, and it retroactively covers a path v0.1 shipped on faith.
 
 §12 records separately that no *device* has confirmed it either. An oracle agreeing is not a
@@ -348,7 +357,9 @@ device emits. The v0.2 handoff asks that this be said each time; it is said agai
 
 Pure codec (`test/codec/params.spec.ts`):
 
-1. Encodes a keyword request as a bare payload — no NUL, no length prefix.
+1. Encodes a keyword request with a single trailing NUL terminator and no length prefix — the
+   form the disagreement in §8.1/PROVENANCE.md §4 settled on, not the bare form this document
+   originally assumed before the capture.
 2. Decodes a well-formed reply to its value.
 3. Truncates at the first NUL.
 4. Splits on the **first** `=` when the value contains another.
@@ -487,13 +498,25 @@ No new error class. The published taxonomy stays as v0.1 shipped it.
 
 - A device refusing a keyword is **not** an error: a `null` field, or an absent key (§4.2).
 - A malformed reply — no `=`, or an echo that does not match — is `ZkProtocolError`.
+- An `ACK_UNAUTH` reply is `ZkProtocolError`. It is the one non-acknowledgment code this codebase
+  already assigns a meaning to (`Session.open` handles it during the comm-key handshake), so it
+  cannot be a genuine parameter or firmware reply under any reading, and it is never decoded as
+  one.
 - A timeout is `ZkTimeoutError`, a dropped connection `ZkConnectionError`.
 - Calling any of the three while subscribed is `ZkConnectionError`, with the guard's own message.
 
 **`ACK_ERROR` is the only outcome that becomes a `null` field.** Every other failure — malformed
-reply, timeout, dropped connection, framing error — propagates out of `getIdentity()` and
-`getParameters()` unchanged, abandoning the remaining round trips. There is no partial result and
-no salvage, per v0.1 §2.4.
+reply, `ACK_UNAUTH`, timeout, dropped connection, framing error — propagates out of `getIdentity()`
+and `getParameters()` unchanged, abandoning the remaining round trips. There is no partial result
+and no salvage, per v0.1 §2.4.
+
+**This is not a claim that `ACK_OK` is the only acknowledgment a real device sends for these
+commands.** `getParameters` and `readFirmware` branch only on `ACK_ERROR` and `ACK_UNAUTH`; any
+other reply command is accepted and decoded as the answer. Tightening that to "only `ACK_OK`
+counts" is deliberately not done: nothing confirms real firmware acknowledges `CMD_OPTIONS_RRQ`
+with `ACK_OK` rather than, say, `ACK_DATA`, and inventing that constraint would itself be an
+unevidenced hypothesis. `ACK_UNAUTH` is singled out because it is the only non-acknowledgment code
+with an established meaning in this codebase — not because it is the only one that could exist.
 
 The boundary is worth stating in one sentence, because it is the whole design: a `null` means the
 device answered and said no. It never means this library failed to ask.
@@ -551,6 +574,13 @@ Appended to §12 of `2026-08-28-zkteco-protocol-library-design.md` as items 15�
     `pyzk` appends exactly one trailing NUL on both transports. `encodeParamRequest` implements
     `pyzk`'s NUL-terminated form as the more likely tolerated default (see `PROVENANCE.md` §4), but
     neither shape has been confirmed against real hardware — this stays open until one is.
+    **If this default is wrong, it does not fail loudly.** `CMD_GET_VERSION` carries an empty
+    payload and is untouched by this decision, so a device that rejects the wrong shape presents as
+    four `ACK_ERROR` refusals on the parameter reads plus a real `firmwareVersion` from
+    `getIdentity()` — a plausible, reportable device profile, not an obvious malfunction. That is
+    indistinguishable from the answer item 16 exists to collect, so a report of "this firmware
+    exposes its version but no parameters" must not be logged as an item-16 answer without first
+    ruling out a request-shape mismatch here.
 19. Does the device accept a checksum over an **odd-length payload**? That branch of `checksum16`
     has never had external confirmation, and it already carries `CMD_PREPARE_BUFFER` on the main
     bulk-read path shipped in v0.1 (§5.4). A refusal here would break far more than this scope.
@@ -567,13 +597,16 @@ Appended to §12 of `2026-08-28-zkteco-protocol-library-design.md` as items 15�
 
 Restated in our own words. `adrobinoga/zk-protocol` carries no license, so it is read for
 understanding and never copied. The command numbers and request/reply shapes below were confirmed
-by reading `zkteco-js`, which is MIT and may be read freely.
+by reading `zkteco-js`, which is MIT and may be read freely, except the `CMD_OPTIONS_RRQ` payload
+shape, which `zkteco-js` and `pyzk` disagree on — see §8.1 and PROVENANCE.md §4. The row below
+states what this library actually sends, the NUL-terminated form, not the bare form either oracle
+alone would suggest.
 
 ### A.1 Commands
 
 | Name | Value | Payload | Reply body |
 |---|---|---|---|
-| `CMD_OPTIONS_RRQ` | 11 | keyword, bare ASCII | keyword, `=`, value, NUL-padded |
+| `CMD_OPTIONS_RRQ` | 11 | keyword, NUL-terminated ASCII (§8.1/PROVENANCE.md §4) | keyword, `=`, value, NUL-padded |
 | `CMD_GET_TIME` | 201 | empty | packed uint32 LE at offset 0 |
 | `CMD_GET_VERSION` | 1100 | empty | firmware string, whole body |
 
