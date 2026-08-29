@@ -244,5 +244,25 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       session = await connect(running.port)
       await expect(getTime(session)).rejects.toBeInstanceOf(ZkProtocolError)
     })
+
+    it('throws ZkProtocolError rather than decoding an ACK_UNAUTH body as a time', async () => {
+      // The sharpest case of the collapse the ACK_UNAUTH guards close: unlike a
+      // parameter reply, which the echo check would reject, and unlike a short
+      // reply, which the length check would reject, FOUR bytes of an
+      // acknowledgment that is not one decode to a perfectly valid-looking date
+      // with nothing anywhere to contradict them. The bytes below decode to
+      // 2035-08-07T01:49:05 — a plausible clock reading from a device that
+      // never answered the question.
+      running = await startEmulator({
+        transport: transportKind,
+        handlers: {
+          [CMD.GET_TIME]: (req, state) => [
+            reply(state, req, CMD.ACK_UNAUTH, Buffer.from([0x11, 0x22, 0x33, 0x44])),
+          ],
+        },
+      })
+      session = await connect(running.port)
+      await expect(getTime(session)).rejects.toBeInstanceOf(ZkProtocolError)
+    })
   })
 }

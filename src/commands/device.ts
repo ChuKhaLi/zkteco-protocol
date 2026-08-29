@@ -133,6 +133,19 @@ export async function getIdentity(session: Session): Promise<ZkDeviceIdentity> {
  */
 export async function getTime(session: Session): Promise<ZkNaiveTime> {
   const res = await session.execute(CMD.GET_TIME)
+  // Symmetric with getParameters and readFirmware, and for a sharper reason
+  // than either. A parameter reply that is not an answer is caught by the echo
+  // check; a short clock reply is caught by the length check below. But four
+  // bytes of a reply that acknowledges nothing decode to a perfectly
+  // valid-looking date, and decodeZkTime has no notion of an implausible one —
+  // so this is the most convincing wrong answer the library could return.
+  // ACK_UNAUTH only, for the same reason as the other two: it is the one
+  // non-acknowledgment this codebase already assigns a meaning to, and
+  // tightening to "only ACK_OK counts" would invent a constraint no device has
+  // confirmed.
+  if (res.command === CMD.ACK_UNAUTH) {
+    throw new ZkProtocolError('CMD_GET_TIME answered ACK_UNAUTH', res.data)
+  }
   if (res.data.length < 4) {
     throw new ZkProtocolError(
       `CMD_GET_TIME reply is ${res.data.length} bytes, need at least 4`,

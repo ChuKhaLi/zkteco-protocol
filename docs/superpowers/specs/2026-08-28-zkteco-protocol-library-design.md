@@ -692,7 +692,9 @@ and which of the two dialects the model emits.
     and the next `receive()` on that session collects it as its own. `getIdentity()` makes five
     requests where `getInfo()` makes one, so a caller that retries after a timeout has roughly five
     times the exposure to this than it did before this scope. On the parameter path the echo guard
-    (§5.1) makes a stale reply loud; `readFirmware()` and `getTime()` have no equivalent guard, and
+    (§5.1) makes a stale reply loud; `readFirmware()` and `getTime()` have no equivalent — their
+    ACK_UNAUTH guards do not help here, since a stale reply carries a legitimate acknowledgment
+    code, just to the wrong request — and
     `getTime()` is the sharpest case, since `decodeZkTime` turns any four bytes into a
     plausible-looking date with nothing to contradict it. This is v0.1 transport architecture, not
     something this scope introduced, and no code change is proposed here — record what a real
