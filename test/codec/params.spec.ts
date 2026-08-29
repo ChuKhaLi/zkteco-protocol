@@ -20,7 +20,7 @@ describe('encodeParamRequest', () => {
     expect(() => encodeParamRequest('')).toThrow(RangeError)
   })
 
-  it("refuses a keyword containing '=' or NUL, which would make the echo check ambiguous", () => {
+  it("refuses a keyword containing '=' (echo-check ambiguity) or NUL (wire safety, since this function appends its own terminator)", () => {
     expect(() => encodeParamRequest('~OS=x')).toThrow(RangeError)
     expect(() => encodeParamRequest('~OS\0')).toThrow(RangeError)
   })
@@ -52,7 +52,13 @@ describe('decodeParamReply', () => {
   })
 
   it('throws on a body with no separator at all', () => {
-    expect(() => decodeParamReply('~OS', body('Linux'))).toThrow(ZkProtocolError)
+    // Asserting the class alone does not pin this to the sep === -1 branch:
+    // deleting that branch still throws ZkProtocolError, from the echoed-
+    // keyword mismatch instead (text.slice(0, -1) on 'Linux' is 'Linu', which
+    // is not '~OS' either). The message is what distinguishes the branches.
+    expect(() => decodeParamReply('~OS', body('Linux'))).toThrow(
+      /carries no '=' separator/,
+    )
   })
 
   it('round-trips bytes above 0x7f without loss', () => {

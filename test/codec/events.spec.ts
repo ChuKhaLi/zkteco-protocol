@@ -76,9 +76,10 @@ describe('realtime attendance dialects', () => {
     expect(got?.timestamp.local).toBe('2026-08-27T08:01:30')
   })
 
-  // Node's 'ascii' decoding masks the high bit, so 0xc1 would read back as
-  // 'A'. A byte that is not printable ASCII must not become a plausible
-  // identifier; it must become no identifier at all.
+  // readNulTerminated (latin1) would decode these bytes unconditionally into
+  // a well-typed, plausible-looking string with no way to tell it from a
+  // genuine identity. readPrintableId validates first: a byte that is not
+  // printable ASCII must produce no identifier at all, not a fabricated one.
   it('reports no identity when the id field holds bytes outside printable ASCII', () => {
     const buf = largeEvent('', 0)
     buf.set([0xc1, 0xc2, 0xc3], 0)

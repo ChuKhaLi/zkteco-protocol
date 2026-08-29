@@ -80,9 +80,12 @@ export interface RealtimeAttendance {
  * that is not a printable identifier.
  *
  * Deliberately not `readNulTerminated` from records/shared.ts: that decodes
- * with Node's 'ascii', which MASKS THE HIGH BIT, so a field of 0xc1 0xc2 0xc3
- * reads back as "ABC" — a fabricated identity that no caller could tell from
- * a real one. The bytes are validated before they are decoded.
+ * latin1 unconditionally, so ANY byte value becomes SOME character and the
+ * field always turns into a well-typed, plausible-looking string — a field of
+ * 0xc1 0xc2 0xc3 becomes 'ÁÂÃ', not an error. That is indistinguishable from a
+ * real identity to a caller. This function validates before it decodes: any
+ * byte outside printable ASCII makes it return null instead of a fabricated
+ * identity.
  */
 function readPrintableId(buf: Buffer, start: number, length: number): string | null {
   const field = buf.subarray(start, start + length)
