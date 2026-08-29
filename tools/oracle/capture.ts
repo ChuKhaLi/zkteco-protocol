@@ -2,7 +2,7 @@ import { spawn } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
 import { existsSync } from 'node:fs'
 import path from 'node:path'
-import { startEmulator } from '../../test/emulator/index.js'
+import { startEmulator, type Emulator } from '../../test/emulator/index.js'
 
 const OUT_DIR = path.join('test', 'fixtures', 'oracle')
 const EMULATOR_SESSION_ID = 0x1f2e
@@ -66,6 +66,63 @@ function run(cmd: string, args: string[], useShell = false): Promise<void> {
   })
 }
 
+/**
+ * Runs one oracle's driver script against an already-listening emulator port.
+ *
+ * Shared by `capture` and `captureRealtime`, which differ only in which pair
+ * of scripts they run and what arguments those scripts take.
+ */
+async function runOracleScript(
+  source: 'pyzk' | 'zkteco-js',
+  pyScript: string,
+  tsScript: string,
+  args: string[],
+): Promise<void> {
+  if (source === 'pyzk') {
+    await run(pythonPath(), [pyScript, ...args])
+  } else {
+    await run('npx', ['tsx', tsScript, ...args], true)
+  }
+}
+
+/**
+ * Waits for the last datagram to land, then writes what the emulator
+ * received as a committed fixture.
+ *
+ * `meta` supplies every field the fixture carries before `packets`, in the
+ * order callers want them written — object spread preserves insertion order,
+ * so this reproduces each caller's exact prior field order byte-for-byte.
+ * `includeData` is on for the realtime captures, where the registration mask
+ * and pushed-event bytes are themselves the evidence, and off for the
+ * handshake/auth captures, whose payload carries nothing beyond the header.
+ */
+async function writeFixture(
+  emulator: Emulator,
+  outDir: string,
+  file: string,
+  meta: Record<string, unknown>,
+  includeData: boolean,
+): Promise<void> {
+  // Give the last datagram a moment to land before tearing the socket down.
+  await new Promise((r) => setTimeout(r, 300))
+  const packets = emulator.received.map((p, i) => {
+    const record: Record<string, unknown> = {
+      hex: emulator.receivedRaw[i]!.toString('hex'),
+      command: p.command,
+      checksum: p.checksum,
+      sessionId: p.sessionId,
+      replyId: p.replyId,
+    }
+    if (includeData) record.data = p.data.toString('hex')
+    return record
+  })
+  const fixture = { ...meta, packets }
+  mkdirSync(outDir, { recursive: true })
+  const filePath = path.join(outDir, file)
+  writeFileSync(filePath, `${JSON.stringify(fixture, null, 2)}\n`)
+  process.stdout.write(`wrote ${filePath} (${packets.length} packets)\n`)
+}
+
 async function capture(
   source: 'pyzk' | 'zkteco-js',
   transport: 'tcp' | 'udp',
@@ -81,33 +138,20 @@ async function capture(
 ): Promise<void> {
   const emulator = await startEmulator({ transport, sessionId, commKey })
   try {
-    if (source === 'pyzk') {
-      await run(pythonPath(), [
-        'tools/oracle/capture_pyzk.py', String(emulator.port), transport, String(commKey),
-      ])
-    } else {
-      await run(
-        'npx',
-        ['tsx', 'tools/oracle/capture_zkjs.ts', String(emulator.port), transport, String(commKey)],
-        true,
-      )
-    }
-    // Give the last datagram a moment to land before tearing the socket down.
-    await new Promise((r) => setTimeout(r, 300))
-
-    const packets = emulator.received.map((p, i) => ({
-      hex: emulator.receivedRaw[i]!.toString('hex'),
-      command: p.command,
-      checksum: p.checksum,
-      sessionId: p.sessionId,
-      replyId: p.replyId,
-    }))
-    const fixture = { source, transport, commKey, emulatorSessionId: sessionId, packets }
-    mkdirSync(outDir, { recursive: true })
+    await runOracleScript(
+      source,
+      'tools/oracle/capture_pyzk.py',
+      'tools/oracle/capture_zkjs.ts',
+      [String(emulator.port), transport, String(commKey)],
+    )
     const kind = fileTag ?? (commKey === 0 ? 'handshake' : 'auth')
-    const file = path.join(outDir, `${kind}-${transport}-${source}.json`)
-    writeFileSync(file, `${JSON.stringify(fixture, null, 2)}\n`)
-    process.stdout.write(`wrote ${file} (${packets.length} packets)\n`)
+    await writeFixture(
+      emulator,
+      outDir,
+      `${kind}-${transport}-${source}.json`,
+      { source, transport, commKey, emulatorSessionId: sessionId },
+      false,
+    )
   } finally {
     await emulator.close()
   }
@@ -136,32 +180,19 @@ async function captureRealtime(
     pushWithAck: pushes,
   })
   try {
-    if (source === 'pyzk') {
-      await run(pythonPath(), [
-        'tools/oracle/capture_pyzk_realtime.py', String(emulator.port), transport,
-      ])
-    } else {
-      await run(
-        'npx',
-        ['tsx', 'tools/oracle/capture_zkjs_realtime.ts', String(emulator.port), transport],
-        true,
-      )
-    }
-    await new Promise((r) => setTimeout(r, 300))
-
-    const packets = emulator.received.map((p, i) => ({
-      hex: emulator.receivedRaw[i]!.toString('hex'),
-      command: p.command,
-      checksum: p.checksum,
-      sessionId: p.sessionId,
-      replyId: p.replyId,
-      data: p.data.toString('hex'),
-    }))
-    const fixture = { source, transport, emulatorSessionId: EMULATOR_SESSION_ID, packets }
-    mkdirSync(REALTIME_DIR, { recursive: true })
-    const file = path.join(REALTIME_DIR, `realtime-${transport}-${source}.json`)
-    writeFileSync(file, `${JSON.stringify(fixture, null, 2)}\n`)
-    process.stdout.write(`wrote ${file} (${packets.length} packets)\n`)
+    await runOracleScript(
+      source,
+      'tools/oracle/capture_pyzk_realtime.py',
+      'tools/oracle/capture_zkjs_realtime.ts',
+      [String(emulator.port), transport],
+    )
+    await writeFixture(
+      emulator,
+      REALTIME_DIR,
+      `realtime-${transport}-${source}.json`,
+      { source, transport, emulatorSessionId: EMULATOR_SESSION_ID },
+      true,
+    )
   } finally {
     await emulator.close()
   }

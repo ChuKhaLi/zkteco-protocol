@@ -234,19 +234,51 @@ same offset for the same field — a real second source, but a source-level
 one: it says two implementations were *written* the same way, not that
 either was *exercised* against a device.
 
-This realtime capture does not add to that: the driver's callback is a
-no-op, so nothing here records what, if anything, `zkteco-js` decoded from
-the pushed events, and both of its gates fail silently on a mismatch —
-`checkNotEventTCP` swallows a parse error and returns false, and the UDP
-path's own length check (`data.length === 18`) means it would not even
-attempt to decode the 44-byte packets this capture's events actually are.
-A capture where nothing crashed is therefore not evidence that decoding
-succeeded; it is simply uninformative here either way. The most that can
-honestly be claimed is the source-level agreement above — not proof that a
-real device puts the event type at that offset, only that nothing here or
-in `zkteco-js`'s written logic disagrees with the documentation on where it
-goes. That is materially weaker than a byte-level match, and it stays on the
-first-hardware checklist.
+The committed realtime capture does not add to that on its own: its driver's
+callback is a no-op, so `realtime-tcp-zkteco-js.json` and
+`realtime-udp-zkteco-js.json` record nothing about what, if anything,
+`zkteco-js` decoded from the three pushed events. That gap was checked
+directly rather than left as an inference.
+
+**TCP — attempted and observed to fail, not just reasoned about.**
+`zkteco-js`'s TCP path (`getRealTimeLogs`) was driven with a real, logging
+callback (not the committed driver's no-op) against the identical emulator
+shape used everywhere else in this project — `pushWithAck` writing the
+registration ack and three attendance events in the same handler return —
+with the raw bytes its socket received logged alongside it. The client's
+`data` handler fired exactly once, with a single 172-byte chunk containing
+all four packets already concatenated: the 16-byte `CMD_ACK_OK` reply to the
+registration, immediately followed by all three 52-byte `CMD_REG_EVENT`
+frames. `checkNotEventTCP` strips only one 8-byte TCP wrapper — the first
+frame's — then reads `commandId` and `event` from what follows; on this
+coalesced read that is the *ack's own* header (`command` 2000, and its
+session-id field, 7982, in the slot `checkNotEventTCP` reads as `event`),
+not `CMD_REG_EVENT`'s. The gate returns false on that read and is never
+invoked again for this chunk, so the three genuine events sitting right
+behind it in the same buffer are never inspected. The logging callback
+fired **zero** times. Reading `checkNotEventTCP` predicted this failure;
+driving it for real against this project's own emulator shape reproduced
+it.
+
+**UDP — not run for real; the length gate is read, not observed.**
+`zudp`'s equivalent path requires `data.length === 18` before it will even
+call `decodeRecordRealTimeLog18`; the events this project pushes are 44
+bytes on the wire. That is still a source-reading claim, not a captured
+observation — datagram framing differs from TCP's coalescing in a way the
+TCP experiment above doesn't settle, so it is recorded with that
+distinction, not folded into the TCP finding.
+
+None of this widens the conclusion. It says `zkteco-js`'s realtime path, run
+in this project's specific test conditions, never itself demonstrates the
+offset-4 decoding claim — not that a real device would deliver an ack and
+its events coalesced this way, and not anything for or against the
+source-level agreement between `readEventType` and
+`checkNotEventTCP`/`checkNotEventUDP` on where the event type sits. The most
+that can honestly be claimed is that source-level agreement — not proof
+that a real device puts the event type at that offset, only that nothing
+here or in `zkteco-js`'s written logic disagrees with the documentation on
+where it goes. That is materially weaker than a byte-level match, and it
+stays on the first-hardware checklist.
 
 ## Inbound checksums are not validated
 
