@@ -157,11 +157,22 @@ for (const transportKind of ['tcp', 'udp'] as const) {
 
       it('still surfaces a timeout as a timeout, not as a readable reply', async () => {
         // The whole point of tryExecute is that ONLY ACK_ERROR becomes readable.
-        // Everything else must keep propagating.
-        running = await startEmulator({ transport: transportKind, behavior: 'silent' })
+        // Everything else must keep propagating. The handshake is answered
+        // normally here — only CMD.OPTIONS_RRQ goes unanswered — so the
+        // timeout is actually reached through tryExecute() itself, not
+        // through open()'s own CONNECT exchange.
+        running = await startEmulator({
+          transport: transportKind,
+          handlers: {
+            [CMD.OPTIONS_RRQ]: () => [],
+          },
+        })
         session = new Session(makeTransport(running.port), { timeoutMs: 150 })
-        await expect(session.open()).rejects.toBeInstanceOf(ZkTimeoutError)
-        session = null
+        await session.open()
+
+        await expect(
+          session.tryExecute(CMD.OPTIONS_RRQ, Buffer.from('~OS', 'latin1')),
+        ).rejects.toBeInstanceOf(ZkTimeoutError)
       })
     })
   })
