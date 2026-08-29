@@ -77,6 +77,48 @@ user id; the smaller one carries only a device-internal `uid`, which is
 recycled after a user is deleted and is therefore not an identity. `userId` is
 `null` there rather than a guess.
 
+### Reading what the device is
+
+```ts
+const id = await device.getIdentity()
+// { serialNumber: 'OAJ7194600263', deviceName: 'MB360',
+//   platform: 'ZMM220_TFT', os: 'Linux', firmwareVersion: 'Ver 6.60 Jun 10 2019' }
+```
+
+A `null` field means the device **answered and refused that keyword** — not that
+the read failed. A timeout or a dropped connection throws instead. An empty
+string is a third, distinct answer: the device supplied the key with no value.
+
+For anything else the device exposes:
+
+```ts
+import { DEVICE_PARAM } from 'zkteco-protocol'
+
+const params = await device.getParameters([DEVICE_PARAM.MAC, 'WorkCode'])
+if ('WorkCode' in params) { /* the device answered */ }
+```
+
+Keys the device refused are **absent** from the result rather than undefined,
+so `in` answers exactly whether it replied. `getParameters` returns a
+null-prototype object, so `in` is not just the convenient check but the
+correct one — `result.hasOwnProperty(key)` throws on it. `DEVICE_PARAM` lists
+the keywords that have been observed; it is not a promise that any given
+model exposes them.
+
+```ts
+const clock = await device.getTime()   // ZkNaiveTime, never a Date
+```
+
+Useful mainly for spotting drift: a device whose clock has slipped produces
+attendance timestamps that look wrong for no visible reason. Setting the clock
+is a write path and is deliberately not implemented.
+
+**Strings are decoded as latin1, not ASCII.** Node's `'ascii'` strips the high
+bit, which silently corrupts any name outside ASCII with no way to recover it.
+latin1 is byte-preserving: if a device sends text in another encoding, the
+original bytes are `Buffer.from(value, 'latin1')` away. Which encoding devices
+actually use is an open question — see the first-hardware checklist.
+
 ## Two things worth knowing before you use this
 
 ### Timestamps are naive, and stay that way

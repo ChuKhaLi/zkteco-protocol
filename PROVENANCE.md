@@ -105,6 +105,27 @@ everything, which surfaces on first contact rather than corrupting data
 quietly. That symmetry is what made it safe to follow the evidence rather
 than the documentation.
 
+**Refinement (2026-08-29).** The claim above rests on the wire bytes and is
+unchanged. Its description of two *independent* implementations overstates
+the independence for the zkteco-js half.
+
+zkteco-js does implement the reply-id quirk — it checksums over `replyId`,
+then overwrites the field with `replyId + 1` — and its checksum formula
+subtracts one more than the standard one's complement does. Incrementing
+`replyId` raises the word sum by one and so lowers a standard checksum by one,
+so the two errors cancel exactly, for any payload. Measured on the committed
+fixtures:
+
+    transmitted: replyId=1, checksum=64534
+      zkteco-js's own formula over replyId-1 ....... 64534
+      standard one's complement over replyId ....... 64534
+
+Both readings collapse to the same predicate on the wire, which is what a
+device sees and what this library emits, so `Session.send` and the disposition
+of `applyReplyIdQuirk` are unchanged. But zkteco-js agrees on the **bytes**, by
+a different internal route, not on the **rule** — so it is corroboration of the
+transmitted form, not a second independent derivation of it.
+
 ### 2. The comm-key mixing — vindicated, including the low-byte invariance, on a single oracle
 
 As specified, the key-mixing algorithm structurally discards the low byte of

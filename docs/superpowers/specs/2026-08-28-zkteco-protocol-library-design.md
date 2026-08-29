@@ -607,9 +607,12 @@ Publication to npm is a separate decision, deliberately outside this list.
 
 ## 12. First-hardware checklist
 
-Items 8 onward, and their §-cross-references, come from §12 of the realtime
+Items 8–14, and their §-cross-references, come from §12 of the realtime
 design spec (`docs/superpowers/specs/2026-08-28-zkteco-realtime-events-design.md`),
-not from this document.
+not from this document. Items 15 onward, and their §-cross-references, come
+from §12 of the terminal read design spec
+(`docs/superpowers/specs/2026-08-29-zkteco-terminal-read-design.md`), not from
+this document either.
 
 The target device is a Multi-Bio-class terminal exposing both TCP/IP pull on 4370 and push
 protocols, chosen so a firmware that refuses port 4370 does not require buying a second unit.
@@ -650,6 +653,31 @@ When a physical device is first connected, before trusting any reading:
 Also confirm against a real device: that the event type genuinely occupies the session-id slot
 (§5.1), that the large attendance dialect's four undocumented trailing bytes are padding (§5.2),
 and which of the two dialects the model emits.
+
+15. Does the device **echo the requested keyword** in a `CMD_OPTIONS_RRQ` reply? If not, this
+    library throws `ZkProtocolError` rather than guess (§5.1). That is designed behaviour, not a
+    field bug — but record it, because it would make the guard unusable as written.
+16. Does an unsupported parameter answer **`ACK_ERROR` or an empty value**? The library surfaces
+    the two distinguishably (§4.2) precisely so this can be answered from a device report.
+17. **Which parameter keywords does this firmware actually expose?** `DEVICE_PARAM` is an observed
+    list, not a contract (§4.3).
+18. Is the keyword payload accepted as a **bare string** — no NUL terminator, no length prefix? The
+    oracles diverged under §8.1: `zkteco-js` sends it bare on TCP, the only transport on which it
+    reaches this command at all — on UDP it produced no `CMD_OPTIONS_RRQ` packets whatsoever, since
+    its parameter and firmware methods have no UDP callback (§8.2; `CMD_GET_TIME` is unaffected —
+    zkteco-js does reach the clock command on UDP, that limitation is specific to the other two).
+    `pyzk` appends exactly one trailing NUL on both transports. `encodeParamRequest` implements
+    `pyzk`'s NUL-terminated form as the more likely tolerated default (see `PROVENANCE.md` §4), but
+    neither shape has been confirmed against real hardware — this stays open until one is.
+19. Does the device accept a checksum over an **odd-length payload**? That branch of `checksum16`
+    has never had external confirmation, and it already carries `CMD_PREPARE_BUFFER` on the main
+    bulk-read path shipped in v0.1 (§5.4). A refusal here would break far more than this scope.
+20. What **character encoding** does the device use for strings — device name and user name alike?
+    `latin1` preserves the bytes (§5.3), so one report settles whether it is ASCII, GB2312 or
+    UTF-8.
+21. Does `CMD_GET_TIME` return the packed uint32 at payload offset 0, and **how far does the device
+    clock drift** from the collecting server? Drift is the most likely explanation for attendance
+    timestamps a user reports as wrong.
 
 Until that happens, every line of this library is a hypothesis.
 

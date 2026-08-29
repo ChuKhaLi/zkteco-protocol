@@ -23,6 +23,35 @@ body:
       description: Usually under Menu → System Info on the device.
     validations:
       required: true
+  - type: input
+    id: serial_prefix
+    attributes:
+      label: Serial number prefix
+      description: >
+        The first four characters of `getIdentity().serialNumber`. Just the
+        prefix — it identifies the production batch without identifying your
+        specific unit.
+  - type: input
+    id: platform
+    attributes:
+      label: Platform and OS
+      description: The `platform` and `os` fields from `getIdentity()`.
+  - type: dropdown
+    id: identity_refusals
+    attributes:
+      label: Did any identity field come back null?
+      description: >
+        A null means the device refused that keyword. Knowing which keywords a
+        firmware exposes is checklist item 17 and cannot be answered without
+        reports.
+      options:
+        ["did not test", "all five fields answered", "some came back null", "getIdentity() threw"]
+  - type: dropdown
+    id: clock_drift
+    attributes:
+      label: How far off was `getTime()` from the collecting machine's clock?
+      options:
+        ["did not test", "within a minute", "minutes off", "hours off", "wildly wrong or threw"]
   - type: dropdown
     id: transport
     attributes:
