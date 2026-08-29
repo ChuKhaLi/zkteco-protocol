@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import { CMD } from '../../src/codec/commands.js'
-import { EVENT_FLAG, encodeEventMask, isEventPacket, readEventType, decodeRealtimeAttendance } from '../../src/codec/events.js'
+import { EVENT_FLAG, encodeEventMask, isEventPacket, readEventType, decodeRealtimeAttendance, ackEvent } from '../../src/codec/events.js'
 import { decodePayload, encodePayload } from '../../src/codec/packet.js'
 
 describe('event mask encoding', () => {
@@ -140,5 +140,12 @@ describe('decodeRealtimeEvent', () => {
       eventType: EVENT_FLAG.ATTENDANCE,
       raw: '11'.repeat(20),
     })
+  })
+})
+
+describe('ackEvent', () => {
+  it('builds an ACK_OK carrying the session id and a zero reply number', () => {
+    const pkt = decodePayload(ackEvent(0x1f2e))
+    expect(pkt).toMatchObject({ command: CMD.ACK_OK, sessionId: 0x1f2e, replyId: 0 })
   })
 })

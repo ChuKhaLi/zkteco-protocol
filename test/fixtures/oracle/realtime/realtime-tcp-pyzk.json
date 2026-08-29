@@ -1,0 +1,47 @@
+{
+  "source": "pyzk",
+  "transport": "tcp",
+  "emulatorSessionId": 7982,
+  "packets": [
+    {
+      "hex": "5050827d08000000e80317fc00000000",
+      "command": 1000,
+      "checksum": 64535,
+      "sessionId": 0,
+      "replyId": 0,
+      "data": ""
+    },
+    {
+      "hex": "5050827d0800000032009ee02e1f0100",
+      "command": 50,
+      "checksum": 57502,
+      "sessionId": 7982,
+      "replyId": 1,
+      "data": ""
+    },
+    {
+      "hex": "5050827d080000003e0091e02e1f0200",
+      "command": 62,
+      "checksum": 57489,
+      "sessionId": 7982,
+      "replyId": 2,
+      "data": ""
+    },
+    {
+      "hex": "5050827d080000003c0092e02e1f0300",
+      "command": 60,
+      "checksum": 57490,
+      "sessionId": 7982,
+      "replyId": 3,
+      "data": ""
+    },
+    {
+      "hex": "5050827d08000000e903e4dc2e1f0400",
+      "command": 1001,
+      "checksum": 56548,
+      "sessionId": 7982,
+      "replyId": 4,
+      "data": ""
+    }
+  ]
+}

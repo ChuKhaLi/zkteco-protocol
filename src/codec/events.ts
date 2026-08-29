@@ -1,5 +1,5 @@
 import { CMD } from './commands.js'
-import type { DecodedPacket } from './packet.js'
+import { encodePayload, type DecodedPacket } from './packet.js'
 import { decodeZkTime6 } from './time.js'
 import type { ZkNaiveTime, ZkRealtimeEvent } from '../types.js'
 
@@ -158,4 +158,22 @@ export function decodeRealtimeEvent(pkt: DecodedPacket): ZkRealtimeEvent {
     verifyMode: decoded.verifyMode,
     raw,
   }
+}
+
+/**
+ * Builds the acknowledgment a client is documented to send after each event.
+ *
+ * The protocol documentation says the client answers every pushed event with
+ * CMD_ACK_OK carrying the session id and a zero reply number. zkteco-js sends
+ * nothing at all. The adjudication in the design spec §8.1 settled which this
+ * library follows; see PROVENANCE.md for the captured figures.
+ *
+ * If the rule resolved to NOT acknowledging, this stays here, tested and
+ * called from nowhere, exactly as `applyReplyIdQuirk` does — internal to the
+ * package, never part of the published API, and one call site away in
+ * `Session.subscribe`. If the first real terminal delivers exactly one event
+ * and then goes silent, this is the first thing to try.
+ */
+export function ackEvent(sessionId: number, replyId = 0): Buffer {
+  return encodePayload({ command: CMD.ACK_OK, sessionId, replyId })
 }

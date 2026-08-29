@@ -161,6 +161,93 @@ above is `pyzk` agreeing with the documentation's description and with
 itself across session ids, not two independent oracles agreeing with each
 other. Comm-key mixing is on the first-hardware checklist for this reason.
 
+### 3. The acknowledgment — decided on a single source, the other contributed nothing
+
+The protocol documentation says a client answers every pushed realtime event
+with `CMD_ACK_OK`, carrying the session id and a zero reply number. Reading
+`zkteco-js`'s source (MIT; permitted, see the Sources table) shows it never
+sends one. Those two sources disagree, and the decision rule for that
+disagreement — spec §8.1 — was fixed before any capture was taken: neither
+acknowledges → this library does not; both acknowledge → it does; they
+disagree → follow the specification and record the divergence; one of them
+never registers a subscription at all → it contributed no evidence either way,
+and the question is decided by the one that did, scoped to a single source.
+An absence of evidence is never filed as agreement.
+
+Both oracles were driven against the emulator's realtime path — the handler
+registers the client's mask and, in the same handler return, pushes three
+attendance events, so delivery needs no timing coordination between the
+oracle and emulator processes. Fixtures: `test/fixtures/oracle/realtime/`.
+
+**`pyzk`, TCP and UDP: never registered.** Both `realtime-*-pyzk.json`
+fixtures contain no `CMD_REG_EVENT` (500) packet at all. `pyzk`'s
+`live_capture()` sends `CMD_CONNECT` (1000), then three further
+request/reply exchanges (commands 50, 62, 60 — none of them
+`CMD_REG_EVENT`), then gives up with `Cant Verify` printed to stderr and
+sends `CMD_EXIT` (1001). Whatever internal check that message refers to,
+`pyzk` never reached the point of registering a subscription, on either
+transport. Per §8.1's fourth branch, `pyzk` contributed no evidence on
+acknowledgment — its silence here is recorded as nothing, not as an
+oracle that "didn't acknowledge."
+
+**`zkteco-js`, TCP and UDP: registered, then sent nothing further but the
+goodbye.** Both `realtime-*-zkteco-js.json` fixtures show `CMD_CONNECT`,
+then `CMD_REG_EVENT` with a 4-byte little-endian mask of `01000000`
+(`EVENT_FLAG.ATTENDANCE`), matching this library's `encodeEventMask`
+byte-for-byte. After that registration, the only further packet on either
+transport is `CMD_EXIT`. No `CMD_ACK_OK`, and nothing else, was ever sent
+back for any of the three events the emulator pushed. `zkteco-js` is
+therefore the only oracle to contribute evidence on this question, and what
+it shows is: it does not acknowledge.
+
+**Conclusion, scoped to exactly that evidence:** this is a single-source
+finding, the way the comm-key vindication above is scoped to a single
+source, and for the same reason — `pyzk` produced nothing here to
+corroborate or contradict it. `zkteco-js`'s captured behaviour agrees with
+what reading its source already showed, and per §8.1 this library does not
+acknowledge either. `ackEvent()` (`src/codec/events.ts`) builds the documented
+`CMD_ACK_OK` and is tested, but — like `applyReplyIdQuirk` — it is not called
+from `Session.subscribe` and is not exported from `src/index.ts`. If the
+first real device stops delivering after one event, wiring this in at that
+one call site is the first thing to try; that is on the first-hardware
+checklist.
+
+The `CMD_REG_EVENT` request payload being a 4-byte little-endian mask is
+**byte-level** evidence: `zkteco-js`'s captured bytes (`01000000`) are a
+direct comparison against this library's own encoding, no device involved.
+The acknowledgment finding above is also byte-level: it rests on which
+packets were or were not observed on the wire, not on decoding anything.
+
+**The event-type-in-the-session-id-slot claim (`readEventType`,
+`src/codec/events.ts`) is weaker than both: it is behavioural, not a byte
+match.** No oracle *sends* an event — a device does, and pushing one is the
+emulator's job in every capture here, using this library's own encoder
+(`eventPacket` in `test/emulator/index.ts`). The evidence is not this
+capture; it is reading `zkteco-js`'s own receive-side source (MIT,
+permitted): `checkNotEventTCP`/`checkNotEventUDP` and
+`decodeRecordRealTimeLog52`/`decodeRecordRealTimeLog18`, in its
+`src/helper/utils.js`, read the event indicator from byte offset 4 of the
+decoded header — the same slot `readEventType` reads,
+and the same one a session id otherwise occupies. That is an independent
+implementation, written without reference to this project, landing on the
+same offset for the same field — a real second source, but a source-level
+one: it says two implementations were *written* the same way, not that
+either was *exercised* against a device.
+
+This realtime capture does not add to that: the driver's callback is a
+no-op, so nothing here records what, if anything, `zkteco-js` decoded from
+the pushed events, and both of its gates fail silently on a mismatch —
+`checkNotEventTCP` swallows a parse error and returns false, and the UDP
+path's own length check (`data.length === 18`) means it would not even
+attempt to decode the 44-byte packets this capture's events actually are.
+A capture where nothing crashed is therefore not evidence that decoding
+succeeded; it is simply uninformative here either way. The most that can
+honestly be claimed is the source-level agreement above — not proof that a
+real device puts the event type at that offset, only that nothing here or
+in `zkteco-js`'s written logic disagrees with the documentation on where it
+goes. That is materially weaker than a byte-level match, and it stays on the
+first-hardware checklist.
+
 ## Inbound checksums are not validated
 
 `decodePayload` (`src/codec/packet.ts`) reads the checksum field into

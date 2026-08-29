@@ -32,6 +32,13 @@ const LOW_BYTE_VARIANT_SESSION_ID = 0x1f99 // same high byte as the baseline (0x
 const HIGH_BYTE_VARIANT_SESSION_ID = 0x2e2e // same low byte as the baseline (0x2e), different high byte
 const SECOND_COMM_KEY = 5678
 
+// Realtime captures live in their own directory, NOT in OUT_DIR.
+// test/oracle/fixtures.spec.ts scans every *.json directly under OUT_DIR and
+// asserts an exact count of discriminating packets for the reply-id
+// adjudication; these fixtures answer a different question and would silently
+// change a number that test pins on purpose.
+const REALTIME_DIR = path.join(OUT_DIR, 'realtime')
+
 function pythonPath(): string {
   const win = path.join('tools', 'oracle', '.venv', 'Scripts', 'python.exe')
   const posix = path.join('tools', 'oracle', '.venv', 'bin', 'python')
@@ -106,6 +113,60 @@ async function capture(
   }
 }
 
+/**
+ * Records what an oracle puts on the wire for a realtime subscription.
+ *
+ * The emulator pushes three events in the same handler return as the
+ * registration ack, so the oracle receives them without any timing
+ * coordination between the two processes.
+ */
+async function captureRealtime(
+  source: 'pyzk' | 'zkteco-js',
+  transport: 'tcp' | 'udp',
+): Promise<void> {
+  const pushes = [0x01, 0x02, 0x03].map((n) => {
+    const data = Buffer.alloc(36)
+    data.write(`ORACLE${n}`, 0, 9, 'ascii')
+    data.set([26, 8, 27, 8, 1, n], 26)
+    return { eventType: 1, data }
+  })
+  const emulator = await startEmulator({
+    transport,
+    sessionId: EMULATOR_SESSION_ID,
+    pushWithAck: pushes,
+  })
+  try {
+    if (source === 'pyzk') {
+      await run(pythonPath(), [
+        'tools/oracle/capture_pyzk_realtime.py', String(emulator.port), transport,
+      ])
+    } else {
+      await run(
+        'npx',
+        ['tsx', 'tools/oracle/capture_zkjs_realtime.ts', String(emulator.port), transport],
+        true,
+      )
+    }
+    await new Promise((r) => setTimeout(r, 300))
+
+    const packets = emulator.received.map((p, i) => ({
+      hex: emulator.receivedRaw[i]!.toString('hex'),
+      command: p.command,
+      checksum: p.checksum,
+      sessionId: p.sessionId,
+      replyId: p.replyId,
+      data: p.data.toString('hex'),
+    }))
+    const fixture = { source, transport, emulatorSessionId: EMULATOR_SESSION_ID, packets }
+    mkdirSync(REALTIME_DIR, { recursive: true })
+    const file = path.join(REALTIME_DIR, `realtime-${transport}-${source}.json`)
+    writeFileSync(file, `${JSON.stringify(fixture, null, 2)}\n`)
+    process.stdout.write(`wrote ${file} (${packets.length} packets)\n`)
+  } finally {
+    await emulator.close()
+  }
+}
+
 for (const transport of ['tcp', 'udp'] as const) {
   for (const source of ['pyzk', 'zkteco-js'] as const) {
     await capture(source, transport, 0)
@@ -121,3 +182,9 @@ for (const transport of ['tcp', 'udp'] as const) {
 await capture('pyzk', 'tcp', ORACLE_COMM_KEY, LOW_BYTE_VARIANT_SESSION_ID, 'auth-lowbyte', COMMKEY_DIR)
 await capture('pyzk', 'tcp', ORACLE_COMM_KEY, HIGH_BYTE_VARIANT_SESSION_ID, 'auth-highbyte', COMMKEY_DIR)
 await capture('pyzk', 'tcp', SECOND_COMM_KEY, EMULATOR_SESSION_ID, 'auth-keydiff', COMMKEY_DIR)
+
+for (const transport of ['tcp', 'udp'] as const) {
+  for (const source of ['pyzk', 'zkteco-js'] as const) {
+    await captureRealtime(source, transport)
+  }
+}
