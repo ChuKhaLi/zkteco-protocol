@@ -19,6 +19,7 @@
     }
   },
   "files": ["dist", "README.md", "LICENSE", "PROVENANCE.md"],
+  "bin": { "zkteco-protocol": "./dist/cli.js" },
   "engines": { "node": ">=20.19" },
   "scripts": {
     "build": "tsup",
