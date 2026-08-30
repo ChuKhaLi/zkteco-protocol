@@ -612,7 +612,9 @@ design spec (`docs/superpowers/specs/2026-08-28-zkteco-realtime-events-design.md
 not from this document. Items 15 onward, and their §-cross-references, come
 from §12 of the terminal read design spec
 (`docs/superpowers/specs/2026-08-29-zkteco-terminal-read-design.md`), not from
-this document either.
+this document either. Item 23 comes from the v0.3.1 change that centralised the `ACK_UNAUTH`
+guard in `Session.execute`; that was a bounded change with no spec of its own, so this list is
+the only copy of item 23 and there is no second one to diff against.
 
 The target device is a Multi-Bio-class terminal exposing both TCP/IP pull on 4370 and push
 protocols, chosen so a firmware that refuses port 4370 does not require buying a second unit.
@@ -699,6 +701,18 @@ and which of the two dialects the model emits.
     plausible-looking date with nothing to contradict it. This is v0.1 transport architecture, not
     something this scope introduced, and no code change is proposed here — record what a real
     device does before deciding whether one is warranted.
+
+23. Does any firmware answer **`ACK_UNAUTH` to mean "this command is not supported"** rather
+    than "you are not authorized"? Since v0.3.1 `Session.execute` throws `ZkAuthError` on
+    `ACK_UNAUTH` for every command, and for `CMD_PREPARE_BUFFER` that **replaces a fallback that
+    used to happen by accident**: an `ACK_UNAUTH` body failed `readBulkBuffered`'s 4-byte size
+    check as a `ZkProtocolError`, which is exactly the signal `readBulk` reads as "this firmware
+    does not implement 1503", so the read retried down the legacy path — and succeeded. Firmware
+    that refuses an unknown 1503 with `ACK_UNAUTH` therefore reached the legacy fallback before
+    v0.3.1 and fails outright after it. The change is deliberate, because the old behaviour turned
+    an authentication failure into a full user list the caller could not tell from a good one, but
+    it is still a behaviour change on firmware nobody has observed. Record what a real device
+    answers to an unsupported buffered command before concluding nothing was lost.
 
 Until that happens, every line of this library is a hypothesis.
 

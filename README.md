@@ -86,7 +86,8 @@ const id = await device.getIdentity()
 ```
 
 A `null` field means the device **answered and refused that keyword** — not that
-the read failed. A timeout or a dropped connection throws instead. An empty
+the read failed. A timeout, a dropped connection, or a device that says the
+session is not authorized (`ZkAuthError`) all throw instead. An empty
 string is a third, distinct answer: the device supplied the key with no value.
 
 For anything else the device exposes:

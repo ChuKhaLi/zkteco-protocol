@@ -498,10 +498,21 @@ No new error class. The published taxonomy stays as v0.1 shipped it.
 
 - A device refusing a keyword is **not** an error: a `null` field, or an absent key (§4.2).
 - A malformed reply — no `=`, or an echo that does not match — is `ZkProtocolError`.
-- An `ACK_UNAUTH` reply is `ZkProtocolError`, in all three reads. It is the one non-acknowledgment
+- An `ACK_UNAUTH` reply is `ZkAuthError`. It is the one non-acknowledgment
   code this codebase already assigns a meaning to (`Session.open` handles it during the comm-key
   handshake), so it cannot be a genuine parameter, firmware or clock reply under any reading, and
   it is never decoded as one.
+
+  **Amended in v0.3.1.** v0.3 shipped this as `ZkProtocolError` and guarded only these three
+  reads. v0.3.1 moved the guard into `Session.execute`, so every `execute()` call site in the
+  library inherits it — including `getInfo`, `getUsers` and `getAttendanceLogs`, shipped
+  unguarded in v0.1 — and reclassified it to `ZkAuthError`. `getParameters` and `readFirmware`
+  keep guards of their own because they call `tryExecute`, which is raw by design; `getTime`'s
+  was deleted as unreachable. The class is load-bearing, not cosmetic: `readBulk` falls back from
+  the buffered commands to the legacy exchange on exactly `err instanceof ZkProtocolError`, so an
+  `ACK_UNAUTH` classed as a protocol error was read as "this firmware does not implement 1503"
+  and retried down a path that answered it successfully — an authentication failure resolving
+  into a full user list. As a sibling class under `ZkError` it propagates instead.
 
   The clock is the sharpest of the three and was guarded last. A parameter reply that is not an
   answer is caught by the echo check and a short clock reply by the length check — but four bytes
@@ -517,8 +528,7 @@ reply, `ACK_UNAUTH`, timeout, dropped connection, framing error — propagates o
 and no salvage, per v0.1 §2.4.
 
 **This is not a claim that `ACK_OK` is the only acknowledgment a real device sends for these
-commands.** `getParameters`, `readFirmware` and `getTime` branch only on `ACK_ERROR` and
-`ACK_UNAUTH`; any other reply command is accepted and decoded as the answer. Tightening that to "only `ACK_OK`
+commands.** These reads branch only on `ACK_ERROR` and `ACK_UNAUTH`; any other reply command is accepted and decoded as the answer. Tightening that to "only `ACK_OK`
 counts" is deliberately not done: nothing confirms real firmware acknowledges `CMD_OPTIONS_RRQ`
 with `ACK_OK` rather than, say, `ACK_DATA`, and inventing that constraint would itself be an
 unevidenced hypothesis. `ACK_UNAUTH` is singled out because it is the only non-acknowledgment code
