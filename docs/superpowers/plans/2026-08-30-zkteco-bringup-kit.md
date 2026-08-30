@@ -1508,7 +1508,7 @@ export const ATTENDANCE_AUTO_THRESHOLD = 10_000
 export function encodingVerdict(
   names: readonly string[],
 ): { namesInspected: number; withHighBytes: number; validUtf8: boolean | null } {
-  const high = names.filter((n) => /[-ÿ]/.test(n))
+  const high = names.filter((n) => [...n].some((c) => c.charCodeAt(0) >= 0x80))
   if (high.length === 0) {
     return { namesInspected: names.length, withHighBytes: 0, validUtf8: null }
   }
