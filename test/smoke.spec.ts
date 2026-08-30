@@ -3,10 +3,10 @@ import { VERSION } from '../src/index.js'
 
 describe('toolchain', () => {
   it('runs tests and resolves source imports', () => {
-    expect(VERSION).toBe('0.3.1')
+    expect(VERSION).toBe('0.3.2')
   })
 
-  it('exports exactly the public surface v0.3.1 promises, unchanged from v0.3', async () => {
+  it('exports exactly the public surface v0.3.2 promises, unchanged since v0.3', async () => {
     const api = await import('../src/index.js')
     expect(Object.keys(api).sort()).toEqual([
       'DEVICE_PARAM',
