@@ -271,16 +271,16 @@ function formatChecklistTable(rows: readonly ChecklistRow[]): string {
 
 function formatStepTable(steps: readonly StepResult[]): string {
   if (steps.length === 0) return '_No steps ran._'
-  // Deliberately omits `value` and `raw`. `value` is safe by construction —
-  // see the redaction note on renderJson — but `raw` is not: on the 'users'
-  // and 'attendance' steps it can carry hex straight out of
-  // parseUserData/parseAttendanceData's declared-size-mismatch guard, which
-  // is a slice of the actual record bytes (see the redaction finding in the
-  // task report). This table sticks to the outcome summary the design spec
-  // asks for (§5.1: "per-step outcomes") rather than any payload bytes.
-  const lines = ['| Step | Outcome | Error | Message |', '|---|---|---|---|']
+  // Deliberately omits `value` (safe by construction — see the redaction note
+  // on renderJson). `rawByteLength` is included: since Fix round 1 it is a
+  // count, never the bytes themselves (see StepResult.rawByteLength's doc
+  // comment), which is exactly what the design spec's §5.1 "per-step
+  // outcomes (command, ack code, body length)" content list asks for.
+  const lines = ['| Step | Outcome | Error | Message | Raw bytes |', '|---|---|---|---|---|']
   for (const step of steps) {
-    lines.push(`| ${step.name} | ${step.outcome} | ${step.errorClass ?? ''} | ${step.errorMessage ?? ''} |`)
+    lines.push(
+      `| ${step.name} | ${step.outcome} | ${step.errorClass ?? ''} | ${step.errorMessage ?? ''} | ${step.rawByteLength ?? ''} |`,
+    )
   }
   return lines.join('\n')
 }
@@ -343,14 +343,16 @@ export function renderMarkdown(result: ProbeResult): string {
  * `Findings` cannot be trusted on its own. This function trusts it, and
  * mirrors `result` unmodified.
  *
- * NOTE (reported, not filtered here — see the task report): `steps` is
- * outside that guarantee. `StepResult.raw` is populated from `ZkError.raw`,
- * and on the 'users' and 'attendance' steps that can be a slice of the raw
- * record bytes coming straight out of `parseUserData` /
- * `parseAttendanceData`'s declared-size-mismatch guard — bytes that were
- * never routed through `Findings` and so never had the chance to be
- * redacted. This function still renders `result` as given, per this task's
- * brief; the fix belongs where Tasks 4 and 6 put theirs, at the source.
+ * `steps` gets the same trust, and for the same reason, as of Fix round 1:
+ * `StepResult` no longer has anywhere to carry payload bytes.
+ * `StepRunner.run` now stores only `rawByteLength`, a count, never the hex —
+ * see `StepResult.rawByteLength`'s doc comment. Before that fix, `StepResult`
+ * could carry a slice of real device bytes (a mismatched parameter echo, or a
+ * malformed user/attendance record) that had never passed through `Findings`
+ * and so had never been redacted; this function rendering `result` unmodified
+ * would have carried that straight into the shareable sidecar. The fix is at
+ * the source, same as Tasks 4 and 6 — this function still does no filtering
+ * of its own.
  */
 export function renderJson(result: ProbeResult): object {
   return { ...result, checklist: buildChecklist(result) }

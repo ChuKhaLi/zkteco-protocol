@@ -103,6 +103,29 @@ describe('probeIdentity', () => {
     expect(JSON.stringify(findings)).not.toContain('SN-123')
   })
 
+  it("records a refused parameter read as 'refused', not 'ok'", async () => {
+    // §6.1: ACK_ERROR is an answer the device gave, not a bug in this tool --
+    // recording it as 'ok' would be indistinguishable from a real empty read.
+    running = await startEmulator({ transport: 'tcp', params: {}, firmware: 'Ver 6.60' })
+    session = await open(running.port)
+    const runner = new StepRunner()
+    const findings = emptyFindings()
+    await probeIdentity(session, runner, findings)
+    const paramSteps = runner.steps.filter((s) => s.name.startsWith('param:'))
+    expect(paramSteps.length).toBeGreaterThan(0)
+    expect(paramSteps.every((s) => s.outcome === 'refused')).toBe(true)
+  })
+
+  it("records a refused firmware read as 'refused', not 'ok'", async () => {
+    running = await startEmulator({ transport: 'tcp', params: PARAMS, firmware: null })
+    session = await open(running.port)
+    const runner = new StepRunner()
+    const findings = emptyFindings()
+    await probeIdentity(session, runner, findings)
+    const firmwareStep = runner.steps.find((s) => s.name === 'firmware')
+    expect(firmwareStep?.outcome).toBe('refused')
+  })
+
   it('keeps the serial number value out of the step trace as well as findings', async () => {
     // The parameter sweep's runner.run callback return value lands in
     // StepResult.value, which flows into the rendered report independently

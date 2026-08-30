@@ -45,6 +45,18 @@ export interface StepResult<T = unknown> {
   value?: T
   errorClass?: string
   errorMessage?: string
-  /** Hex the error already carried, when it carried any. */
-  raw?: string
+  /**
+   * How many bytes the error already carried, when it carried any — never the
+   * bytes themselves.
+   *
+   * `ZkError.raw` can be an arbitrary slice of a device reply: a mismatched
+   * parameter echo carries `keyword=value` verbatim, and a malformed bulk-read
+   * body can carry a slice of real user or attendance record bytes (see
+   * `parseUserData` / `parseAttendanceData`). None of that has passed through
+   * `Findings`, so it has never had the chance to be redacted the way
+   * `Findings` is. A count answers "how much evidence is there" without
+   * repeating the evidence — the raw capture (opt-in, and unredacted by
+   * design) is where the bytes themselves belong.
+   */
+  rawByteLength?: number
 }

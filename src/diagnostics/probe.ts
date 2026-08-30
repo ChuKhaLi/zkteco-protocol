@@ -9,7 +9,7 @@ import { getUsers } from '../commands/users.js'
 import { getAttendanceLogs } from '../commands/attendance.js'
 import type { Session } from '../session/Session.js'
 import type { ZkNaiveTime, ZkUser } from '../types.js'
-import type { StepRunner } from './step.js'
+import { refused, type StepRunner } from './step.js'
 import type { TraceEvent } from './types.js'
 
 /** Which CMD_OPTIONS_RRQ request shapes the device accepted. */
@@ -158,7 +158,9 @@ export async function probeIdentity(
   // is otherwise indistinguishable from the answer item 16 exists to collect.
   await runner.run('firmware', async () => {
     const res = await session.tryExecute(CMD.GET_VERSION)
-    if (res.command === CMD.ACK_ERROR) return null
+    // ACK_ERROR is decoded inline rather than thrown, so it is reported here
+    // rather than via classifyError — see Refused's doc comment.
+    if (res.command === CMD.ACK_ERROR) return refused(null)
     const value = readNulTerminated(res.data, 0, res.data.length)
     findings.identity.firmwareVersion = value
     return value
@@ -175,7 +177,12 @@ export async function probeIdentity(
       const res = await session.tryExecute(CMD.OPTIONS_RRQ, nulTerminated(key))
       if (!answeredKeyword(res.command, res.data, key)) {
         findings.parameters.push({ key, answered: false, empty: false })
-        return null
+        // Only ACK_ERROR is a refusal in the StepOutcome sense (see Refused's
+        // doc comment). ACK_UNAUTH and a mismatched echo also land here —
+        // findings.parameters records all three alike as `answered: false`,
+        // unchanged — but they are not what item 16 means by a refusal, so
+        // the step outcome stays 'ok' for those two.
+        return res.command === CMD.ACK_ERROR ? refused(null) : null
       }
       const value = paramValue(res.data) ?? ''
       findings.parameters.push({ key, answered: true, empty: value === '' })
