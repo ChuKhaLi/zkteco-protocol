@@ -59,6 +59,17 @@ export interface EmulatorOptions {
    * echo guard in src/codec/params.ts has something to catch.
    */
   paramEchoOverride?: string
+  /**
+   * Which CMD_OPTIONS_RRQ request shape this device understands.
+   *
+   * Defaults to 'either', which models the tolerant device v0.3 §8.1's
+   * "they disagree" branch assumed — pyzk sends the keyword NUL-terminated,
+   * zkteco-js sends it bare, and the library ships pyzk's form as a guess
+   * (first-hardware checklist item 18). 'nul' and 'bare' model a device that
+   * understands only one, so the probe's A/B can be tested against all four
+   * outcomes instead of only the one the tolerant default produces.
+   */
+  keywordForm?: 'nul' | 'bare' | 'either'
   info?: { userCount: number; recordCount: number; recordCapacity: number }
   /**
    * Events written in the SAME handler return as the registration ack, so
@@ -280,14 +291,16 @@ const bufferedHandlers: HandlerTable = {
  */
 const terminalHandlers: HandlerTable = {
   [CMD.OPTIONS_RRQ]: (req, state) => {
-    // Strips a single trailing NUL, if present, before matching. pyzk and
-    // zkteco-js disagree on whether the request carries one — see
-    // encodeParamRequest's docblock and PROVENANCE.md — so this models a
-    // device tolerant of either form (design spec §8.1's "they disagree"
-    // branch) rather than baking in only the shape this library happens to
-    // send.
     const raw = req.data.toString('latin1')
-    const keyword = raw.endsWith('\0') ? raw.slice(0, -1) : raw
+    const hasNul = raw.endsWith('\0')
+    const keyword = hasNul ? raw.slice(0, -1) : raw
+    // A device that understands only one request shape refuses the other
+    // outright — indistinguishable, from the client's side, from refusing an
+    // unknown keyword. That ambiguity is real and is why the probe's A/B has
+    // a 'neither' outcome (design spec §4.2).
+    const form = state.opts.keywordForm ?? 'either'
+    if (form === 'nul' && !hasNul) return [reply(state, req, CMD.ACK_ERROR)]
+    if (form === 'bare' && hasNul) return [reply(state, req, CMD.ACK_ERROR)]
     const params = state.opts.params ?? {}
     if (!Object.hasOwn(params, keyword)) return [reply(state, req, CMD.ACK_ERROR)]
     const echoed = state.opts.paramEchoOverride ?? keyword

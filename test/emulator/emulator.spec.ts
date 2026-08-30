@@ -9,7 +9,11 @@ import { TcpTransport } from '../../src/transport/tcp.js'
 import { Session } from '../../src/session/Session.js'
 
 let running: Emulator | null = null
-afterEach(async () => { await running?.close(); running = null })
+let session: Session | null = null
+afterEach(async () => {
+  await session?.close().catch(() => {}); session = null
+  await running?.close(); running = null
+})
 
 /** Sends one raw payload and resolves with the first reply payload. */
 function roundTripTcp(port: number, payload: Buffer): Promise<Buffer> {
@@ -219,5 +223,48 @@ describe('terminal read handlers', () => {
     } finally {
       await unconfigured.close()
     }
+  })
+})
+
+describe('emulator keywordForm', () => {
+  const open = async (port: number): Promise<Session> => {
+    const s = new Session(new TcpTransport({ host: '127.0.0.1', port }), { timeoutMs: 2000 })
+    await s.open()
+    return s
+  }
+
+  it("defaults to tolerating either request shape", async () => {
+    running = await startEmulator({ transport: 'tcp', params: { '~SerialNumber': 'ABC' } })
+    session = await open(running.port)
+    const withNul = await session.tryExecute(CMD.OPTIONS_RRQ, Buffer.from('~SerialNumber\0', 'latin1'))
+    const bare = await session.tryExecute(CMD.OPTIONS_RRQ, Buffer.from('~SerialNumber', 'latin1'))
+    expect(withNul.command).not.toBe(CMD.ACK_ERROR)
+    expect(bare.command).not.toBe(CMD.ACK_ERROR)
+  })
+
+  it("refuses the bare shape when keywordForm is 'nul'", async () => {
+    running = await startEmulator({
+      transport: 'tcp',
+      params: { '~SerialNumber': 'ABC' },
+      keywordForm: 'nul',
+    })
+    session = await open(running.port)
+    const withNul = await session.tryExecute(CMD.OPTIONS_RRQ, Buffer.from('~SerialNumber\0', 'latin1'))
+    const bare = await session.tryExecute(CMD.OPTIONS_RRQ, Buffer.from('~SerialNumber', 'latin1'))
+    expect(withNul.command).not.toBe(CMD.ACK_ERROR)
+    expect(bare.command).toBe(CMD.ACK_ERROR)
+  })
+
+  it("refuses the NUL-terminated shape when keywordForm is 'bare'", async () => {
+    running = await startEmulator({
+      transport: 'tcp',
+      params: { '~SerialNumber': 'ABC' },
+      keywordForm: 'bare',
+    })
+    session = await open(running.port)
+    const withNul = await session.tryExecute(CMD.OPTIONS_RRQ, Buffer.from('~SerialNumber\0', 'latin1'))
+    const bare = await session.tryExecute(CMD.OPTIONS_RRQ, Buffer.from('~SerialNumber', 'latin1'))
+    expect(withNul.command).toBe(CMD.ACK_ERROR)
+    expect(bare.command).not.toBe(CMD.ACK_ERROR)
   })
 })
