@@ -203,8 +203,8 @@ npx zkteco-protocol <host> [flags]
 | `--attendance` | `auto` | `auto` reads the attendance log unless the device reports more than 10,000 records; `always` reads regardless; `never` skips it. |
 | `--out` | *(stdout)* | Where the Markdown report goes. The JSON sidecar is always written too — alongside it, or as `zkteco-report.json` in the current directory when `--out` is omitted. |
 | `--raw-capture <path>` | *(off)* | Opt-in path for the raw wire capture — see below. |
-| `--realtime <seconds>` | `0` | Hold a realtime subscription open this long and probe it. **Not implemented yet** — the flag parses but the probe does not run. |
-| `--concurrent` | `false` | Probe whether the device accepts a second connection. **Not implemented yet** — the flag parses but the probe does not run. |
+| `--realtime <seconds>` | `0` | Hold a realtime subscription open this long and probe it. **Off by default, and irreversible**: subscribing switches the connection to one-way push mode for good (`Transport.listen`), so this always runs last, after every other probe. |
+| `--concurrent` | `false` | Probe whether the device accepts a second connection, opened alongside the first. Off by default; runs on its own socket and does not disturb the session the rest of the probe uses. |
 
 Exit code is `0` whenever the probe connected and its output reached disk,
 even if the device refused every single step — a terminal that says no to
