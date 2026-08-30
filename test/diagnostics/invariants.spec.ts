@@ -29,6 +29,11 @@ const ALLOWED = new Set<number>([
 const SERIAL = 'SN-DO-NOT-LEAK'
 const NAME = 'Zaphod Beeblebrox'
 const USER_ID = 'EMP-9931'
+/** Not sensitive -- the model name is sanctioned to appear in the report
+ *  (checklist item 7's compatibility table needs it). Doubles as the positive
+ *  control below: a renderer that silently returned nothing would fail here
+ *  even though it vacuously "contains none of the secrets" too. */
+const DEVICE_NAME = 'MB360'
 
 function emUser(): ZkUser {
   const b = Buffer.alloc(USER_RECORD_SIZE)
@@ -41,7 +46,7 @@ function emUser(): ZkUser {
 async function runProbe() {
   running = await startEmulator({
     transport: 'tcp',
-    params: { '~SerialNumber': SERIAL, '~DeviceName': 'MB360' },
+    params: { '~SerialNumber': SERIAL, '~DeviceName': DEVICE_NAME },
     firmware: 'Ver 6.60',
     info: { userCount: 1, recordCount: 1, recordCapacity: 1000 },
     users: [emUser()],
@@ -86,6 +91,28 @@ describe('probe invariants', () => {
       expect(md).not.toContain(secret)
       expect(json).not.toContain(secret)
     }
+
+    // POSITIVE CONTROLS (Ruling F8). Without these, "the report contains none
+    // of the secrets" passes just as well when renderMarkdown/renderJson
+    // return nothing at all as it does when they redacted correctly -- the
+    // exact vacuity the raw-capture control below exists to rule out for the
+    // raw capture, left unaddressed here until this round. deviceName is the
+    // right value to assert on: it is sanctioned to appear (checklist item 7
+    // needs it), so a real, correctly-redacting renderer must still contain it.
+    //
+    // The two checks are not symmetric, deliberately, and that asymmetry is
+    // itself worth documenting rather than discovering by surprise later:
+    // renderJson mirrors `result` with NO filtering (see its own doc comment)
+    // -- it is JSON's job to be the catch-all, so `json` above is checked
+    // against every one of SERIAL/NAME/USER_ID and would catch a leak into
+    // ANY field, sanctioned or not. renderMarkdown instead allowlists which
+    // identity fields it prints raw (deviceName, platform, os,
+    // firmwareVersion) versus presence-only (serialNumberPresent) -- so `md`
+    // above can only catch a leak that lands in one of those printed fields.
+    // Do not read the Markdown check as the stronger of the two, and do not
+    // weaken the JSON check on the assumption Markdown already covers it.
+    expect(md).toContain(DEVICE_NAME)
+    expect(json).toContain(DEVICE_NAME)
 
     // THE CONTROL. Without this the test above passes when the probe captured
     // nothing at all -- which is exactly the defect shape this project has
