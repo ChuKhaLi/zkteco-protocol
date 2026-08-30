@@ -82,7 +82,7 @@ describe('probe invariants', () => {
     const { runner, findings, traced } = await runProbe()
     const result = {
       libraryVersion: '0.4.0', host: '127.0.0.1', transport: 'tcp' as const,
-      startedAt: '2026-08-30T00:00:00.000Z', durationMs: 0,
+      startedAt: '2026-08-30T00:00:00.000Z', durationMs: 0, rawCapture: null,
       truncated: runner.truncated, steps: runner.steps, findings,
     }
     const md = renderMarkdown(result)

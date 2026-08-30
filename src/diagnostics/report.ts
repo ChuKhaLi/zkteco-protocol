@@ -14,6 +14,17 @@ export interface ProbeResult {
   startedAt: string
   durationMs: number
   truncated: { after: string; reason: string } | null
+  /**
+   * Where this run is writing its raw capture, or null when `--raw-capture`
+   * was not passed.
+   *
+   * Checklist item 1 is answered by that file and by nothing else (design spec
+   * §4.5), and `steps` cannot stand in for it: a default run traces every byte
+   * in memory and then drops it when the process exits. Only the CLI knows
+   * whether a capture was asked for, so only the CLI can fill this in — which
+   * costs the purity boundary nothing, since it already owns every path.
+   */
+  rawCapture: string | null
   steps: readonly StepResult[]
   findings: Findings
 }
@@ -149,22 +160,140 @@ function concurrentObservation(f: Findings): string {
 }
 
 /**
+ * The message `tryUnframeTcp` throws when MAX_DECLARED_SIZE rejects a packet
+ * (`src/codec/framing.ts`), matched loosely enough to survive a reworded
+ * sentence but tightly enough not to match anything else in the codebase.
+ */
+const DECLARED_SIZE_CAP_MESSAGE = /declared payload size \d+ exceeds/
+
+/**
+ * Did this step carry the TCP declared-size cap firing?
+ *
+ * Item 5 names exactly one constant: `MAX_DECLARED_SIZE` in
+ * `src/codec/framing.ts`. That cap throws `ZkProtocolError` (framing.ts:49).
+ * It does NOT throw `ZkFramingError` — that class is thrown only by the two
+ * record parsers (`codec/records/user.ts`, `codec/records/attendance.ts`),
+ * which have nothing to do with framing.ts, and the two classes are siblings
+ * under `ZkError` so no subtype relation blurs them.
+ *
+ * The class alone is not enough either: `ZkProtocolError` covers most of the
+ * protocol surface (a start-marker mismatch, a short decode, an ACK_ERROR),
+ * and any of those would otherwise answer item 5 with an unrelated event.
+ * Hence class AND the cap's own message.
+ *
+ * Matching on prose is a real coupling and it is deliberate. The alternative —
+ * exporting a predicate from framing.ts — would change the library this
+ * diagnostic exists to falsify, and a read-only tool does not get to do that.
+ * The coupling is pinned instead by a test that produces the error from the
+ * real `tryUnframeTcp`, so a reworded throw site reddens that test rather than
+ * silently switching this row off.
+ */
+function isDeclaredSizeCap(step: StepResult): boolean {
+  return step.errorClass === 'ZkProtocolError' && DECLARED_SIZE_CAP_MESSAGE.test(step.errorMessage ?? '')
+}
+
+/**
+ * Why no attendance record size is available, as a clause that reads inside a
+ * sentence — items 1, 3 and 11 all need it and must not contradict each other.
+ *
+ * The four cases the data already separates, and used to be collapsed into one
+ * false sentence ("attendance was not read"):
+ *
+ * - `findings.attendance === null` with an `attendance` step present: the read
+ *   was attempted and threw. Saying "not read" here also contradicts the step
+ *   table one section below, which shows that step and its outcome.
+ * - `findings.attendance === null` with no such step: never attempted — the
+ *   run was truncated before it, or `probeBulk` never got that far.
+ * - `skippedReason !== null`: attempted and deliberately skipped.
+ * - `read: true` with `rowCount === 0`: READ, and the device answered zero
+ *   records. That is a finding in its own right — an empty log is the
+ *   overwhelmingly likely first device — not an absence, and telling the
+ *   operator to go read attendance is telling them to redo what they just did.
+ */
+function attendanceAbsence(result: ProbeResult): string {
+  const a = result.findings.attendance
+  if (a === null) {
+    const step = result.steps.find((s) => s.name === 'attendance')
+    return step
+      ? `the attendance read did not complete (step 'attendance' came back ${step.outcome})`
+      : 'attendance was not read'
+  }
+  if (a.skippedReason !== null) return `the attendance read was ${a.skippedReason}`
+  if (a.rowCount === 0) return 'attendance was read and the device returned 0 records'
+  return `attendance was read (${a.rowCount} record(s)) but no record size was reported`
+}
+
+/**
+ * Item 1's evidence, and whether it exists.
+ *
+ * Spec §4.5 answers item 1 with `--raw-capture` and with nothing else. The row
+ * used to gate on `steps.length > 0`, which says only that bytes moved through
+ * memory — on a default run they are gone with the process, and the row still
+ * said "see the accompanying raw capture" about a file nobody wrote.
+ *
+ * `rawCapture` is the path this run is writing the capture to, so "answered"
+ * means the bytes were routed to a file rather than that the write has already
+ * returned: `writeOutputs` renders the Markdown before it writes the capture.
+ * A failed capture write is not silent — it aborts `writeOutputs`, prints on
+ * stderr and exits non-zero — so the report can name the path without
+ * claiming more than the CLI will admit to.
+ *
+ * The question has two halves ("a full handshake AND one attendance read"), so
+ * an attendance read that never happened leaves it not answered even with a
+ * capture on disk.
+ */
+function item1State(result: ProbeResult): ChecklistState {
+  if (result.rawCapture === null || result.steps.length === 0) return 'not answered'
+  return result.findings.attendance?.read === true ? 'answered' : 'not answered'
+}
+
+function item1Observation(result: ProbeResult): string {
+  const { rawCapture, steps, findings } = result
+  if (steps.length === 0) return 'no steps ran, so there is nothing to capture.'
+  if (rawCapture === null) {
+    return `${steps.length} step(s) were traced in memory only and are gone with this process — re-run with --raw-capture <path> to write the bytes.`
+  }
+  if (findings.attendance?.read !== true) {
+    return `${steps.length} step(s) captured to ${rawCapture}, but ${attendanceAbsence(result)}, so the capture holds a handshake without an attendance read.`
+  }
+  return `${steps.length} step(s) captured to ${rawCapture}, including the attendance read.`
+}
+
+/**
  * Builds the 23-row first-hardware checklist from one probe result.
  *
  * The mapping from item to evidence follows the bringup-kit design spec §4.5
- * ("Checklist coverage") and §4.6 ("What cannot be probed") verbatim: each
- * item is driven by the same `Findings`/`steps` field that section names as
- * its answer. Item 22 is 'not testable by this tool' per the design doc's
- * "What cannot be probed" heading; item 12 shares that same state as of Fix
- * round 1 (F11) for an analogous reason the design doc predates — this
- * library has no cancel/unsubscribe primitive for the probe to exercise. No
- * OTHER item borrows either state, even where evidence is thin.
+ * ("Checklist coverage") and §4.6 ("What cannot be probed"): each item is
+ * driven by the `Findings`/`steps` field that section names as its answer.
+ * Item 22 is 'not testable by this tool' per the design doc's "What cannot be
+ * probed" heading; item 12 shares that same state as of Fix round 1 (F11) for
+ * an analogous reason the design doc predates — this library has no
+ * cancel/unsubscribe primitive for the probe to exercise. No OTHER item
+ * borrows either state, even where evidence is thin.
+ *
+ * Three deliberate departures, named here rather than left for a reader to
+ * discover by diffing against §4.5. This comment previously claimed the
+ * mapping was "verbatim" while sitting directly above two rows that were not:
+ *
+ * - **Item 5.** §4.5 names "framing error's `raw`, if it fires". `raw` no
+ *   longer exists on `StepResult` (Fix round 1, F5 — it could carry
+ *   unredacted device bytes into the sidecar), so the evidence here is the
+ *   cap's message plus a byte count, and the observation points at the opt-in
+ *   raw capture for the bytes themselves. See `isDeclaredSizeCap` for why the
+ *   error is matched the way it is.
+ * - **Item 19.** §4.5 says "`PREPARE_BUFFER`, unavoidably". True of the SEND
+ *   in both branches, so this row keys off whether that send reached the wire
+ *   (`findings.bulkPrepareAttempted`), not off `bulkPath` — which stays null
+ *   when the read fails after PREPARE_BUFFER was already exercised.
+ * - **Item 23.** §4.5 says "which bulk path was taken". That names the input,
+ *   not the state: only the `legacy` path carries a refusal to reason from, so
+ *   `buffered` is 'not answered' here. See the row itself.
  */
 function buildChecklist(result: ProbeResult): ChecklistRow[] {
   const f = result.findings
   const steps = result.steps
 
-  const framingStep = steps.find((s) => s.outcome === 'malformed' && s.errorClass === 'ZkFramingError')
+  const capStep = steps.find(isDeclaredSizeCap)
   const recordSize = f.attendance?.detectedRecordSize ?? null
 
   const rows: ChecklistRow[] = []
@@ -175,10 +304,8 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
   push(
     1,
     'Capture a raw byte dump of a full handshake and one attendance read.',
-    steps.length > 0 ? 'answered' : 'not answered',
-    steps.length > 0
-      ? `${steps.length} step(s) traced; see the accompanying raw capture for the bytes.`
-      : 'no steps ran',
+    item1State(result),
+    item1Observation(result),
   )
 
   push(
@@ -196,7 +323,7 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
     recordSize !== null ? 'answered' : 'not answered',
     recordSize !== null
       ? `detected record size: ${recordSize} bytes.`
-      : (f.attendance?.skippedReason ?? 'attendance was not read.'),
+      : `${attendanceAbsence(result)}, so no record size could be detected.`,
   )
 
   push(
@@ -211,10 +338,10 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
   push(
     5,
     'Confirm the TCP declared-size cap in src/codec/framing.ts is not rejecting legitimate traffic.',
-    framingStep ? 'answered' : 'not answered',
-    framingStep
-      ? `a framing error was observed on step '${framingStep.name}': ${framingStep.errorMessage ?? '(no message)'}.`
-      : 'no framing error was observed on this run — inconclusive, since the cap is only exercised if a device happens to send an oversized packet.',
+    capStep ? 'answered' : 'not answered',
+    capStep
+      ? `the cap REJECTED a packet on step '${capStep.name}': ${capStep.errorMessage ?? '(no message)'}. MAX_DECLARED_SIZE is an unverified local guess, so treat this as evidence the cap is too tight until the packet says otherwise. The rejected ${capStep.rawByteLength ?? 0}-byte prefix is in the raw capture (--raw-capture), not in this report.`
+      : 'the cap did not fire on this run — inconclusive, since it is only exercised if a device happens to declare an oversized packet. A record-parser framing error is NOT this cap and does not answer this item.',
   )
 
   push(
@@ -261,7 +388,7 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
     recordSize !== null ? 'answered' : 'not answered',
     recordSize !== null
       ? `inferred from the attendance record size (${recordSize} bytes).`
-      : 'attendance was not read, so the dialect could not be inferred.',
+      : `${attendanceAbsence(result)}, so the dialect could not be inferred.`,
   )
 
   push(

@@ -118,6 +118,7 @@ function sampleResult(): ProbeResult {
     startedAt: '2026-08-30T00:00:00.000Z',
     durationMs: 12,
     truncated: null,
+    rawCapture: null,
     steps: [{ name: 'firmware', outcome: 'ok' }],
     findings: emptyFindings(),
   }

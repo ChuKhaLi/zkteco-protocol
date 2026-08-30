@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest'
+import { START_MARKER, tryUnframeTcp } from '../../src/codec/framing.js'
+import { parseUserData } from '../../src/codec/records/user.js'
 import { emptyFindings } from '../../src/diagnostics/probe.js'
 import type { Findings } from '../../src/diagnostics/probe.js'
 import { renderJson, renderMarkdown, renderRawCapture } from '../../src/diagnostics/report.js'
 import type { ProbeResult } from '../../src/diagnostics/report.js'
-import type { TraceEvent } from '../../src/diagnostics/types.js'
+import { StepRunner } from '../../src/diagnostics/step.js'
+import type { StepResult, TraceEvent } from '../../src/diagnostics/types.js'
 
 function sample(): ProbeResult {
   const findings = emptyFindings()
@@ -18,9 +21,22 @@ function sample(): ProbeResult {
     startedAt: '2026-08-30T00:00:00.000Z',
     durationMs: 1234,
     truncated: null,
+    // The default run: no --raw-capture. This is the invocation the README
+    // documents first, and the one C-2 was rendered from.
+    rawCapture: null,
     steps: [{ name: 'firmware', outcome: 'ok' }],
     findings,
   }
+}
+
+/** A run that both captured bytes and read attendance — item 1's full evidence. */
+function withCapture(path: string, rowCount = 3): ProbeResult {
+  const result = sample()
+  result.rawCapture = path
+  result.findings.attendance = {
+    read: true, skippedReason: null, detectedRecordSize: 40, rowCount,
+  }
+  return result
 }
 
 describe('renderMarkdown', () => {
@@ -151,6 +167,101 @@ describe('the realtime/concurrent checklist mapping (Fix round 1, F9)', () => {
     const declined = renderMarkdown(withConcurrent({ accepted: false, error: 'connection refused' }))
     expect(checklistState(accepted, 10)).toBe('answered')
     expect(checklistState(declined, 10)).toBe('answered')
+  })
+})
+
+/**
+ * C-2. Item 1 said `answered` and pointed at "the accompanying raw capture" on
+ * a run that writes no such file — the README's own default invocation. Both
+ * directions again, plus the second half of the question ("and one attendance
+ * read"), which `steps.length > 0` was satisfied by the firmware step alone.
+ */
+describe('item 1 — the raw byte dump (C-2)', () => {
+  it('is not answered on a default run, and says the bytes are gone', () => {
+    const md = renderMarkdown(sample()) // rawCapture: null, one step traced
+    expect(checklistState(md, 1)).toBe('not answered')
+    expect(md).toMatch(/1 \|[^\n]*--raw-capture/)
+    // The false claim itself, named so a re-introduction cannot pass quietly.
+    expect(md).not.toMatch(/accompanying raw capture/)
+  })
+
+  it('is answered, naming the file, when a capture was requested and attendance was read', () => {
+    const md = renderMarkdown(withCapture('trace.jsonl'))
+    expect(checklistState(md, 1)).toBe('answered')
+    expect(md).toMatch(/1 \|[^\n]*trace\.jsonl/)
+  })
+
+  it('stays not answered when the capture exists but attendance was skipped', () => {
+    // "a full handshake AND one attendance read" -- half the evidence is not
+    // an answer, and --attendance=never is a normal thing to pass.
+    const result = withCapture('trace.jsonl')
+    result.findings.attendance = {
+      read: false, skippedReason: 'skipped: --attendance=never', detectedRecordSize: null, rowCount: 0,
+    }
+    const md = renderMarkdown(result)
+    expect(checklistState(md, 1)).toBe('not answered')
+    expect(md).toMatch(/1 \|[^\n]*--attendance=never/)
+  })
+})
+
+/** Runs one throwing callback through a real StepRunner, as the probe would. */
+async function stepsFrom(name: string, fn: () => unknown): Promise<readonly StepResult[]> {
+  const runner = new StepRunner()
+  await runner.run(name, async () => fn())
+  return runner.steps
+}
+
+/**
+ * C-1. Item 5 names exactly one constant — MAX_DECLARED_SIZE in
+ * src/codec/framing.ts — and the row was matching `ZkFramingError`, which that
+ * file never throws and the two RECORD parsers throw seven times. Both
+ * directions are tested because they are independent defects: the false
+ * negative loses the one event the row exists to catch, and the false positive
+ * prints `answered` about framing.ts while citing an error from
+ * codec/records/user.ts.
+ *
+ * Both errors come from the REAL library functions rather than a hand-written
+ * message, so a reworded throw site reddens this test instead of silently
+ * disabling the row.
+ */
+describe('item 5 — the TCP declared-size cap (C-1)', () => {
+  it('answers item 5 when the declared-size cap actually fires', async () => {
+    const oversized = Buffer.alloc(8)
+    START_MARKER.copy(oversized, 0)
+    oversized.writeUInt32LE(0x00ff_ffff, 4) // far above MAX_CHUNK.tcp + 8
+    const steps = await stepsFrom('firmware', () => tryUnframeTcp(oversized))
+
+    // The premise, asserted rather than assumed: the cap throws
+    // ZkProtocolError, and TcpTransport propagates it unwrapped.
+    expect(steps[0]).toMatchObject({ outcome: 'malformed', errorClass: 'ZkProtocolError' })
+
+    const md = renderMarkdown({ ...sample(), steps })
+    expect(checklistState(md, 5)).toBe('answered')
+  })
+
+  it('leaves item 5 not answered when a record parser throws ZkFramingError', async () => {
+    // A user body that declares more than arrived — nothing to do with the TCP
+    // declared-size cap, and the exact shape that used to print `answered`.
+    const short = Buffer.alloc(4 + 144)
+    short.writeUInt32LE(800, 0)
+    const steps = await stepsFrom('users', () => parseUserData(short))
+
+    expect(steps[0]).toMatchObject({ outcome: 'malformed', errorClass: 'ZkFramingError' })
+
+    const md = renderMarkdown({ ...sample(), steps })
+    expect(checklistState(md, 5)).toBe('not answered')
+  })
+
+  it('says where the rejected bytes are, since the report no longer carries them', async () => {
+    const oversized = Buffer.alloc(8)
+    START_MARKER.copy(oversized, 0)
+    oversized.writeUInt32LE(0x00ff_ffff, 4)
+    const steps = await stepsFrom('firmware', () => tryUnframeTcp(oversized))
+    const md = renderMarkdown({ ...sample(), steps })
+    // Spec §4.5 names the framing error's `raw` as item 5's evidence; F5
+    // removed `raw` from StepResult, so the row must point at the opt-in
+    // capture instead of leaving a reader hunting for bytes that are not here.
+    expect(md).toMatch(/5 \|[^\n]*--raw-capture/)
   })
 })
 

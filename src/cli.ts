@@ -261,6 +261,12 @@ async function runProbe(session: Session, traced: TracingTransport, opts: CliOpt
     transport: opts.transport,
     startedAt,
     durationMs: Date.now() - t0,
+    // Checklist item 1 is answered by the raw capture and by nothing else
+    // (design spec §4.5). `report.ts` cannot know whether one was asked for --
+    // this is the only module that reads argv, so it is the only one that can
+    // say. Without it the row said "see the accompanying raw capture" on a
+    // default run that writes no such file.
+    rawCapture: opts.rawCapture,
     truncated: runner.truncated,
     steps: runner.steps,
     findings,
