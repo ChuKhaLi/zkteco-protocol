@@ -3,7 +3,14 @@ import { VERSION } from '../src/index.js'
 
 describe('toolchain', () => {
   it('runs tests and resolves source imports', () => {
-    expect(VERSION).toBe('0.3.2')
+    expect(VERSION).toBe('0.4.0')
+  })
+
+  it('keeps diagnostics and CLI code out of the library bundle', async () => {
+    const { readFileSync } = await import('node:fs')
+    const bundle = readFileSync('dist/index.js', 'utf8')
+    expect(bundle).not.toContain('TracingTransport')
+    expect(bundle).not.toContain('ATTENDANCE_AUTO_THRESHOLD')
   })
 
   it('exports exactly the public surface v0.3.2 promises, unchanged since v0.3', async () => {

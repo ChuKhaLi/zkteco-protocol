@@ -183,6 +183,60 @@ between models, and decoding them would produce data that is confidently wrong.
 |---|---|---|---|---|---|
 | *(none yet)* | | | | | |
 
+## Diagnostics
+
+A separate bring-up tool ships alongside the library, for running the
+[first-hardware checklist](docs/superpowers/specs/2026-08-28-zkteco-protocol-library-design.md#12-first-hardware-checklist)
+against a real device. It is not part of the library's public API — none of
+its code is in `dist/index.js`.
+
+```
+npx zkteco-protocol <host> [flags]
+```
+
+| Flag | Default | Meaning |
+|---|---|---|
+| `--port` | `4370` | Device port. |
+| `--transport` | `tcp` | `tcp` or `udp`. |
+| `--comm-key` | `0` | The device's comm key, if one is set. |
+| `--timeout` | `5000` | Per-request timeout, in milliseconds. |
+| `--attendance` | `auto` | `auto` reads the attendance log unless the device reports more than 10,000 records; `always` reads regardless; `never` skips it. |
+| `--out` | *(stdout)* | Where the Markdown report goes. The JSON sidecar is always written too — alongside it, or as `zkteco-report.json` in the current directory when `--out` is omitted. |
+| `--raw-capture <path>` | *(off)* | Opt-in path for the raw wire capture — see below. |
+| `--realtime <seconds>` | `0` | Hold a realtime subscription open this long and probe it. **Not implemented yet** — the flag parses but the probe does not run. |
+| `--concurrent` | `false` | Probe whether the device accepts a second connection. **Not implemented yet** — the flag parses but the probe does not run. |
+
+Exit code is `0` whenever the probe connected and its output reached disk,
+even if the device refused every single step — a terminal that says no to
+twenty reads is a successful diagnostic, and the report is the deliverable.
+Non-zero only when the connection never happened or the output never got
+written.
+
+### The two shareable artifacts
+
+Every run produces:
+
+- **A Markdown report** (stdout by default, or `--out`) — the 23-item
+  first-hardware checklist, per-step outcomes, and identity/clock/storage
+  findings. Reviewable and shareable: the device serial number, employee
+  names and user ids are deliberately kept out of it.
+- **A JSON sidecar** (written next to the Markdown report) — the same
+  findings and checklist, machine-readable, with the same redaction
+  guarantee.
+
+### The raw capture (`--raw-capture <path>`) is UNREDACTED
+
+Opt-in only, and deliberately not one of the two artifacts above. It is a
+line-per-event dump of every payload sent and received — needed because
+first-hardware checklist item 2 (checksum reconciliation) works over exact
+bytes, and redacting anything inside a payload would destroy the evidence it
+exists to preserve.
+
+**It contains the mixed comm key from `CMD_AUTH`, the device serial number,
+and every employee's name and user id, verbatim.** Do not attach it to a
+public issue, or share it outside your own review, without checking it
+first — the file's own header line repeats this warning.
+
 ## Credits
 
 Protocol documentation: [adrobinoga/zk-protocol](https://github.com/adrobinoga/zk-protocol).

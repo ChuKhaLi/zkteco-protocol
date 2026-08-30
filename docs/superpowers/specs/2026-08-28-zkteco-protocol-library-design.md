@@ -700,7 +700,8 @@ and which of the two dialects the model emits.
     `getTime()` is the sharpest case, since `decodeZkTime` turns any four bytes into a
     plausible-looking date with nothing to contradict it. This is v0.1 transport architecture, not
     something this scope introduced, and no code change is proposed here — record what a real
-    device does before deciding whether one is warranted.
+    device does before deciding whether one is warranted. Not testable by the bring-up kit
+    (`npx zkteco-protocol`); it is reported there as such rather than omitted.
 
 23. Does any firmware answer **`ACK_UNAUTH` to mean "this command is not supported"** rather
     than "you are not authorized"? Since v0.3.1 `Session.execute` throws `ZkAuthError` on
