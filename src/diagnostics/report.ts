@@ -1,3 +1,4 @@
+import { FREE_SIZES_RAW_MAX_BYTES } from './probe.js'
 import type { Findings, KeywordFormVerdict } from './probe.js'
 import type { StepResult, TraceEvent } from './types.js'
 
@@ -260,6 +261,33 @@ function item1Observation(result: ProbeResult): string {
 }
 
 /**
+ * Item 2, which is three questions in one row: the checksum formulation, the
+ * comm-key mixing, and the reply-id quirk.
+ *
+ * The count is the DEVICE's packets. Counting ours in with them (the old
+ * `packetsChecked`) roughly doubled the only number a reader uses to judge
+ * whether §5's formulation survives contact with hardware — a `send` payload
+ * was built by `checksum16` moments earlier, so recomputing it can never
+ * disagree. Ours is still reported, as the positive control it is.
+ *
+ * The reply-id verdict spec §5.1 asks for is now computed too
+ * (`auditReplyIds`). The third part, comm-key mixing, is NOT audited here:
+ * it is only exercised when a comm key is set, and this row says so rather
+ * than letting `answered` quietly cover it.
+ */
+function item2Observation(f: Findings): string {
+  const { received, sent } = f.checksum
+  if (received.packetsChecked === 0) return 'no device packets were captured to reconcile.'
+  const r = f.replyIds
+  return (
+    `checksums: ${received.packetsChecked} DEVICE packet(s) reconciled locally, ${received.mismatches} mismatch(es)` +
+    ` (our own ${sent.packetsChecked} sent packet(s) re-checked as a positive control, ${sent.mismatches} mismatch(es) — any mismatch there is a bug in this tool, not the device).` +
+    ` Reply ids: ${r.echoedRequestId} of ${r.repliesChecked} repl(ies) echoed the request's reply id.` +
+    ` Comm-key mixing is NOT reconciled by this row — it is only exercised when a comm key is set; check the CMD_AUTH exchange in the raw capture by hand.`
+  )
+}
+
+/**
  * Item 19: what the odd-length CMD_PREPARE_BUFFER payload actually showed.
  *
  * The state keys off `bulkPrepareAttempted` rather than `bulkPath` (see that
@@ -370,10 +398,8 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
   push(
     2,
     'Reconcile the checksum formulation, comm-key mixing and reply-id quirk against §5.',
-    f.checksum.packetsChecked > 0 ? 'answered' : 'not answered',
-    f.checksum.packetsChecked > 0
-      ? `${f.checksum.packetsChecked} packet(s) reconciled locally, ${f.checksum.mismatches} mismatch(es).`
-      : 'no packets were captured to reconcile.',
+    f.checksum.received.packetsChecked > 0 ? 'answered' : 'not answered',
+    item2Observation(f),
   )
 
   push(
@@ -390,7 +416,7 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
     'Confirm the CMD_GET_FREE_SIZES field offsets (FREE_SIZES_OFFSET) against a real reply.',
     f.freeSizes !== null ? 'answered' : 'not answered',
     f.freeSizes !== null
-      ? `userCount=${f.freeSizes.userCount} recordCount=${f.freeSizes.recordCount} recordCapacity=${f.freeSizes.recordCapacity}; raw body recorded for manual offset review.`
+      ? `userCount=${f.freeSizes.userCount} recordCount=${f.freeSizes.recordCount} recordCapacity=${f.freeSizes.recordCapacity}; the first ${f.freeSizes.rawHex.length / 2} byte(s) of the raw body are in the JSON sidecar (findings.freeSizes.rawHex) for manual offset review — capped at ${FREE_SIZES_RAW_MAX_BYTES}, with the full reply in the raw capture if one was requested.`
       : 'CMD_GET_FREE_SIZES was not answered.',
   )
 
@@ -620,12 +646,21 @@ export function renderMarkdown(result: ProbeResult): string {
 /**
  * Renders the JSON sidecar.
  *
- * No filtering here, deliberately: nothing sensitive was ever put into
- * `Findings` — Tasks 4 and 6 fixed the two leaks that would have put
- * something there, at the source, which is the right place. A renderer that
- * stripped secrets would be one edit away from leaking them, and would imply
- * `Findings` cannot be trusted on its own. This function trusts it, and
+ * No filtering here, deliberately: `Findings` is redacted at the source —
+ * Tasks 4 and 6 fixed the two leaks that would have put something sensitive
+ * there, in the code that produced it, which is the right place. A renderer
+ * that stripped secrets would be one edit away from leaking them, and would
+ * imply `Findings` cannot be trusted on its own. This function trusts it, and
  * mirrors `result` unmodified.
+ *
+ * ONE verbatim device payload travels in `Findings`, and this comment used to
+ * assert there were none: `freeSizes.rawHex`, the head of the
+ * CMD_GET_FREE_SIZES reply. It is sanctioned — spec §4.5 names that body as
+ * checklist item 4's evidence, `FREE_SIZES_OFFSET` is unverified, and the
+ * reply is a counters struct — and it is bounded to
+ * `FREE_SIZES_RAW_MAX_BYTES` precisely because "sanctioned" is a claim about
+ * a reply nobody has ever seen. See that field's own doc comment. Nothing
+ * else here carries device bytes.
  *
  * `steps` gets the same trust, and for the same reason, as of Fix round 1:
  * `StepResult` no longer has anywhere to carry payload bytes.

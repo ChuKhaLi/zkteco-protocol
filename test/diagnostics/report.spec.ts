@@ -414,6 +414,40 @@ describe('items 19 and 23 — the bulk path (I-4)', () => {
   })
 })
 
+/**
+ * M-9. `packetsChecked` counted our own sends alongside the device's replies —
+ * about half the number was this tool's encoder agreeing with itself — and the
+ * reply-id third of the question was never computed at all while the row said
+ * `answered`.
+ */
+describe('item 2 — checksum and reply-id reconciliation (M-9)', () => {
+  it('reports the DEVICE count, and is not answered by our own packets alone', () => {
+    const result = sample()
+    result.findings.checksum = {
+      received: { packetsChecked: 0, mismatches: 0 },
+      sent: { packetsChecked: 19, mismatches: 0 },
+    }
+    const md = renderMarkdown(result)
+    expect(checklistState(md, 2)).toBe('not answered')
+    expect(md).not.toMatch(/2 \|[^\n]*19 /)
+  })
+
+  it('answers on device packets, naming ours separately as the control', () => {
+    const result = sample()
+    result.findings.checksum = {
+      received: { packetsChecked: 19, mismatches: 0 },
+      sent: { packetsChecked: 19, mismatches: 0 },
+    }
+    result.findings.replyIds = { repliesChecked: 19, echoedRequestId: 17 }
+    const md = renderMarkdown(result)
+    expect(checklistState(md, 2)).toBe('answered')
+    expect(md).toMatch(/2 \|[^\n]*19 DEVICE packet\(s\)/)
+    expect(md).toMatch(/2 \|[^\n]*17 of 19 repl\(ies\) echoed/)
+    // The un-audited third says so, rather than hiding under `answered`.
+    expect(md).toMatch(/2 \|[^\n]*Comm-key mixing is NOT reconciled/)
+  })
+})
+
 describe('renderRawCapture', () => {
   it('emits one JSON object per line, after a header line', () => {
     const events: TraceEvent[] = [

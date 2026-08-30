@@ -58,10 +58,46 @@ export interface Findings {
     userCount: number
     recordCount: number
     recordCapacity: number
-    /** The whole body. FREE_SIZES_OFFSET is unverified; this is how item 4 gets checked. */
+    /**
+     * The head of the body, capped at `FREE_SIZES_RAW_MAX_BYTES`.
+     *
+     * FREE_SIZES_OFFSET is unverified, so item 4 needs real bytes to check the
+     * offsets against — spec §4.5 names this reply's raw body as its evidence.
+     * It is also the ONE verbatim device payload in the always-written JSON
+     * sidecar, which is why it is bounded rather than "whatever arrived": no
+     * real device has been observed, so nobody knows how long this reply is,
+     * and F5's ruling (any payload can carry identifying data) applies here
+     * exactly as it did to `StepResult.raw`. The cap is generous against the
+     * 68 bytes the offsets actually need. The unbounded bytes live in the
+     * opt-in raw capture, where they belong.
+     */
     rawHex: string
   } | null
-  checksum: { packetsChecked: number; mismatches: number }
+  /**
+   * Locally recomputed checksums, split by who sent the packet.
+   *
+   * Only `received` is evidence about the device. A `sent` payload was built
+   * by `checksum16` moments earlier, so recomputing it is guaranteed to agree
+   * — counting the two together inflated the one number a reader uses to
+   * judge whether §5's formulation survives contact with hardware, by roughly
+   * a factor of two, with this tool agreeing with itself. `sent` is kept as
+   * the positive control it accidentally is: a nonzero mismatch there means
+   * this tool is broken, not the device.
+   */
+  checksum: {
+    received: { packetsChecked: number; mismatches: number }
+    sent: { packetsChecked: number; mismatches: number }
+  }
+  /**
+   * The other half of item 2, and of spec §5.1's "checksum AND reply-id
+   * verdicts": how many device replies echoed the reply id of the request
+   * they answered.
+   *
+   * Recorded as counts rather than a pass/fail, because whether a device
+   * echoes is the quirk item 2 exists to discover. A device that does not
+   * echo is data, not a failure.
+   */
+  replyIds: { repliesChecked: number; echoedRequestId: number }
   bulkPath: 'buffered' | 'legacy' | null
   /**
    * Did CMD_PREPARE_BUFFER's 11-byte (odd-length) request reach the wire?
@@ -104,7 +140,11 @@ export function emptyFindings(): Findings {
     parameters: [],
     clock: null,
     freeSizes: null,
-    checksum: { packetsChecked: 0, mismatches: 0 },
+    checksum: {
+      received: { packetsChecked: 0, mismatches: 0 },
+      sent: { packetsChecked: 0, mismatches: 0 },
+    },
+    replyIds: { repliesChecked: 0, echoedRequestId: 0 },
     bulkPath: null,
     bulkPrepareAttempted: false,
     attendance: null,
@@ -275,6 +315,16 @@ function deviceEpochSeconds(t: ZkNaiveTime): number | null {
 const REQUIRED_FREE_SIZES = FREE_SIZES_OFFSET.recordCapacity + 4
 
 /**
+ * How much of the CMD_GET_FREE_SIZES body `Findings` keeps.
+ *
+ * Item 4 checks FREE_SIZES_OFFSET against a real reply, and the highest offset
+ * it names ends at byte 68 — so 128 bytes is generous room to see the fields
+ * around it, and still a bound. See `Findings.freeSizes.rawHex` for why a
+ * bound is required at all.
+ */
+export const FREE_SIZES_RAW_MAX_BYTES = 128
+
+/**
  * Recomputes each captured packet's checksum and compares it to the one on the
  * wire — first-hardware checklist item 2, for the part a tool can do alone.
  *
@@ -289,11 +339,9 @@ const REQUIRED_FREE_SIZES = FREE_SIZES_OFFSET.recordCapacity + 4
  * still in the raw capture; counting it as a mismatch would inflate the only
  * number a reader uses to judge whether §5's formulation survives contact.
  */
-export function auditChecksums(
-  events: readonly TraceEvent[],
-): { packetsChecked: number; mismatches: number } {
-  let packetsChecked = 0
-  let mismatches = 0
+export function auditChecksums(events: readonly TraceEvent[]): Findings['checksum'] {
+  const received = { packetsChecked: 0, mismatches: 0 }
+  const sent = { packetsChecked: 0, mismatches: 0 }
   for (const event of events) {
     if (!event.hex) continue
     const buf = Buffer.from(event.hex, 'hex')
@@ -301,10 +349,47 @@ export function auditChecksums(
     const transmitted = buf.readUInt16LE(2)
     const zeroed = Buffer.from(buf)
     zeroed.writeUInt16LE(0, 2)
-    packetsChecked += 1
-    if (checksum16(zeroed) !== transmitted) mismatches += 1
+    // 'push' is the device too -- an unsolicited realtime event is as much a
+    // device packet as a reply. Only 'send' is ours.
+    const into = event.direction === 'send' ? sent : received
+    into.packetsChecked += 1
+    if (checksum16(zeroed) !== transmitted) into.mismatches += 1
   }
-  return { packetsChecked, mismatches }
+  return { received, sent }
+}
+
+/**
+ * The reply-id half of first-hardware checklist item 2, and of spec §5.1's
+ * content list.
+ *
+ * `Session` increments a counter per request and transmits the packet exactly
+ * as encoded (no reply-id quirk applied — see `Session.send`'s doc comment and
+ * the oracle evidence behind it). Whether a device echoes that id back on the
+ * reply is therefore observable, and it is the quirk item 2 names. This counts
+ * it rather than judging it: a device that does not echo is a finding about
+ * that firmware, not a failure of anything here.
+ *
+ * A reply is compared against the most recent request that preceded it, which
+ * is exactly the pairing this library's request/response loop enforces. A
+ * 'push' event has no request to pair with — an unsolicited realtime event
+ * answers nothing — so it is skipped rather than compared against whatever
+ * request happened to come last.
+ */
+export function auditReplyIds(events: readonly TraceEvent[]): Findings['replyIds'] {
+  let repliesChecked = 0
+  let echoedRequestId = 0
+  let lastRequestId: number | undefined
+  for (const event of events) {
+    if (event.direction === 'send') {
+      lastRequestId = event.replyId
+      continue
+    }
+    if (event.direction !== 'recv' || event.replyId === undefined) continue
+    if (lastRequestId === undefined) continue
+    repliesChecked += 1
+    if (event.replyId === lastRequestId) echoedRequestId += 1
+  }
+  return { repliesChecked, echoedRequestId }
 }
 
 /**
@@ -343,7 +428,7 @@ export async function probeState(
       userCount: res.data.readUInt32LE(FREE_SIZES_OFFSET.userCount),
       recordCount: res.data.readUInt32LE(FREE_SIZES_OFFSET.recordCount),
       recordCapacity: res.data.readUInt32LE(FREE_SIZES_OFFSET.recordCapacity),
-      rawHex: res.data.toString('hex'),
+      rawHex: res.data.subarray(0, FREE_SIZES_RAW_MAX_BYTES).toString('hex'),
     }
     return findings.freeSizes
   })

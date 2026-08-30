@@ -3,7 +3,8 @@ import { writeFile } from 'node:fs/promises'
 import { parseArgs } from 'node:util'
 import { pathToFileURL } from 'node:url'
 import {
-  auditChecksums, emptyFindings, probeBulk, probeConcurrent, probeIdentity, probeRealtime, probeState,
+  auditChecksums, auditReplyIds, emptyFindings, probeBulk, probeConcurrent, probeIdentity,
+  probeRealtime, probeState,
 } from './diagnostics/probe.js'
 import { renderJson, renderMarkdown, renderRawCapture, type ProbeResult } from './diagnostics/report.js'
 import { StepRunner } from './diagnostics/step.js'
@@ -251,6 +252,7 @@ async function runProbe(session: Session, traced: TracingTransport, opts: CliOpt
     }
 
     findings.checksum = auditChecksums(traced.events)
+    findings.replyIds = auditReplyIds(traced.events)
   } finally {
     await session.close().catch(() => {})
   }
