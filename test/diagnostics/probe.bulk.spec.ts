@@ -8,6 +8,7 @@ import { StepRunner } from '../../src/diagnostics/step.js'
 import { TracingTransport } from '../../src/diagnostics/TracingTransport.js'
 import {
   ATTENDANCE_AUTO_THRESHOLD, emptyFindings, encodingVerdict, inferBulkPath, probeBulk,
+  sentPrepareBuffer,
 } from '../../src/diagnostics/probe.js'
 import { startEmulator, type Emulator } from '../emulator/index.js'
 import type { ZkUser } from '../../src/types.js'
@@ -133,6 +134,28 @@ describe('inferBulkPath', () => {
   })
 })
 
+/**
+ * I-4. Item 19 asks whether the ATTEMPT was made, which is a different
+ * question from `inferBulkPath`'s "which path served the read" -- and the
+ * answer differs precisely in the case that used to be wrong: a read that
+ * fails after PREPARE_BUFFER was already on the wire.
+ */
+describe('sentPrepareBuffer', () => {
+  it('is true for a PREPARE_BUFFER send', () => {
+    expect(sentPrepareBuffer([bufferedSend(CMD.USERTEMP_RRQ)])).toBe(true)
+  })
+
+  it('is false when nothing was sent, or only direct commands were', () => {
+    expect(sentPrepareBuffer([])).toBe(false)
+    expect(sentPrepareBuffer([directSend(CMD.USERTEMP_RRQ)])).toBe(false)
+  })
+
+  it('does not count a PREPARE_BUFFER we merely received', () => {
+    const received = { ...bufferedSend(CMD.USERTEMP_RRQ), direction: 'recv' as const }
+    expect(sentPrepareBuffer([received])).toBe(false)
+  })
+})
+
 describe('probeBulk', () => {
   it('reads users and reports the buffered path when the device supports it', async () => {
     running = await startEmulator({
@@ -168,6 +191,10 @@ describe('probeBulk', () => {
       session, new StepRunner(), findings, { transport: 'tcp', attendance: 'auto' }, opened.traced.events,
     )
     expect(findings.bulkPath).toBe('legacy')
+    // Item 19's evidence survives the fallback: readBulk tries the buffered
+    // path first on BOTH branches, so the odd-length payload reached this
+    // device even though legacy served the read.
+    expect(findings.bulkPrepareAttempted).toBe(true)
   })
 
   it('skips the attendance read above the threshold and says why', async () => {

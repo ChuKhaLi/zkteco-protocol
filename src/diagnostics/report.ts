@@ -260,6 +260,65 @@ function item1Observation(result: ProbeResult): string {
 }
 
 /**
+ * Item 19: what the odd-length CMD_PREPARE_BUFFER payload actually showed.
+ *
+ * The state keys off `bulkPrepareAttempted` rather than `bulkPath` (see that
+ * field's doc comment), and the observation says whether the device ACCEPTED
+ * the odd-length request or not, instead of printing a path name and leaving a
+ * reader to infer which of the two happened.
+ *
+ * "Did not accept" is deliberately weaker than "rejected the checksum": a
+ * device refusing CMD_PREPARE_BUFFER may be refusing the command, not the
+ * checksum over its odd-length body. Both outcomes are data for item 19; only
+ * one of them is evidence the formulation is wrong, and this row must not
+ * conflate them.
+ */
+function item19Observation(f: Findings): string {
+  if (!f.bulkPrepareAttempted) {
+    return 'no CMD_PREPARE_BUFFER request reached the wire, so the odd-length payload was never exercised.'
+  }
+  if (f.bulkPath === 'buffered') {
+    return "CMD_PREPARE_BUFFER's 11-byte payload was sent and the device ACCEPTED it (the buffered path served the read), so an odd-length checksum was accepted."
+  }
+  if (f.bulkPath === 'legacy') {
+    return "CMD_PREPARE_BUFFER's 11-byte payload was sent and the device did not accept it (the read fell back to the legacy path). A refusal may be about the command rather than the checksum — see the per-step table for the exact reply."
+  }
+  return "CMD_PREPARE_BUFFER's 11-byte payload was sent, but the read did not complete, so which path served it is unknown; see the per-step table."
+}
+
+/** The step-name prefix `probeIdentity` gives every key in the parameter sweep. */
+const PARAM_STEP_PREFIX = 'param:'
+
+/**
+ * Items 15-17's shared summary sentence.
+ *
+ * The count comes from the STEPS, not from `findings.parameters`. Since Task
+ * 7's F6, a key answering ACK_UNAUTH throws `ZkAuthError` and is never pushed
+ * into `findings.parameters` — so counting that array reported the survivors
+ * as though they were the attempts ("9 keyword(s) tried" when 12 were), in a
+ * report whose whole purpose is to be shared and compared. One `param:` step
+ * exists per key the sweep actually reached, including every refused one, and
+ * including none at all if the run was truncated first.
+ *
+ * "The parameter sweep did not run" is likewise reserved for the case where it
+ * genuinely did not: a device that demands a comm key it did not get sweeps
+ * all 12 keys and has all 12 refused, which is a device profile finding and
+ * not an absence. The two used to be indistinguishable.
+ */
+function parameterSummary(f: Findings, steps: readonly StepResult[]): string {
+  const paramSteps = steps.filter((s) => s.name.startsWith(PARAM_STEP_PREFIX))
+  if (paramSteps.length === 0) return 'the parameter sweep did not run.'
+
+  const unauthorized = paramSteps.filter((s) => s.outcome === 'unauthorized').length
+  if (f.parameters.length === 0) {
+    return `the sweep ran: ${paramSteps.length} keyword(s) tried, ${unauthorized} refused authorization (ACK_UNAUTH), and none returned a value to inspect. That is a device profile finding, not an absence — a session holding the device's comm key would see different answers.`
+  }
+  const answered = f.parameters.filter((p) => p.answered).length
+  const empty = f.parameters.filter((p) => p.answered && p.empty).length
+  return `${paramSteps.length} keyword(s) tried; ${answered} answered, ${empty} of those empty, ${unauthorized} refused authorization (ACK_UNAUTH).`
+}
+
+/**
  * Builds the 23-row first-hardware checklist from one probe result.
  *
  * The mapping from item to evidence follows the bringup-kit design spec §4.5
@@ -344,13 +403,22 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
       : 'the cap did not fire on this run — inconclusive, since it is only exercised if a device happens to declare an oversized packet. A record-parser framing error is NOT this cap and does not answer this item.',
   )
 
+  // 'neither' is a non-null verdict, and it settles nothing about the request
+  // SHAPE: the A/B ran against ~SerialNumber, and a firmware that does not
+  // expose that key (or a session without the comm key it wants) refuses both
+  // shapes. KEYWORD_FORM_NOTE.neither says so in as many words -- "Re-run the
+  // A/B ... before recording any item-18 answer" -- so `answered` in the
+  // column beside it was the report contradicting itself.
+  const keywordDecided = f.keywordForm !== null && f.keywordForm !== 'neither'
   push(
     6,
     'Resolve any oracle divergence recorded under §7.3.',
-    f.keywordForm !== null ? 'answered' : 'not answered',
-    f.keywordForm !== null
-      ? "resolved for item 18's part of it via the keyword-shape A/B; see item 18."
-      : 'the keyword-shape A/B did not complete, so this remains open.',
+    keywordDecided ? 'answered' : 'not answered',
+    f.keywordForm === null
+      ? 'the keyword-shape A/B did not complete, so this remains open.'
+      : keywordDecided
+        ? "resolved for item 18's part of it via the keyword-shape A/B; see item 18."
+        : 'the A/B ran but the device refused BOTH shapes, so item 18 is unresolved and so is this; see item 18.',
   )
 
   const identityComplete = f.identity.deviceName !== null && f.identity.firmwareVersion !== null
@@ -411,9 +479,7 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
   )
 
   const paramsAnswered = f.parameters.length > 0
-  const paramSummary = paramsAnswered
-    ? `${f.parameters.length} keyword(s) tried; ${f.parameters.filter((p) => p.answered).length} answered, ${f.parameters.filter((p) => p.answered && p.empty).length} of those empty.`
-    : 'the parameter sweep did not run.'
+  const paramSummary = parameterSummary(f, steps)
   push(15, 'Does the device echo the requested keyword in a CMD_OPTIONS_RRQ reply?', paramsAnswered ? 'answered' : 'not answered', paramSummary)
   push(16, 'Does an unsupported parameter answer ACK_ERROR or an empty value?', paramsAnswered ? 'answered' : 'not answered', paramSummary)
   push(17, 'Which parameter keywords does this firmware actually expose?', paramsAnswered ? 'answered' : 'not answered', paramSummary)
@@ -421,17 +487,15 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
   push(
     18,
     'Is the keyword payload accepted as a bare string, with no NUL terminator?',
-    f.keywordForm !== null ? 'answered' : 'not answered',
+    keywordDecided ? 'answered' : 'not answered',
     f.keywordForm !== null ? KEYWORD_FORM_NOTE[f.keywordForm] : 'the keyword-shape A/B did not complete.',
   )
 
   push(
     19,
     'Does the device accept a checksum over an odd-length payload?',
-    f.bulkPath !== null ? 'answered' : 'not answered',
-    f.bulkPath !== null
-      ? `exercised unavoidably by CMD_PREPARE_BUFFER's 11-byte payload; bulk path observed: ${f.bulkPath}.`
-      : 'no decisive bulk-path signal was captured.',
+    f.bulkPrepareAttempted ? 'answered' : 'not answered',
+    item19Observation(f),
   )
 
   push(
@@ -462,13 +526,20 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
     'a late reply racing the next request is not deterministically provokable (design spec §4.6); record this by hand if observed.',
   )
 
+  // Only the LEGACY path carries a refusal to reason about. On a buffered run
+  // nothing was refused, no ACK_UNAUTH was seen, and nothing whatsoever was
+  // learned about what ACK_UNAUTH means on this firmware -- the row used to
+  // print `answered` beside an observation describing, in the subjunctive, the
+  // evidence that would have answered it.
   push(
     23,
     'Does any firmware answer ACK_UNAUTH to mean "this command is not supported" rather than "you are not authorized"?',
-    f.bulkPath !== null ? 'answered' : 'not answered',
-    f.bulkPath !== null
-      ? `bulk path observed: ${f.bulkPath} — a 'legacy' path after a refused CMD_PREPARE_BUFFER is evidence for this; see the per-step table for the exact outcome.`
-      : 'no decisive bulk-path signal was captured.',
+    f.bulkPath === 'legacy' ? 'answered' : 'not answered',
+    f.bulkPath === 'legacy'
+      ? 'the device refused CMD_PREPARE_BUFFER and the read fell back to the legacy path — check that refusal\'s reply command in the per-step table: ACK_UNAUTH there means this firmware uses it for "unsupported".'
+      : f.bulkPath === 'buffered'
+        ? 'the buffered path was accepted, so no refusal occurred and ACK_UNAUTH\'s meaning on this firmware was not exercised.'
+        : 'no decisive bulk-path signal was captured.',
   )
 
   return rows

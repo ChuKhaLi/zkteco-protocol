@@ -63,6 +63,16 @@ export interface Findings {
   } | null
   checksum: { packetsChecked: number; mismatches: number }
   bulkPath: 'buffered' | 'legacy' | null
+  /**
+   * Did CMD_PREPARE_BUFFER's 11-byte (odd-length) request reach the wire?
+   *
+   * Item 19's real question. `bulkPath` cannot stand in for it: readBulk
+   * always attempts the buffered path first, so the odd-length payload is sent
+   * on BOTH branches, and `bulkPath` stays null whenever the read fails after
+   * that send — leaving item 19 reporting "not answered" about a payload the
+   * device had already seen.
+   */
+  bulkPrepareAttempted: boolean
   attendance: {
     read: boolean
     skippedReason: string | null
@@ -96,6 +106,7 @@ export function emptyFindings(): Findings {
     freeSizes: null,
     checksum: { packetsChecked: 0, mismatches: 0 },
     bulkPath: null,
+    bulkPrepareAttempted: false,
     attendance: null,
     encoding: null,
     concurrent: null,
@@ -427,6 +438,20 @@ export function inferBulkPath(events: readonly TraceEvent[]): 'buffered' | 'lega
 }
 
 /**
+ * Was CMD_PREPARE_BUFFER's odd-length request put on the wire at all?
+ *
+ * Separate from `inferBulkPath` on purpose. That function answers "which path
+ * SERVED the read", which is a question about the outcome; this one answers
+ * "was the 11-byte payload SENT", which is a question about the attempt — and
+ * item 19 asks the second. The send happens on both branches (readBulk always
+ * tries buffered first, TCP and UDP alike), including the branch where the
+ * read then fails and `inferBulkPath` has to return null.
+ */
+export function sentPrepareBuffer(events: readonly TraceEvent[]): boolean {
+  return events.some((e) => e.direction === 'send' && e.command === CMD.PREPARE_BUFFER)
+}
+
+/**
  * Step 7 of the probe: the user list, then the attendance log.
  *
  * Which bulk path the firmware took for the user read is recorded because it
@@ -453,6 +478,10 @@ export async function probeBulk(
     users = await getUsers(session, opts.transport)
     return { count: users.length }
   })
+  // Recorded UNCONDITIONALLY, unlike bulkPath: item 19 asks whether the device
+  // was ever sent an odd-length payload, and it was, whether or not the read
+  // that followed came back.
+  findings.bulkPrepareAttempted = sentPrepareBuffer(events)
   if (users) {
     findings.encoding = encodingVerdict(users.map((u) => u.name))
     findings.bulkPath = inferBulkPath(events)

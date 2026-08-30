@@ -265,6 +265,155 @@ describe('item 5 — the TCP declared-size cap (C-1)', () => {
   })
 })
 
+/**
+ * I-3. `detectedRecordSize` is null for an empty attendance log, and the
+ * fallthrough said "attendance was not read." — false on the most likely first
+ * device (a demo unit, a freshly wiped terminal), and false again when the
+ * attendance step threw, where it also contradicts the step table.
+ */
+describe('items 3 and 11 — what "no record size" actually means (I-3)', () => {
+  it('says the log was read and came back empty, rather than that it was not read', () => {
+    const result = sample()
+    result.findings.attendance = {
+      read: true, skippedReason: null, detectedRecordSize: null, rowCount: 0,
+    }
+    const md = renderMarkdown(result)
+    expect(checklistState(md, 3)).toBe('not answered')
+    expect(md).toMatch(/3 \|[^\n]*returned 0 records/)
+    expect(md).not.toMatch(/3 \|[^\n]*attendance was not read/)
+    expect(md).toMatch(/11 \|[^\n]*returned 0 records/)
+  })
+
+  it('still says "not read" when the read was never attempted', () => {
+    // findings.attendance stays null and no attendance step exists: the run
+    // was truncated before it, or probeBulk never got that far.
+    const md = renderMarkdown(sample())
+    expect(md).toMatch(/3 \|[^\n]*attendance was not read/)
+  })
+
+  it('names the failed step instead of claiming no read happened', () => {
+    const result = { ...sample(), steps: [{ name: 'attendance', outcome: 'malformed' as const }] }
+    const md = renderMarkdown(result)
+    expect(md).toMatch(/3 \|[^\n]*did not complete/)
+    expect(md).not.toMatch(/3 \|[^\n]*attendance was not read/)
+  })
+})
+
+/**
+ * I-6. Both rows gated on `keywordForm !== null`, and 'neither' is a non-null
+ * verdict — so item 18 printed `answered` next to its own observation saying
+ * "Re-run the A/B ... before recording any item-18 answer", and item 6 called
+ * the §7.3 divergence "resolved" when it was not.
+ */
+describe('items 6 and 18 — a neither verdict is not an answer (I-6)', () => {
+  it('leaves both not answered on neither, keeping the note that explains why', () => {
+    const result = sample()
+    result.findings.keywordForm = 'neither'
+    const md = renderMarkdown(result)
+    expect(checklistState(md, 6)).toBe('not answered')
+    expect(checklistState(md, 18)).toBe('not answered')
+    expect(md).toMatch(/18 \|[^\n]*item 17/) // the note survives
+  })
+
+  it('answers both on a decisive verdict', () => {
+    for (const verdict of ['both', 'nul-only', 'bare-only'] as const) {
+      const result = sample()
+      result.findings.keywordForm = verdict
+      const md = renderMarkdown(result)
+      expect(checklistState(md, 6)).toBe('answered')
+      expect(checklistState(md, 18)).toBe('answered')
+    }
+  })
+})
+
+/** Builds `n` `param:` steps, the first `unauthorized` of them ACK_UNAUTH. */
+function paramSteps(n: number, unauthorized: number): StepResult[] {
+  return Array.from({ length: n }, (_, i) => ({
+    name: `param:~Key${i}`,
+    outcome: i < unauthorized ? ('unauthorized' as const) : ('ok' as const),
+  }))
+}
+
+/**
+ * I-5. Since F6 an ACK_UNAUTH key throws ZkAuthError and never reaches
+ * `findings.parameters`, so a device demanding a comm key swept all 12 keys
+ * and the report said "the parameter sweep did not run" — and the "tried"
+ * count was the survivors, not the attempts.
+ */
+describe('items 15-17 — the parameter sweep summary (I-5)', () => {
+  it('says the sweep ran and every key was refused, not that it did not run', () => {
+    const result = { ...sample(), steps: paramSteps(12, 12) } // findings.parameters stays empty
+    const md = renderMarkdown(result)
+    for (const item of [15, 16, 17]) expect(checklistState(md, item)).toBe('not answered')
+    expect(md).toMatch(/15 \|[^\n]*12 keyword\(s\) tried/)
+    expect(md).toMatch(/15 \|[^\n]*12 refused authorization/)
+    expect(md).not.toMatch(/15 \|[^\n]*sweep did not run/)
+  })
+
+  it('counts the keys TRIED, not the ones that survived the ACK_UNAUTH guard', () => {
+    const result = { ...sample(), steps: paramSteps(12, 3) }
+    for (let i = 3; i < 12; i++) {
+      result.findings.parameters.push({ key: `~Key${i}`, answered: true, empty: false })
+    }
+    const md = renderMarkdown(result)
+    expect(checklistState(md, 17)).toBe('answered')
+    // The defect: 9 survivors reported as "9 keyword(s) tried" when 12 were.
+    expect(md).toMatch(/17 \|[^\n]*12 keyword\(s\) tried/)
+    expect(md).not.toMatch(/17 \|[^\n]*9 keyword\(s\) tried/)
+    expect(md).toMatch(/17 \|[^\n]*3 refused authorization/)
+  })
+
+  it('still says the sweep did not run when no param step exists', () => {
+    const md = renderMarkdown(sample())
+    expect(md).toMatch(/15 \|[^\n]*sweep did not run/)
+  })
+})
+
+/**
+ * I-4. Item 23 gated on `bulkPath !== null`, so a buffered run — where nothing
+ * was refused and no ACK_UNAUTH was seen — printed `answered` beside an
+ * observation describing, in the subjunctive, the evidence that WOULD answer
+ * it. Item 19 is the related pair: `bulkPath` stays null when the users step
+ * fails after PREPARE_BUFFER was already put on the wire.
+ */
+describe('items 19 and 23 — the bulk path (I-4)', () => {
+  function withBulk(path: Findings['bulkPath'], prepareAttempted: boolean): ProbeResult {
+    const result = sample()
+    result.findings.bulkPath = path
+    result.findings.bulkPrepareAttempted = prepareAttempted
+    return result
+  }
+
+  it('leaves item 23 not answered on a buffered run, and says no refusal occurred', () => {
+    const md = renderMarkdown(withBulk('buffered', true))
+    expect(checklistState(md, 23)).toBe('not answered')
+    expect(md).toMatch(/23 \|[^\n]*no refusal occurred/)
+  })
+
+  it('answers item 23 on a legacy run, where a refusal is what produced the fallback', () => {
+    const md = renderMarkdown(withBulk('legacy', true))
+    expect(checklistState(md, 23)).toBe('answered')
+  })
+
+  it('answers item 19 whenever the 11-byte payload reached the wire, even if the read then failed', () => {
+    // The false negative: PREPARE_BUFFER was exercised, the users step then
+    // threw, bulkPath stayed null, and item 19 said "not answered" about a
+    // payload the device had already seen.
+    const md = renderMarkdown(withBulk(null, true))
+    expect(checklistState(md, 19)).toBe('answered')
+  })
+
+  it('leaves item 19 not answered when no PREPARE_BUFFER reached the wire', () => {
+    const md = renderMarkdown(withBulk(null, false))
+    expect(checklistState(md, 19)).toBe('not answered')
+  })
+
+  it('distinguishes an accepted odd-length payload from a refused one', () => {
+    expect(renderMarkdown(withBulk('buffered', true))).toMatch(/19 \|[^\n]*accepted/i)
+    expect(renderMarkdown(withBulk('legacy', true))).toMatch(/19 \|[^\n]*did not accept/i)
+  })
+})
+
 describe('renderRawCapture', () => {
   it('emits one JSON object per line, after a header line', () => {
     const events: TraceEvent[] = [
