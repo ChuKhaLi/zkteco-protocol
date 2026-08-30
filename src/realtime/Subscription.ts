@@ -151,6 +151,32 @@ export class Subscription implements ZkEventStream {
           this.rejectWaiter = reject
         })
       },
+
+      /**
+       * Called by `for await` when the consumer leaves the loop early — a
+       * break, a return, or an exception raised in the loop BODY. Without it,
+       * the obvious consumer loop (take a few events, then break) leaves the
+       * subscription registered and the socket under it open, with the device
+       * still pushing events to nobody.
+       *
+       * Ending the stream here means ending the connection it rides on, and
+       * that is the right scope rather than an overreach: this stream does not
+       * reconnect and a device buffers nothing for a subscriber that went
+       * away, so there is no resumable state to preserve. close() is
+       * idempotent, so a consumer that breaks and then calls close() anyway
+       * pays nothing.
+       *
+       * A rejection from next() does NOT route here — the language calls
+       * return() only for an early exit from a loop that is otherwise healthy.
+       * That is correct: fail() has already ended the stream by then.
+       *
+       * No throw(). `for await` never calls it; only explicit generator
+       * delegation does, and this iterator is not written by a generator.
+       */
+      return: async (): Promise<IteratorResult<ZkRealtimeEvent>> => {
+        await this.close()
+        return { value: undefined, done: true }
+      },
     }
   }
 

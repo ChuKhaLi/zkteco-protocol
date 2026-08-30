@@ -59,6 +59,11 @@ happy one: a stream that ended with an error stops delivering but does not
 release the socket, which stays open with a listener attached until
 `stream.close()` or `device.disconnect()` is called.
 
+Leaving the loop early — `break`, `return`, or throwing from inside the loop
+body — does release it on its own, because `for await` calls the iterator's
+`return()` and that closes the stream. A stream that ends because it *threw at
+you* does not go through that path, which is exactly why the `finally` stays.
+
 **The stream does not reconnect and does not backfill.** A lost connection
 throws out of the `for await` and the events that occur before you subscribe
 again are gone — the device buffers nothing for a subscriber that went away.

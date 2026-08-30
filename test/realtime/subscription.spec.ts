@@ -112,6 +112,39 @@ describe('Subscription', () => {
     expect(closed()).toBe(1)
   })
 
+  it('closes the session when a consumer leaves the loop early', async () => {
+    // `for await` calls the iterator's return() when the body breaks. Without
+    // one, the obvious consumer loop -- take a few events, break -- leaves the
+    // subscription registered and the socket under it open, with the device
+    // still pushing to nobody. This is the whole reason return() exists.
+    const { session, closed } = fakeSession()
+    const sub = new Subscription(session, opts)
+    sub.push(pushed(EVENT_FLAG.ATTENDANCE, attendancePayload('E5')))
+    for await (const ev of sub) {
+      expect(ev.kind).toBe('attendance')
+      break
+    }
+    expect(closed()).toBe(1)
+  })
+
+  it('closes the session when the consumer throws out of the loop', async () => {
+    // The other early exit `for await` cleans up after. An exception raised in
+    // the BODY runs return(); one raised by next() does not, and must not --
+    // that path is already ending and its own tests cover it.
+    const { session, closed } = fakeSession()
+    const sub = new Subscription(session, opts)
+    sub.push(pushed(EVENT_FLAG.ATTENDANCE, attendancePayload('F6')))
+    await expect(
+      (async () => {
+        for await (const ev of sub) {
+          void ev
+          throw new Error('consumer gave up')
+        }
+      })(),
+    ).rejects.toThrow('consumer gave up')
+    expect(closed()).toBe(1)
+  })
+
   it('ends iteration cleanly after close()', async () => {
     const { session } = fakeSession()
     const sub = new Subscription(session, opts)
