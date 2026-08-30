@@ -94,16 +94,21 @@ export class TracingTransport implements Transport {
   }
 
   listen(onPacket: (payload: Buffer) => void, onError: (err: Error) => void): void {
-    this.inner.listen(
-      (payload) => {
-        this.record('push', payload)
-        onPacket(payload)
-      },
-      (err) => {
-        this.record('error', undefined, err)
-        onError(err)
-      },
-    )
+    try {
+      this.inner.listen(
+        (payload) => {
+          this.record('push', payload)
+          onPacket(payload)
+        },
+        (err) => {
+          this.record('error', undefined, err)
+          onError(err)
+        },
+      )
+    } catch (err) {
+      this.record('error', undefined, err as Error)
+      throw err
+    }
   }
 
   close(): Promise<void> {

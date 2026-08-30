@@ -50,6 +50,11 @@ describe('TracingTransport', () => {
     const seqs = traced.events.map((e) => e.seq)
     expect(seqs).toEqual([...seqs].sort((a, b) => a - b))
     expect(new Set(seqs).size).toBe(seqs.length)
+
+    // Verify offsetMs values are stamped from the injected clock
+    const offsets = traced.events.map((e) => e.offsetMs)
+    expect(offsets).toEqual([...offsets].sort((a, b) => a - b))
+    expect(Math.max(...offsets)).toBeGreaterThan(0)
   })
 
   it('records a timeout as an error event rather than swallowing it', async () => {
@@ -83,5 +88,23 @@ describe('TracingTransport', () => {
 
     expect(seen).toHaveLength(1)
     expect(traced.events.filter((e) => e.direction === 'push')).toHaveLength(1)
+  })
+
+  it('records synchronous throws from listen() as error events', async () => {
+    running = await startEmulator({ transport: 'tcp' })
+    const traced = new TracingTransport(
+      new TcpTransport({ host: '127.0.0.1', port: running.port }),
+      fakeClock(),
+    )
+    await traced.connect()
+    traced.listen(() => {}, () => {})
+    // A second listen() on the same socket synchronously throws per spec
+    expect(() => traced.listen(() => {}, () => {})).toThrow()
+    await traced.close()
+
+    // Verify the throw was recorded as an error event
+    const errors = traced.events.filter((e) => e.direction === 'error')
+    expect(errors.length).toBeGreaterThanOrEqual(1)
+    expect(errors[errors.length - 1]?.errorClass).toBe('ZkConnectionError')
   })
 })
