@@ -98,11 +98,52 @@ export class Session {
     return this.send(command, data)
   }
 
-  /** Sends one command and returns the reply. Throws only on ACK_ERROR. */
+  /**
+   * Sends one command and returns the reply.
+   *
+   * Throws on exactly two reply codes: ACK_ERROR as ZkProtocolError, and
+   * ACK_UNAUTH as ZkAuthError. Every other reply is returned for the caller
+   * to decode.
+   *
+   * ACK_UNAUTH acknowledges NOTHING, and every read in this library would
+   * otherwise decode its body as an answer: getInfo() reads storage counters
+   * out of any body of 68 bytes or more, decodeZkTime() turns any four bytes
+   * into a plausible date, and readBulkBuffered() takes the first four bytes
+   * as a transfer size. The guard lives here rather than at each call site
+   * because the bulk reads reach the device through readBulk()'s internals --
+   * PREPARE_BUFFER, READ_BUFFER, FREE_DATA -- where there is no call site to
+   * guard, and because a rule kept in six places drifts.
+   *
+   * open() and subscribe() use the private send() directly and are
+   * deliberately unaffected: the comm-key handshake must keep reading
+   * ACK_UNAUTH as the demand for a key that it is.
+   *
+   * ZkAuthError rather than ZkProtocolError, and the class carries weight
+   * beyond naming. readBulk() falls back from the buffered commands to the
+   * legacy exchange on exactly `err instanceof ZkProtocolError`, so an
+   * ACK_UNAUTH classed as a protocol error is read as "this firmware does
+   * not implement 1503" -- an authentication failure reported as a firmware
+   * capability, and then retried down a path whose answer cannot be trusted,
+   * because whatever comes back was produced after the device said this
+   * session was not authorized. As a sibling class under ZkError it
+   * propagates instead, which is what that path needs.
+   *
+   * Only ACK_UNAUTH is singled out. Tightening this to "only ACK_OK counts
+   * as success" is deliberately NOT done: nothing confirms real firmware
+   * acknowledges these commands with ACK_OK rather than, say, ACK_DATA, and
+   * inventing that constraint would be exactly the kind of unevidenced
+   * hypothesis this project avoids.
+   */
   async execute(command: number, data?: Buffer): Promise<DecodedPacket> {
     const res = await this.tryExecute(command, data)
     if (res.command === CMD.ACK_ERROR) {
       throw new ZkProtocolError(`device rejected command ${command}`)
+    }
+    if (res.command === CMD.ACK_UNAUTH) {
+      throw new ZkAuthError(
+        `command ${command} answered ACK_UNAUTH: the device did not authorize this request`,
+        res.data,
+      )
     }
     return res
   }

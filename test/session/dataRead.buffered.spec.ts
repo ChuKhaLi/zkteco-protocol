@@ -5,7 +5,7 @@ import { TcpTransport } from '../../src/transport/tcp.js'
 import { UdpTransport } from '../../src/transport/udp.js'
 import { CMD, MAX_CHUNK } from '../../src/codec/commands.js'
 import { ZkProtocolError } from '../../src/errors.js'
-import { startEmulator, type Emulator } from '../emulator/index.js'
+import { reply, startEmulator, type Emulator } from '../emulator/index.js'
 
 let running: Emulator | null = null
 let session: Session | null = null
@@ -135,6 +135,28 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       const stream = await readBulk(session, CMD.ATTLOG_RRQ, transportKind)
       expect(stream.readUInt32LE(0)).toBe(16)
       expect(running.received.map((p) => p.command)).toContain(CMD.ATTLOG_RRQ)
+    })
+
+    it('still returns the data when the FREE_DATA cleanup is answered ACK_UNAUTH', async () => {
+      // freeBuffer() is cleanup, not part of the result: the transfer has
+      // already completed and the caller already holds the bytes. It swallows
+      // a device-answered failure because an answer proves the reply was
+      // consumed and the session is still in sync -- which is as true of
+      // ACK_UNAUTH as it is of ACK_ERROR. Session.execute() classes ACK_UNAUTH
+      // as ZkAuthError, a sibling of ZkProtocolError rather than a subtype, so
+      // swallowing it takes its own branch; without one, a device that
+      // refuses only the cleanup throws away a read that fully succeeded.
+      running = await startEmulator({
+        transport: transportKind,
+        records: { size: 8, rows: [rec8(1), rec8(2)] },
+        handlers: {
+          [CMD.FREE_DATA]: (req, state) => [reply(state, req, CMD.ACK_UNAUTH)],
+        },
+      })
+      session = await openSession(running.port)
+      const stream = await readBulk(session, CMD.ATTLOG_RRQ, transportKind)
+      expect(stream.readUInt32LE(0)).toBe(16)
+      expect(running.received.map((p) => p.command)).toContain(CMD.FREE_DATA)
     })
   })
 }

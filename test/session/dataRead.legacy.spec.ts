@@ -88,9 +88,15 @@ for (const transportKind of ['tcp', 'udp'] as const) {
     })
 
     it('throws when the device answers with something other than data', async () => {
+      // ACK_OK, not ACK_UNAUTH. This test exists for readBulkLegacy's
+      // "expected ACK_DATA or PREPARE_DATA" branch, and Session.execute() now
+      // rejects ACK_UNAUTH one layer earlier -- so an ACK_UNAUTH reply here
+      // would leave this test green while the branch it is named for went
+      // completely unexercised. ACK_OK is an acknowledgment that carries no
+      // data, which is exactly what this branch is for.
       running = await startEmulator({
         transport: transportKind,
-        handlers: { [CMD.ATTLOG_RRQ]: (req, state) => [reply(state, req, CMD.ACK_UNAUTH)] },
+        handlers: { [CMD.ATTLOG_RRQ]: (req, state) => [reply(state, req, CMD.ACK_OK)] },
       })
       session = await openSession(running.port)
       await expect(readBulkLegacy(session, CMD.ATTLOG_RRQ)).rejects.toBeInstanceOf(ZkProtocolError)

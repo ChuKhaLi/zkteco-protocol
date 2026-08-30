@@ -4,7 +4,7 @@ import { Session } from '../../src/session/Session.js'
 import { TcpTransport } from '../../src/transport/tcp.js'
 import { UdpTransport } from '../../src/transport/udp.js'
 import { CMD } from '../../src/codec/commands.js'
-import { ZkProtocolError, ZkTimeoutError } from '../../src/errors.js'
+import { ZkAuthError, ZkProtocolError, ZkTimeoutError } from '../../src/errors.js'
 import { reply, startEmulator, type Emulator } from '../emulator/index.js'
 
 let running: Emulator | null = null
@@ -84,7 +84,7 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       expect('toString' in out).toBe(false)
     })
 
-    it('throws ZkProtocolError rather than decoding an ACK_UNAUTH reply as a value', async () => {
+    it('throws ZkAuthError rather than decoding an ACK_UNAUTH reply as a value', async () => {
       // ACK_UNAUTH is the one non-acknowledgment reply this codebase already
       // assigns a meaning to (Session.open handles it during the comm-key
       // handshake). tryExecute() only throws on ACK_ERROR, so without this
@@ -98,7 +98,7 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       })
       session = await connect(running.port)
       await expect(getParameters(session, ['~SerialNumber'])).rejects.toBeInstanceOf(
-        ZkProtocolError,
+        ZkAuthError,
       )
     })
 
@@ -180,7 +180,7 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       expect((await getIdentity(session)).firmwareVersion).toBeNull()
     })
 
-    it('throws ZkProtocolError when CMD_GET_VERSION answers ACK_UNAUTH with an empty body', async () => {
+    it('throws ZkAuthError when CMD_GET_VERSION answers ACK_UNAUTH with an empty body', async () => {
       // readFirmware is the sharpest case: it is the only read in this scope
       // with no other validation (no echo, no length check), so an
       // ACK_UNAUTH with an EMPTY body would otherwise decode to
@@ -192,7 +192,7 @@ for (const transportKind of ['tcp', 'udp'] as const) {
         handlers: { [CMD.GET_VERSION]: (req, state) => [reply(state, req, CMD.ACK_UNAUTH)] },
       })
       session = await connect(running.port)
-      await expect(getIdentity(session)).rejects.toBeInstanceOf(ZkProtocolError)
+      await expect(getIdentity(session)).rejects.toBeInstanceOf(ZkAuthError)
     })
 
     it('returns five nulls on a device that exposes nothing', async () => {
@@ -245,7 +245,7 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       await expect(getTime(session)).rejects.toBeInstanceOf(ZkProtocolError)
     })
 
-    it('throws ZkProtocolError rather than decoding an ACK_UNAUTH body as a time', async () => {
+    it('throws ZkAuthError rather than decoding an ACK_UNAUTH body as a time', async () => {
       // The sharpest case of the collapse the ACK_UNAUTH guards close: unlike a
       // parameter reply, which the echo check would reject, and unlike a short
       // reply, which the length check would reject, FOUR bytes of an
@@ -262,7 +262,11 @@ for (const transportKind of ['tcp', 'udp'] as const) {
         },
       })
       session = await connect(running.port)
-      await expect(getTime(session)).rejects.toBeInstanceOf(ZkProtocolError)
+      // The guard is Session.execute()'s, not getTime()'s -- getTime carries no
+      // ACK_UNAUTH check of its own. This still asserts the property that
+      // matters end to end: getTime never returns a date decoded from a reply
+      // that acknowledged nothing.
+      await expect(getTime(session)).rejects.toBeInstanceOf(ZkAuthError)
     })
   })
 }

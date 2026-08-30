@@ -1,5 +1,5 @@
 import { CMD, MAX_CHUNK } from '../codec/commands.js'
-import { ZkProtocolError } from '../errors.js'
+import { ZkAuthError, ZkProtocolError } from '../errors.js'
 import type { Session } from './Session.js'
 
 /**
@@ -66,9 +66,16 @@ export async function readBulkLegacy(session: Session, command: number): Promise
  * and the caller already holds the data, so a failure here must not discard
  * it — it's cleanup, not part of the result.
  *
- * Only `ZkProtocolError` is swallowed here — it proves the device answered
- * (with CMD_ACK_ERROR), so the reply was consumed and the session is still
- * in sync. `ZkTimeoutError` and `ZkConnectionError` must propagate: a timeout
+ * `ZkProtocolError` and `ZkAuthError` are both swallowed here, and for one
+ * reason rather than two: each proves the device ANSWERED — with
+ * CMD_ACK_ERROR or CMD_ACK_UNAUTH — so the reply was consumed and the session
+ * is still in sync. A device that permits a read but refuses the cleanup that
+ * follows it must not cost the caller a transfer that already completed.
+ * ZkAuthError needs saying separately only because `Session.execute` raises
+ * it as a sibling of ZkProtocolError rather than a subtype, which is
+ * deliberate — see `readBulk` below, where the distinction is load-bearing.
+ *
+ * `ZkTimeoutError` and `ZkConnectionError` must propagate: a timeout
  * means FREE_DATA's reply never arrived by the deadline, but it can still
  * arrive later and sit in the transport queue. Swallowing that would let the
  * next command's `receive()` consume FREE_DATA's late reply instead of its
@@ -81,7 +88,8 @@ async function freeBuffer(session: Session): Promise<void> {
   try {
     await session.execute(CMD.FREE_DATA)
   } catch (err) {
-    if (!(err instanceof ZkProtocolError)) throw err
+    if (err instanceof ZkProtocolError || err instanceof ZkAuthError) return
+    throw err
   }
 }
 
@@ -154,6 +162,24 @@ export async function readBulkBuffered(
  * mean the socket dropped or the device went silent; retrying the whole read
  * down a different path would only double the wait before the caller learns
  * something went wrong, so those propagate unchanged.
+ *
+ * `ZkAuthError` propagates for a sharper reason, and it is why `Session.execute`
+ * raises CMD_ACK_UNAUTH as a sibling class rather than a ZkProtocolError
+ * subtype. Before v0.3.1 an ACK_UNAUTH reply to PREPARE_BUFFER failed
+ * readBulkBuffered's 4-byte size check AS a ZkProtocolError — which is
+ * exactly the signal this catch reads as "1503 unimplemented" — so an
+ * authentication failure was diagnosed as a firmware capability and retried
+ * down the legacy path. Whatever that path returns was produced after the
+ * device said the session was not authorized, so it cannot be trusted
+ * whether or not it looks complete. That it can look entirely complete is
+ * demonstrated, not supposed: deleting the guard in Session.execute makes the
+ * ACK_UNAUTH case in test/commands/users.spec.ts resolve with a full user
+ * list instead of throwing.
+ *
+ * (Authorization is a property of the session rather than of one command, so
+ * a device refusing PREPARE_BUFFER on those grounds has no evident reason to
+ * answer the legacy request differently — but no device has been observed,
+ * and nothing above rests on that inference.)
  */
 export async function readBulk(
   session: Session,

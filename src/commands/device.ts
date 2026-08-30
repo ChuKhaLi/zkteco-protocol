@@ -2,7 +2,7 @@ import { CMD } from '../codec/commands.js'
 import { DEVICE_PARAM, decodeParamReply, encodeParamRequest } from '../codec/params.js'
 import { decodeZkTime } from '../codec/time.js'
 import { readNulTerminated } from '../codec/records/shared.js'
-import { ZkProtocolError } from '../errors.js'
+import { ZkAuthError, ZkProtocolError } from '../errors.js'
 import type { Session } from '../session/Session.js'
 import type { ZkDeviceIdentity, ZkNaiveTime } from '../types.js'
 
@@ -22,18 +22,17 @@ import type { ZkDeviceIdentity, ZkNaiveTime } from '../types.js'
  * turned five failures into five absences would be indistinguishable from a
  * device that exposes nothing.
  *
- * ACK_UNAUTH is treated as ZkProtocolError, not as a refusal or a value.
- * tryExecute() only throws on ACK_ERROR, so without this check any other
- * reply command — including ACK_UNAUTH — would reach decodeParamReply() and
- * either be parsed as a plausible value or (with an empty body) mistaken for
- * an empty-value answer. ACK_UNAUTH is singled out, and only it: it is the
- * one non-acknowledgment code this codebase already assigns a meaning to
- * (Session.open handles it during the comm-key handshake), so it cannot be a
- * genuine parameter reply under any reading. Tightening this further to
- * "only ACK_OK counts as success" is deliberately NOT done — nothing
- * confirms real firmware acknowledges CMD_OPTIONS_RRQ with ACK_OK rather
- * than, say, ACK_DATA, and inventing that constraint would be exactly the
- * kind of unevidenced hypothesis this project avoids.
+ * ACK_UNAUTH is treated as ZkAuthError, not as a refusal or a value. This
+ * loop calls tryExecute(), which is raw by design and throws on nothing at
+ * all — so unlike every execute() call site in the library, it does NOT
+ * inherit Session.execute's ACK_UNAUTH guard and must carry its own. Without
+ * it, an ACK_UNAUTH would reach decodeParamReply() and either be parsed as a
+ * plausible value or (with an empty body) mistaken for an empty-value answer.
+ *
+ * The reasoning for the rule itself — why ACK_UNAUTH and only ACK_UNAUTH,
+ * and why "only ACK_OK counts as success" is deliberately not adopted — lives
+ * on Session.execute(). This is the same rule, restated where the raw path
+ * bypasses it, not a second rule.
  *
  * Strictly sequential. The transport rejects a second receive() while one is
  * already in flight.
@@ -53,7 +52,7 @@ export async function getParameters(
     const res = await session.tryExecute(CMD.OPTIONS_RRQ, encodeParamRequest(key))
     if (res.command === CMD.ACK_ERROR) continue
     if (res.command === CMD.ACK_UNAUTH) {
-      throw new ZkProtocolError(`CMD_OPTIONS_RRQ for ${key} answered ACK_UNAUTH`, res.data)
+      throw new ZkAuthError(`CMD_OPTIONS_RRQ for ${key} answered ACK_UNAUTH`, res.data)
     }
     out[key] = decodeParamReply(key, res.data)
   }
@@ -81,14 +80,15 @@ const IDENTITY_KEYS = {
  * echo, no length check, nothing but the ACK_ERROR branch below — so an
  * ACK_UNAUTH reply here is the case with nothing else to catch it: an empty
  * body would otherwise decode to firmwareVersion: '', indistinguishable from
- * a device that genuinely answered with no value. See the ACK_UNAUTH comment
- * on getParameters() above; the same reasoning applies here.
+ * a device that genuinely answered with no value. Like getParameters() this
+ * calls tryExecute(), so it carries the guard itself rather than inheriting
+ * Session.execute's.
  */
 async function readFirmware(session: Session): Promise<string | null> {
   const res = await session.tryExecute(CMD.GET_VERSION)
   if (res.command === CMD.ACK_ERROR) return null
   if (res.command === CMD.ACK_UNAUTH) {
-    throw new ZkProtocolError('CMD_GET_VERSION answered ACK_UNAUTH', res.data)
+    throw new ZkAuthError('CMD_GET_VERSION answered ACK_UNAUTH', res.data)
   }
   return readNulTerminated(res.data, 0, res.data.length)
 }
@@ -126,26 +126,19 @@ export async function getIdentity(session: Session): Promise<ZkDeviceIdentity> {
  *
  * Uses execute(), not tryExecute(): unlike a parameter keyword, a device with
  * no clock command is a protocol failure rather than an answer, and the
- * return type is not nullable.
+ * return type is not nullable. That choice also means this read inherits
+ * Session.execute's ACK_UNAUTH guard and needs none of its own — which
+ * matters more here than anywhere else in the library, because four bytes of
+ * a reply that acknowledges nothing decode to a perfectly valid-looking date
+ * and decodeZkTime has no notion of an implausible one. It is the most
+ * convincing wrong answer this library could return, and the guard that
+ * prevents it lives one layer down.
  *
  * The 31-day pseudo-calendar can legitimately decode to a date like
  * 2026-02-31. That is returned verbatim — see decodeZkTime.
  */
 export async function getTime(session: Session): Promise<ZkNaiveTime> {
   const res = await session.execute(CMD.GET_TIME)
-  // Symmetric with getParameters and readFirmware, and for a sharper reason
-  // than either. A parameter reply that is not an answer is caught by the echo
-  // check; a short clock reply is caught by the length check below. But four
-  // bytes of a reply that acknowledges nothing decode to a perfectly
-  // valid-looking date, and decodeZkTime has no notion of an implausible one —
-  // so this is the most convincing wrong answer the library could return.
-  // ACK_UNAUTH only, for the same reason as the other two: it is the one
-  // non-acknowledgment this codebase already assigns a meaning to, and
-  // tightening to "only ACK_OK counts" would invent a constraint no device has
-  // confirmed.
-  if (res.command === CMD.ACK_UNAUTH) {
-    throw new ZkProtocolError('CMD_GET_TIME answered ACK_UNAUTH', res.data)
-  }
   if (res.data.length < 4) {
     throw new ZkProtocolError(
       `CMD_GET_TIME reply is ${res.data.length} bytes, need at least 4`,

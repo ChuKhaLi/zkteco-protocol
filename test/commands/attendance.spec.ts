@@ -6,8 +6,8 @@ import { UdpTransport } from '../../src/transport/udp.js'
 import { CMD } from '../../src/codec/commands.js'
 import { decodeZkTime } from '../../src/codec/time.js'
 import { USER_RECORD_SIZE } from '../../src/codec/records/user.js'
-import { ZkFramingError } from '../../src/errors.js'
-import { startEmulator, type Emulator } from '../emulator/index.js'
+import { ZkAuthError, ZkFramingError } from '../../src/errors.js'
+import { encodeFreeSizes, reply, startEmulator, type Emulator } from '../emulator/index.js'
 import type { ZkUser } from '../../src/types.js'
 
 let running: Emulator | null = null
@@ -211,6 +211,29 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       session = await openSession(running.port)
       const [log] = await getAttendanceLogs(session, transportKind)
       expect(log!.raw).toMatch(/^[0-9a-f]{80}$/)
+    })
+
+    it('throws ZkAuthError rather than framing records against a record count from an ACK_UNAUTH reply', async () => {
+      // getAttendanceLogs reads the record count FIRST, and parseAttendanceData
+      // divides by it -- so a count decoded out of a reply that acknowledged
+      // nothing does not merely mislead a caller, it drives the framing guard
+      // that exists to catch misaligned records. The ACK_UNAUTH body here is a
+      // real encodeFreeSizes() payload, long enough to satisfy getInfo's length
+      // check, so without the guard the read proceeds on a record count taken
+      // from a reply that acknowledged nothing, instead of failing.
+      running = await startEmulator({
+        transport: transportKind,
+        info: { userCount: 0, recordCount: 1, recordCapacity: 1000 },
+        records: { size: 40, rows: [rec40(1, 'A', DAY)] },
+        handlers: {
+          [CMD.GET_FREE_SIZES]: (req, state) => [
+            reply(state, req, CMD.ACK_UNAUTH, encodeFreeSizes(state.info)),
+          ],
+        },
+      })
+      session = await openSession(running.port)
+      await expect(getAttendanceLogs(session, transportKind)).rejects.toThrow(/answered ACK_UNAUTH/)
+      await expect(getAttendanceLogs(session, transportKind)).rejects.toBeInstanceOf(ZkAuthError)
     })
   })
 }
