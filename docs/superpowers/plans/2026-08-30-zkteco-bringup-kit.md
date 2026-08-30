@@ -1733,6 +1733,15 @@ Create `src/diagnostics/report.ts`. Requirements the tests above pin, and which 
 - `renderJson` returns the result as a plain object; no filtering is needed, because nothing sensitive was ever put into `Findings` (Tasks 4 and 6 enforce that at the source, which is the right place — a renderer that stripped secrets would be one edit away from leaking them).
 - `renderMarkdown` emits, in order: a header (library version, host, transport, `startedAt`, duration); a truncation notice when `truncated` is non-null, naming the step; a device section printing `deviceName`, `platform`, `os`, `firmwareVersion` and serial *presence*; a checklist table covering items 1–23, each marked answered / not answered / not testable; and a per-step table.
 - Item 22's row must read *not testable by this tool*.
+- Items 8, 9, 10, 12, 13 and 14 need a **fourth** state: *not requested*, used when `findings.realtime` / `findings.concurrent` are null because the operator did not pass `--realtime` / `--concurrent` (Task 10). This must not be rendered as *not answered* — the device was never asked, which is a different claim from the device declining to say. Add a `renderMarkdown` test pinning it:
+
+```ts
+  it("marks the one-way probes 'not requested' when they were not run", () => {
+    const md = renderMarkdown(sample())   // findings.realtime and .concurrent are null
+    expect(md).toMatch(/not requested/i)
+    expect(md).not.toMatch(/item 10[^\n]*not answered/i)
+  })
+```
 - The keyword-form row must expand the verdict into its consequence, using this exact mapping:
 
 ```ts
@@ -1812,11 +1821,22 @@ describe('parseCliArgs', () => {
     const opts = parseCliArgs([
       '10.0.0.5', '--transport=udp', '--port=5000', '--comm-key=1234',
       '--attendance=always', '--raw-capture=trace.jsonl', '--timeout=9000',
+      '--realtime=30', '--concurrent',
     ])
     expect(opts).toMatchObject({
       host: '10.0.0.5', port: 5000, transport: 'udp', commKey: 1234,
       attendance: 'always', rawCapture: 'trace.jsonl', timeoutMs: 9000,
+      realtimeSeconds: 30, concurrent: true,
     })
+  })
+
+  it('leaves the one-way probes off unless asked', () => {
+    // Subscribing flips the transport irreversibly (Transport.listen is
+    // one-way, once per socket). That must not happen to someone who typed
+    // the bare command.
+    const opts = parseCliArgs(['192.168.1.201'])
+    expect(opts.realtimeSeconds).toBe(0)
+    expect(opts.concurrent).toBe(false)
   })
 
   it('rejects an unknown attendance mode rather than silently defaulting', () => {
@@ -1838,9 +1858,9 @@ Expected: FAIL — cannot resolve `src/cli.js`.
 
 Create `src/cli.ts` beginning with `#!/usr/bin/env node`. It must:
 
-- export `interface CliOptions { host: string; port: number; transport: 'tcp'|'udp'; commKey: number; timeoutMs: number; attendance: 'auto'|'always'|'never'; rawCapture: string | null; out: string | null }`
+- export `interface CliOptions { host: string; port: number; transport: 'tcp'|'udp'; commKey: number; timeoutMs: number; attendance: 'auto'|'always'|'never'; rawCapture: string | null; out: string | null; realtimeSeconds: number; concurrent: boolean }`, with `realtimeSeconds` defaulting to `0` (off) and `concurrent` to `false`
 - export `parseCliArgs(argv: string[]): CliOptions` using `parseArgs` from `node:util` with `allowPositionals: true`, validating `transport` and `attendance` against their literal sets and throwing an `Error` naming the offending option. A missing positional throws `new Error('a host is required: zkteco-protocol <host>')`.
-- define `main()` which: builds the transport, wraps it in `TracingTransport` with `() => Date.now()`, opens a `Session`, runs `probeIdentity` → `probeState` → `probeBulk` under one `StepRunner`, sets `findings.checksum = auditChecksums(traced.events)`, closes the session in a `finally`, then writes the Markdown to stdout (or `--out`), the JSON sidecar next to it, and the raw capture only when `--raw-capture` was given.
+- define `main()` which: builds the transport, wraps it in `TracingTransport` with `() => Date.now()`, opens a `Session`, runs `probeIdentity` → `probeState` → `probeBulk` under one `StepRunner`, then — **in this order, and only when asked** — `probeConcurrent` and finally `probeRealtime` (Task 10). Order is not cosmetic: `probeConcurrent` needs the first session still usable, and `probeRealtime` flips the transport one-way, so nothing can follow it. Then sets `findings.checksum = auditChecksums(traced.events)`, closes the session in a `finally`, and writes the Markdown to stdout (or `--out`), the JSON sidecar next to it, and the raw capture only when `--raw-capture` was given.
 - exit `0` whenever the probe ran, **even if every step failed**, and non-zero only when `connect()` threw or a file write threw. Spec §5.5.
 - invoke `main()` only when run as the entry point, so importing the module in tests does not start a probe:
 
@@ -2055,10 +2075,306 @@ Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
 
 ---
 
+### Task 10: The opt-in one-way probes — realtime and second connection
+
+**Ordering:** this task depends on Tasks 3–8 and must be implemented last. `probeRealtime` is the only part of the probe that cannot be undone: `Transport.listen` is one-way, once per socket, and after it the session can never answer a request again.
+
+**Files:**
+- Modify: `src/diagnostics/probe.ts`, `src/cli.ts`
+- Test: `test/diagnostics/probe.realtime.spec.ts`
+
+**Interfaces:**
+- Consumes: `StepRunner`, `Findings`, `Session.subscribe`.
+- Produces:
+  - `Findings.concurrent: { attempted: boolean; accepted: boolean; error: string | null } | null`
+  - `Findings.realtime: { windowSeconds: number; registered: boolean; eventsObserved: number; eventTypes: number[]; desyncOnRegister: boolean; error: string | null } | null`
+  - `async function probeConcurrent(runner, findings, opts: { host: string; port: number; transport: 'tcp'|'udp'; timeoutMs: number }): Promise<void>`
+  - `async function probeRealtime(session, runner, findings, opts: { windowSeconds: number; sleep: (ms: number) => Promise<void> }): Promise<void>`
+
+`sleep` is injected so the test does not wait real seconds — the same purity discipline as the injected clocks.
+
+- [ ] **Step 1: Write the failing test**
+
+Create `test/diagnostics/probe.realtime.spec.ts`:
+
+```ts
+import { afterEach, describe, expect, it } from 'vitest'
+import { EVENT_FLAG } from '../../src/codec/events.js'
+import { Session } from '../../src/session/Session.js'
+import { TcpTransport } from '../../src/transport/tcp.js'
+import { StepRunner } from '../../src/diagnostics/step.js'
+import { emptyFindings, probeConcurrent, probeRealtime } from '../../src/diagnostics/probe.js'
+import { startEmulator, type Emulator } from '../emulator/index.js'
+
+let running: Emulator | null = null
+let session: Session | null = null
+afterEach(async () => {
+  await session?.close().catch(() => {}); session = null
+  await running?.close(); running = null
+})
+
+async function open(port: number): Promise<Session> {
+  const s = new Session(new TcpTransport({ host: '127.0.0.1', port }), { timeoutMs: 1000 })
+  await s.open()
+  return s
+}
+
+function attendancePayload(userId: string): Buffer {
+  const buf = Buffer.alloc(32)
+  buf.write(userId, 0, 9, 'latin1')
+  buf.set([26, 8, 27, 8, 1, 30], 26)
+  return buf
+}
+
+describe('probeConcurrent', () => {
+  it('records that a second connection was accepted', async () => {
+    running = await startEmulator({ transport: 'tcp' })
+    session = await open(running.port)
+    const findings = emptyFindings()
+    await probeConcurrent(new StepRunner(), findings, {
+      host: '127.0.0.1', port: running.port, transport: 'tcp', timeoutMs: 1000,
+    })
+    expect(findings.concurrent).toMatchObject({ attempted: true, accepted: true, error: null })
+  })
+
+  it('records a refused second connection as data rather than throwing', async () => {
+    // Item 10 is answered by either outcome. A device that refuses is a real
+    // finding, not a failure of the probe.
+    const findings = emptyFindings()
+    const runner = new StepRunner()
+    await probeConcurrent(runner, findings, {
+      host: '127.0.0.1', port: 1, transport: 'tcp', timeoutMs: 300,
+    })
+    expect(findings.concurrent?.accepted).toBe(false)
+    expect(findings.concurrent?.error).toBeTruthy()
+    // It must not truncate the run: this probe opens its OWN socket, so its
+    // failure says nothing about the session the rest of the probe is using.
+    expect(runner.truncated).toBeNull()
+  })
+})
+
+describe('probeRealtime', () => {
+  it('registers and counts the events that arrive in the window', async () => {
+    running = await startEmulator({ transport: 'tcp' })
+    session = await open(running.port)
+    const findings = emptyFindings()
+    const sleep = async (): Promise<void> => {
+      running!.pushEvent(EVENT_FLAG.ATTENDANCE, attendancePayload('A1'))
+      running!.pushEvent(EVENT_FLAG.ATTENDANCE, attendancePayload('B2'))
+      await new Promise((r) => setTimeout(r, 80))
+    }
+    await probeRealtime(session, new StepRunner(), findings, { windowSeconds: 5, sleep })
+    expect(findings.realtime).toMatchObject({ registered: true, windowSeconds: 5 })
+    expect(findings.realtime!.eventsObserved).toBe(2)
+    expect(findings.realtime!.eventTypes).toContain(EVENT_FLAG.ATTENDANCE)
+    session = null // the transport is one-way now; teardown happens below
+  })
+
+  it('records a refused registration without ending the run', async () => {
+    running = await startEmulator({ transport: 'tcp', refuseRegEvent: true })
+    session = await open(running.port)
+    const findings = emptyFindings()
+    const runner = new StepRunner()
+    await probeRealtime(session, runner, findings, {
+      windowSeconds: 1, sleep: async () => {},
+    })
+    expect(findings.realtime).toMatchObject({ registered: false })
+    expect(findings.realtime?.error).toBeTruthy()
+  })
+
+  it('never records event payload contents, only types and a count', async () => {
+    running = await startEmulator({ transport: 'tcp' })
+    session = await open(running.port)
+    const findings = emptyFindings()
+    const sleep = async (): Promise<void> => {
+      running!.pushEvent(EVENT_FLAG.ATTENDANCE, attendancePayload('SECRET99'))
+      await new Promise((r) => setTimeout(r, 80))
+    }
+    await probeRealtime(session, new StepRunner(), findings, { windowSeconds: 1, sleep })
+    expect(JSON.stringify(findings)).not.toContain('SECRET99')
+    session = null
+  })
+})
+```
+
+If `startEmulator` has no `refuseRegEvent` option, add one in this task the same way Task 1 added `keywordForm`: an option defaulting to `false`, with the `CMD.REG_EVENT` handler replying `CMD.ACK_ERROR` when it is set. Do not fake the refusal by other means — the point is to exercise the real refusal path.
+
+- [ ] **Step 2: Run test to verify it fails**
+
+Run: `npx vitest run test/diagnostics/probe.realtime.spec.ts`
+Expected: FAIL — `probeConcurrent` and `probeRealtime` are not exported.
+
+- [ ] **Step 3: Implement**
+
+Add to `Findings` and `emptyFindings()`:
+
+```ts
+  concurrent: { attempted: boolean; accepted: boolean; error: string | null } | null
+  realtime: {
+    windowSeconds: number
+    registered: boolean
+    eventsObserved: number
+    eventTypes: number[]
+    desyncOnRegister: boolean
+    error: string | null
+  } | null
+```
+
+Append to `src/diagnostics/probe.ts`:
+
+```ts
+/**
+ * Checklist item 10: does the device accept a second concurrent connection?
+ *
+ * This decides whether a consumer can poll and subscribe at the same time
+ * (v0.2 §3.1), which is why ZkDevice makes opening a second connection a
+ * visible decision rather than an assumption.
+ *
+ * Runs on its OWN socket and never touches the caller's session, so a refusal
+ * here says nothing about the session the rest of the probe is using — which
+ * is why a failure records `accepted: false` instead of truncating the run.
+ * Both outcomes answer the item.
+ */
+export async function probeConcurrent(
+  runner: StepRunner,
+  findings: Findings,
+  opts: { host: string; port: number; transport: 'tcp' | 'udp'; timeoutMs: number },
+): Promise<void> {
+  await runner.run('second-connection', async () => {
+    const transport =
+      opts.transport === 'tcp'
+        ? new TcpTransport({ host: opts.host, port: opts.port })
+        : new UdpTransport({ host: opts.host, port: opts.port })
+    const second = new Session(transport, { timeoutMs: opts.timeoutMs })
+    try {
+      await second.open()
+      findings.concurrent = { attempted: true, accepted: true, error: null }
+      await second.close().catch(() => {})
+    } catch (err) {
+      findings.concurrent = {
+        attempted: true,
+        accepted: false,
+        error: err instanceof Error ? err.message : String(err),
+      }
+    }
+    return findings.concurrent
+  })
+}
+
+/**
+ * Checklist items 8, 9, 12, 13 and 14: what a live subscription actually does.
+ *
+ * MUST BE LAST. Transport.listen is one-way, once per socket (v0.2 §3.1), so
+ * after this the session can never answer a request again. Nothing may follow
+ * it, and the CLI runs it only when --realtime is passed.
+ *
+ * Only event TYPES and a count are recorded. An event payload is a punch by a
+ * named person, and no checklist item needs its contents.
+ *
+ * A desync — the device pushing an event before acknowledging CMD_REG_EVENT —
+ * is item 14, and Session.subscribe tears the session down when it happens.
+ * That is designed behaviour rather than a bug, so it is recorded as an
+ * observation rather than propagated as a failure. If a real terminal does it
+ * routinely rather than rarely, v0.2 §3.1's trade-off is worth revisiting with
+ * the count this field provides.
+ */
+export async function probeRealtime(
+  session: Session,
+  runner: StepRunner,
+  findings: Findings,
+  opts: { windowSeconds: number; sleep: (ms: number) => Promise<void> },
+): Promise<void> {
+  await runner.run('realtime', async () => {
+    const types = new Set<number>()
+    let observed = 0
+    findings.realtime = {
+      windowSeconds: opts.windowSeconds,
+      registered: false,
+      eventsObserved: 0,
+      eventTypes: [],
+      desyncOnRegister: false,
+      error: null,
+    }
+    try {
+      await session.subscribe(
+        EVENT_FLAG.ATTENDANCE,
+        (pkt) => {
+          observed += 1
+          // The event type occupies the session-id slot (v0.2 §5.1) — itself a
+          // checklist item, which is why the raw type is recorded rather than a
+          // decoded name.
+          types.add(pkt.sessionId)
+        },
+        () => {},
+      )
+      findings.realtime.registered = true
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      findings.realtime.error = message
+      findings.realtime.desyncOnRegister = /out of step/.test(message)
+      return findings.realtime
+    }
+    await opts.sleep(opts.windowSeconds * 1000)
+    findings.realtime.eventsObserved = observed
+    findings.realtime.eventTypes = [...types].sort((a, b) => a - b)
+    return findings.realtime
+  })
+}
+```
+
+Add the imports these need at the top of `probe.ts`: `Session`, `TcpTransport`, `UdpTransport`, `EVENT_FLAG`.
+
+In `src/cli.ts`, wire the two probes in `main()` in the order given in Task 8, guarded by `opts.concurrent` and `opts.realtimeSeconds > 0`, passing `sleep: (ms) => new Promise((r) => setTimeout(r, ms))`.
+
+- [ ] **Step 4: Run tests to verify they pass**
+
+Run: `npx vitest run && npx tsc --noEmit && npm run build`
+Expected: everything green. Task 9's allowlist test must still pass — `REG_EVENT` is on the allowlist, and the second connection sends only `CONNECT`/`EXIT`.
+
+- [ ] **Step 5: Verify the guard, then commit**
+
+Add the event payload to `findings.realtime` under a new key and confirm the "never records event payload contents" test goes red on `not.toContain('SECRET99')`. Restore.
+
+```bash
+git add src/diagnostics/probe.ts src/cli.ts test/diagnostics/probe.realtime.spec.ts test/emulator/index.ts
+git commit -m "feat(diagnostics): opt-in realtime and second-connection probes
+
+The last five checklist items a tool can reach: 8, 9, 12, 13 and 14 from a live
+subscription, and 10 from a second connection.
+
+Both are opt-in and realtime runs last, because Transport.listen is one-way and
+once per socket -- after it the session can never answer a request again. That
+must not happen to someone who typed the bare command, so --realtime and
+--concurrent default to off.
+
+probeConcurrent uses its own socket and records a refusal as data rather than
+truncating: a device refusing a second connection is the answer to item 10, and
+says nothing about the session the rest of the probe is using.
+
+A desync on registration is item 14 and is recorded as an observation, not
+propagated as a failure -- Session.subscribe tearing the session down there is
+designed behaviour (v0.2 RULING R11), and what is missing is the frequency,
+which this field supplies.
+
+Only event types and a count are recorded; an event payload is a punch by a
+named person. Verified by recording one deliberately and watching the test go
+red.
+
+Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>"
+```
+
+---
+
 ## Self-Review
 
 **Spec coverage.** §3.1 modules → Tasks 2, 3, 4–6, 7, 8. §3.2 per-step isolation → Task 3, and the per-key sweep in Task 4. §3.3 decorator → Task 2. §3.4 packaging → Task 8. §4.1 sequence → Tasks 4–6 in order. §4.2 A/B → Task 4. §4.3 attendance guard → Task 6. §4.4 allowlist → Task 9. §4.5 coverage map → Task 7's checklist table. §4.6 item 22 → Task 7 and Task 9's doc edit. §5.1–5.4 artifacts → Task 7. §5.5 exit codes → Task 8. §6 error isolation → Task 3. §7.1 scenarios → Tasks 2, 3, 5, 6; scenario 5 → Tasks 1 and 4. §7.2 invariants → Task 9. §7.3 purity → Global Constraints, enforced by injected clocks in Tasks 2 and 5. §7.4 countermeasure → the verification steps in Tasks 3, 4, 6, 9.
 
-**Gap found and closed:** §4.1 step 8 — the opt-in realtime and second-connection probes — had no task. It is **deliberately deferred**, not forgotten: it is the only part of the probe that flips the socket one-way, it answers five checklist items that all need a device present to mean anything, and it would double Task 6's surface. Ship Tasks 1–9 first; `--realtime` and `--concurrent` become a follow-up plan. Task 8 must therefore **not** advertise flags it does not implement, and Task 7's checklist table must mark items 8, 9, 10, 12 and 13 as *not covered by this version* rather than *not answered*, which are different claims.
+**Gap found and closed:** §4.1 step 8 — the opt-in realtime and second-connection probes — initially had no task. It is now **Task 10**, so the plan covers the spec completely and a first-hardware session can reach every item a tool can reach in one run.
+
+Task 10 carries two constraints that ripple backwards, and both are already reflected above:
+- **Ordering is load-bearing, not cosmetic.** `probeConcurrent` needs the first session still usable, and `probeRealtime` flips the transport one-way — `Transport.listen` is one-way, once per socket (v0.2 §3.1) — so nothing can follow it. Task 8's `main()` spells out the sequence.
+- **Both default to off.** Subscribing cannot be undone, so it must never happen to someone who typed the bare command. Task 8's parse test pins `realtimeSeconds: 0` and `concurrent: false` for the bare invocation.
+
+Task 7's checklist table therefore marks items 8, 9, 10, 12, 13 and 14 as *answered when the probe was run, not requested otherwise* — which is a third state, distinct from both *not answered* and *not testable*, and the renderer must not collapse it into either.
 
 **Type consistency:** `Findings` is defined once in Task 4 and extended in Tasks 5 and 6; `emptyFindings()` is updated alongside each extension. `StepRunner.run` returns `T | undefined` in Task 3 and every call site treats it as optional. `ProbeResult` is defined in Task 7 and constructed identically in Tasks 8 and 9.
