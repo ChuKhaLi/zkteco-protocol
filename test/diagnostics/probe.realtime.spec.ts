@@ -86,12 +86,24 @@ describe('probeRealtime', () => {
     running = await startEmulator({ transport: 'tcp' })
     session = await open(running.port)
     const findings = emptyFindings()
+    const runner = new StepRunner()
     const sleep = async (): Promise<void> => {
       running!.pushEvent(EVENT_FLAG.ATTENDANCE, attendancePayload('SECRET99'))
       await new Promise((r) => setTimeout(r, 80))
     }
-    await probeRealtime(session, new StepRunner(), findings, { windowSeconds: 1, sleep })
+    await probeRealtime(session, runner, findings, { windowSeconds: 1, sleep })
     expect(JSON.stringify(findings)).not.toContain('SECRET99')
+    // Fix round 1 (F10): `renderJson` spreads `result` -- `steps` and their
+    // `value` fields included -- verbatim into the JSON sidecar the CLI
+    // writes to disk. It is safe today only because `runner.run`'s callback
+    // returns the very same `findings.realtime` object this test already
+    // checked above, so there is nothing extra in `runner.steps` to leak --
+    // by aliasing coincidence, not by construction. Asserting against
+    // `findings` alone would miss a future edit that decorates either
+    // returned value with something `findings` never sees; probe.bulk.spec.ts
+    // ("keeps no user names or ids in findings") already establishes the
+    // pattern of checking both for exactly this reason.
+    expect(JSON.stringify(runner.steps)).not.toContain('SECRET99')
     await session.close().catch(() => {}); session = null
   })
 })

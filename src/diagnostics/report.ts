@@ -50,7 +50,7 @@ const KEYWORD_FORM_NOTE: Record<KeywordFormVerdict, string> = {
 }
 
 /**
- * Items 8, 9, 12 and 13: what a completed subscription window shows.
+ * Items 8, 9 and 13: what a completed subscription window shows.
  *
  * 'not requested' when the operator never passed --realtime (the device was
  * never asked) — a different claim from 'not answered', which means the
@@ -59,6 +59,14 @@ const KEYWORD_FORM_NOTE: Record<KeywordFormVerdict, string> = {
  * to item 14). Collapsing 'not requested' into 'not answered' would make a
  * default, unattended run look like it had probed items it never touched
  * (design spec §4.5, items 8-10 and 12-14).
+ *
+ * Item 12 does NOT share this function — see `realtimeCancelState` below. Fix
+ * round 1 (F11): 'answered' here would have meant "a window completed", which
+ * is evidence about whether events arrive, not about whether a subscription
+ * can be CANCELLED. This library has no unsubscribe/cancel primitive at all
+ * and the probe never attempts one, in any branch — so item 12 was a false
+ * 'answered' before this fix, borrowing a flag with zero supporting mechanism
+ * behind it.
  */
 function realtimeGeneralState(f: Findings): ChecklistState {
   if (f.realtime === null) return 'not requested'
@@ -101,6 +109,25 @@ function realtimeDesyncObservation(f: Findings): string {
 }
 
 /**
+ * Item 12 alone: is there a way to cancel a subscription without dropping
+ * the connection?
+ *
+ * Always 'not testable by this tool' (Fix round 1, F11) — the same state
+ * item 22 uses, and for the same reason: this library ships no unsubscribe
+ * or cancel primitive (`Transport.listen` is documented one-way, once per
+ * socket, and `Session` has nothing that reverses it), so no branch of
+ * `probeRealtime`, success or failure, ever attempts one. There is no
+ * outcome this probe could observe that would answer the question either
+ * way, unlike items 8/9/13, which at least a completed window weakly informs.
+ */
+function realtimeCancelState(): ChecklistState {
+  return 'not testable by this tool'
+}
+
+const REALTIME_CANCEL_OBSERVATION =
+  'this library has no unsubscribe/cancel primitive (Transport.listen is one-way, once per socket) and the probe never attempts one; not answerable from a probe run.'
+
+/**
  * Item 10: does the device accept a second concurrent connection?
  *
  * Unlike the realtime items above, a refusal here is just as decisive an
@@ -127,9 +154,11 @@ function concurrentObservation(f: Findings): string {
  * The mapping from item to evidence follows the bringup-kit design spec §4.5
  * ("Checklist coverage") and §4.6 ("What cannot be probed") verbatim: each
  * item is driven by the same `Findings`/`steps` field that section names as
- * its answer, and item 22 alone is 'not testable by this tool' — the design
- * doc's "What cannot be probed" heading names only that one item, so no other
- * item borrows that state, even where evidence is thin.
+ * its answer. Item 22 is 'not testable by this tool' per the design doc's
+ * "What cannot be probed" heading; item 12 shares that same state as of Fix
+ * round 1 (F11) for an analogous reason the design doc predates — this
+ * library has no cancel/unsubscribe primitive for the probe to exercise. No
+ * OTHER item borrows either state, even where evidence is thin.
  */
 function buildChecklist(result: ProbeResult): ChecklistRow[] {
   const f = result.findings
@@ -238,8 +267,8 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
   push(
     12,
     'Is there a way to cancel a subscription without dropping the connection?',
-    realtimeGeneralState(f),
-    realtimeGeneralObservation(f),
+    realtimeCancelState(),
+    REALTIME_CANCEL_OBSERVATION,
   )
   push(
     13,

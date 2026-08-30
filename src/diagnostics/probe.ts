@@ -520,14 +520,18 @@ export async function probeConcurrent(
       await second.open()
       findings.concurrent = { attempted: true, accepted: true, error: null }
       await second.close().catch(() => {})
+      return findings.concurrent
     } catch (err) {
       findings.concurrent = {
         attempted: true,
         accepted: false,
         error: err instanceof Error ? err.message : String(err),
       }
+      // Ruling R7's argument applies here too: the device (or the network)
+      // declined a second connection, which is the checklist item's answer,
+      // not a failure of this probe. 'ok' would conflate the two.
+      return refused(findings.concurrent)
     }
-    return findings.concurrent
   })
 }
 
@@ -582,7 +586,10 @@ export async function probeRealtime(
       const message = err instanceof Error ? err.message : String(err)
       findings.realtime.error = message
       findings.realtime.desyncOnRegister = /out of step/.test(message)
-      return findings.realtime
+      // Same argument as probeConcurrent's catch branch (Ruling R7): a
+      // refused registration or a desync is the device declining, which is
+      // data the checklist items above want -- not this probe failing.
+      return refused(findings.realtime)
     }
     await opts.sleep(opts.windowSeconds * 1000)
     findings.realtime.eventsObserved = observed
