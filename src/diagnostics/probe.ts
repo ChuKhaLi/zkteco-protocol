@@ -4,8 +4,10 @@ import { DEVICE_PARAM } from '../codec/params.js'
 import { readNulTerminated } from '../codec/records/shared.js'
 import { decodeZkTime } from '../codec/time.js'
 import { FREE_SIZES_OFFSET } from '../commands/info.js'
+import { getUsers } from '../commands/users.js'
+import { getAttendanceLogs } from '../commands/attendance.js'
 import type { Session } from '../session/Session.js'
-import type { ZkNaiveTime } from '../types.js'
+import type { ZkNaiveTime, ZkUser } from '../types.js'
 import type { StepRunner } from './step.js'
 import type { TraceEvent } from './types.js'
 
@@ -55,6 +57,14 @@ export interface Findings {
     rawHex: string
   } | null
   checksum: { packetsChecked: number; mismatches: number }
+  bulkPath: 'buffered' | 'legacy' | null
+  attendance: {
+    read: boolean
+    skippedReason: string | null
+    detectedRecordSize: number | null
+    rowCount: number
+  } | null
+  encoding: { namesInspected: number; withHighBytes: number; validUtf8: boolean | null } | null
 }
 
 export function emptyFindings(): Findings {
@@ -71,6 +81,9 @@ export function emptyFindings(): Findings {
     clock: null,
     freeSizes: null,
     checksum: { packetsChecked: 0, mismatches: 0 },
+    bulkPath: null,
+    attendance: null,
+    encoding: null,
   }
 }
 
@@ -279,5 +292,116 @@ export async function probeState(
       rawHex: res.data.toString('hex'),
     }
     return findings.freeSizes
+  })
+}
+
+/**
+ * Read the attendance log automatically below this many records.
+ *
+ * A guess about politeness and nothing more. The protocol has no "read N
+ * records" — the device returns its whole buffer — so on a large terminal this
+ * is slow and keeps the device busy while people are badging at it. No device
+ * has been observed, so no count is KNOWN to be slow. The first real device
+ * should be treated as evidence about this number (design spec §8, risk 3).
+ */
+export const ATTENDANCE_AUTO_THRESHOLD = 10_000
+
+/**
+ * Answers first-hardware checklist item 20 without ever shipping a name.
+ *
+ * The discriminating signal is structural, not semantic: UTF-8 has a strict
+ * continuation-byte grammar and GB2312 does not. So the bytes are tested and a
+ * verdict is returned; the names never leave this function.
+ *
+ * Names arrive decoded as latin1, which is byte-preserving, so re-encoding to
+ * latin1 recovers exactly what the device sent. Under the `ascii` decoding
+ * this library used before v0.3 the high bit was already gone and this
+ * question could not have been asked at all.
+ *
+ * `validUtf8` is null when nothing carried a high byte — that is "no evidence
+ * either way", which is a different answer from "not UTF-8" and must not be
+ * collapsed into it.
+ */
+export function encodingVerdict(
+  names: readonly string[],
+): { namesInspected: number; withHighBytes: number; validUtf8: boolean | null } {
+  const high = names.filter((n) => [...n].some((c) => c.charCodeAt(0) >= 0x80))
+  if (high.length === 0) {
+    return { namesInspected: names.length, withHighBytes: 0, validUtf8: null }
+  }
+  const decoder = new TextDecoder('utf-8', { fatal: true })
+  const allValid = high.every((n) => {
+    try {
+      decoder.decode(Buffer.from(n, 'latin1'))
+      return true
+    } catch {
+      return false
+    }
+  })
+  return { namesInspected: names.length, withHighBytes: high.length, validUtf8: allValid }
+}
+
+/**
+ * Step 7 of the probe: the user list, then the attendance log.
+ *
+ * Which bulk path the firmware took is recorded because it answers whether
+ * 1503/1504 are implemented, and — since v0.3.1 — checklist item 23 as well.
+ * It is inferred from the trace by the caller rather than guessed here.
+ */
+export async function probeBulk(
+  session: Session,
+  runner: StepRunner,
+  findings: Findings,
+  opts: { transport: 'tcp' | 'udp'; attendance: 'auto' | 'always' | 'never' },
+): Promise<void> {
+  // The list is captured in this closure variable rather than returned from
+  // the step, deliberately. StepRunner.run stores whatever the callback
+  // returns as StepResult.value, which flows into the report independently
+  // of `findings` -- the same shape the parameter sweep above guards against
+  // for the device serial number, and names and user ids are exactly the
+  // sensitive payload that rule exists to keep out. Only a count leaves the
+  // callback.
+  let users: ZkUser[] | undefined
+  await runner.run('users', async () => {
+    users = await getUsers(session, opts.transport)
+    return { count: users.length }
+  })
+  if (users) {
+    findings.encoding = encodingVerdict(users.map((u) => u.name))
+    findings.bulkPath = 'buffered'
+  }
+
+  const recordCount = findings.freeSizes?.recordCount ?? 0
+  const shouldRead =
+    opts.attendance === 'always' ||
+    (opts.attendance === 'auto' && recordCount <= ATTENDANCE_AUTO_THRESHOLD)
+
+  if (!shouldRead) {
+    // Reported as a skip, naming the count and the override. Omitting it
+    // silently would be the "reports success while proving less than it
+    // appears to" shape this project keeps catching.
+    findings.attendance = {
+      read: false,
+      skippedReason:
+        opts.attendance === 'never'
+          ? 'skipped: --attendance=never'
+          : `skipped: ${recordCount} records exceeds the ${ATTENDANCE_AUTO_THRESHOLD} auto threshold; pass --attendance=always to read anyway`,
+      detectedRecordSize: null,
+      rowCount: 0,
+    }
+    return
+  }
+
+  await runner.run('attendance', async () => {
+    const logs = await getAttendanceLogs(session, opts.transport, { resolveUserIds: false })
+    // Counts and shapes only. Never a row: those are movement records for
+    // named people, and no checklist item needs their contents.
+    findings.attendance = {
+      read: true,
+      skippedReason: null,
+      detectedRecordSize: logs[0]?.recordSize ?? null,
+      rowCount: logs.length,
+    }
+    return findings.attendance
   })
 }
