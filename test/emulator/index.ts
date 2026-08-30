@@ -87,6 +87,8 @@ export interface EmulatorOptions {
    * `pushWithAck`, which is the benign queue-drain case.
    */
   pushBeforeAck?: Array<{ eventType: number; data: Buffer }>
+  /** When true, CMD_REG_EVENT is refused with ACK_ERROR instead of accepted. */
+  refuseRegEvent?: boolean
 }
 
 export interface EmulatorState {
@@ -359,6 +361,7 @@ const baseHandlers: HandlerTable = {
     serveDataLegacy(state, req, withSizeHeader(Buffer.concat(state.users.map((u) => Buffer.from(u.raw, 'hex'))))),
   [CMD.FREE_DATA]: (req, state) => [reply(state, req, CMD.ACK_OK)],
   [CMD.REG_EVENT]: (req, state) => {
+    if (state.opts.refuseRegEvent) return [reply(state, req, CMD.ACK_ERROR)]
     state.eventMask = req.data.length >= 4 ? req.data.readUInt32LE(0) : 0
     const ack = reply(state, req, CMD.ACK_OK)
     const early = (state.opts.pushBeforeAck ?? []).map((p) => eventPacket(p.eventType, p.data))

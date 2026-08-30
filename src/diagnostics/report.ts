@@ -50,19 +50,76 @@ const KEYWORD_FORM_NOTE: Record<KeywordFormVerdict, string> = {
 }
 
 /**
- * Items 8, 9, 12, 13 and 14 (the realtime probe) and item 10 (the second
- * connection probe) — Task 10 has not landed, so `Findings` has no
- * `realtime`/`concurrent` fields to inspect yet. Until it does, every run of
- * this tool leaves these six items unrequested, so they are hard-coded here.
+ * Items 8, 9, 12 and 13: what a completed subscription window shows.
  *
- * TASK 10 TODO: once `Findings.realtime` / `Findings.concurrent` exist,
- * replace this constant with a per-item read of those fields — 'answered'
- * when the corresponding probe ran and produced a finding, 'not answered'
- * when it ran and the device declined, 'not requested' only when the
- * operator did not pass --realtime / --concurrent at all.
+ * 'not requested' when the operator never passed --realtime (the device was
+ * never asked) — a different claim from 'not answered', which means the
+ * probe ran and the subscription did not complete (refused, or torn down by
+ * a desync — see `realtimeDesyncState` for that case's OWN, positive answer
+ * to item 14). Collapsing 'not requested' into 'not answered' would make a
+ * default, unattended run look like it had probed items it never touched
+ * (design spec §4.5, items 8-10 and 12-14).
  */
-const REALTIME_ITEMS = [8, 9, 12, 13, 14] as const
-const CONCURRENT_ITEMS = [10] as const
+function realtimeGeneralState(f: Findings): ChecklistState {
+  if (f.realtime === null) return 'not requested'
+  return f.realtime.registered ? 'answered' : 'not answered'
+}
+
+function realtimeGeneralObservation(f: Findings): string {
+  const r = f.realtime
+  if (r === null) return 'the realtime probe was not requested (pass --realtime=<seconds> to run it).'
+  if (!r.registered) {
+    return `the subscription did not complete: ${r.error ?? '(no message)'}.`
+  }
+  return `registered and held open for a ${r.windowSeconds}s window; ${r.eventsObserved} event(s) observed, event type(s) seen: ${r.eventTypes.length > 0 ? r.eventTypes.join(', ') : '(none)'}.`
+}
+
+/**
+ * Item 14 alone: does the device ever push an event before acknowledging
+ * CMD_REG_EVENT?
+ *
+ * This is an anomaly-detection item, like item 5's framing cap: a desync
+ * observed is a positive, decisive answer ('answered') even though it means
+ * `registered` stayed false and the OTHER realtime items above stay 'not
+ * answered' for this same run — the session was torn down before a window
+ * could be held open (v0.2 RULING R11), but item 14 already has its answer
+ * the moment the race is caught. No desync is 'not answered': the race not
+ * firing on one run is not evidence it cannot happen.
+ */
+function realtimeDesyncState(f: Findings): ChecklistState {
+  if (f.realtime === null) return 'not requested'
+  return f.realtime.desyncOnRegister ? 'answered' : 'not answered'
+}
+
+function realtimeDesyncObservation(f: Findings): string {
+  const r = f.realtime
+  if (r === null) return 'the realtime probe was not requested (pass --realtime=<seconds> to run it).'
+  if (r.desyncOnRegister) {
+    return `yes — the device pushed an event before acknowledging CMD_REG_EVENT: ${r.error ?? '(no message)'}. The session was torn down, as designed (v0.2 RULING R11).`
+  }
+  return 'no desync was observed on this run — inconclusive, since the race is only caught if the device happens to lose it, not provoked deliberately.'
+}
+
+/**
+ * Item 10: does the device accept a second concurrent connection?
+ *
+ * Unlike the realtime items above, a refusal here is just as decisive an
+ * answer as an acceptance — see `probeConcurrent`'s own doc comment ("Both
+ * outcomes answer the item"). So 'not answered' never applies once the probe
+ * has run; only 'not requested' (--concurrent was not passed) precedes an
+ * 'answered' result.
+ */
+function concurrentState(f: Findings): ChecklistState {
+  return f.concurrent === null ? 'not requested' : 'answered'
+}
+
+function concurrentObservation(f: Findings): string {
+  const c = f.concurrent
+  if (c === null) return 'the second-connection probe was not requested (pass --concurrent to run it).'
+  return c.accepted
+    ? 'a second connection was accepted while the first was still open.'
+    : `a second connection was refused: ${c.error ?? '(no message)'}.`
+}
 
 /**
  * Builds the 23-row first-hardware checklist from one probe result.
@@ -153,20 +210,20 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
   push(
     8,
     'Does the device require an acknowledgment for each realtime event?',
-    'not requested',
-    'the realtime probe was not requested (Task 10 wires --realtime).',
+    realtimeGeneralState(f),
+    realtimeGeneralObservation(f),
   )
   push(
     9,
     'Does a subscription survive an idle period, or does the device drop it?',
-    'not requested',
-    'the realtime probe was not requested (Task 10 wires --realtime).',
+    realtimeGeneralState(f),
+    realtimeGeneralObservation(f),
   )
   push(
     10,
     'Does the device accept a second concurrent connection on 4370?',
-    'not requested',
-    'the second-connection probe was not requested (Task 10 wires --concurrent).',
+    concurrentState(f),
+    concurrentObservation(f),
   )
 
   push(
@@ -181,20 +238,20 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
   push(
     12,
     'Is there a way to cancel a subscription without dropping the connection?',
-    'not requested',
-    'the realtime probe was not requested (Task 10 wires --realtime).',
+    realtimeGeneralState(f),
+    realtimeGeneralObservation(f),
   )
   push(
     13,
     'Does the device emit event types outside the requested mask, or interleave a request-response packet into a listening connection?',
-    'not requested',
-    'the realtime probe was not requested (Task 10 wires --realtime).',
+    realtimeGeneralState(f),
+    realtimeGeneralObservation(f),
   )
   push(
     14,
     'Does the device ever push an event before acknowledging CMD_REG_EVENT?',
-    'not requested',
-    'the realtime probe was not requested (Task 10 wires --realtime).',
+    realtimeDesyncState(f),
+    realtimeDesyncObservation(f),
   )
 
   const paramsAnswered = f.parameters.length > 0

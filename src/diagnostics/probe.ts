@@ -1,5 +1,6 @@
 import { CMD } from '../codec/commands.js'
 import { checksum16 } from '../codec/checksum.js'
+import { EVENT_FLAG } from '../codec/events.js'
 import { decodePayload } from '../codec/packet.js'
 import { DEVICE_PARAM } from '../codec/params.js'
 import { readNulTerminated } from '../codec/records/shared.js'
@@ -8,7 +9,9 @@ import { FREE_SIZES_OFFSET } from '../commands/info.js'
 import { getUsers } from '../commands/users.js'
 import { getAttendanceLogs } from '../commands/attendance.js'
 import { ZkAuthError } from '../errors.js'
-import type { Session } from '../session/Session.js'
+import { Session } from '../session/Session.js'
+import { TcpTransport } from '../transport/tcp.js'
+import { UdpTransport } from '../transport/udp.js'
 import type { ZkNaiveTime, ZkUser } from '../types.js'
 import { refused, type StepRunner } from './step.js'
 import type { TraceEvent } from './types.js'
@@ -67,6 +70,15 @@ export interface Findings {
     rowCount: number
   } | null
   encoding: { namesInspected: number; withHighBytes: number; validUtf8: boolean | null } | null
+  concurrent: { attempted: boolean; accepted: boolean; error: string | null } | null
+  realtime: {
+    windowSeconds: number
+    registered: boolean
+    eventsObserved: number
+    eventTypes: number[]
+    desyncOnRegister: boolean
+    error: string | null
+  } | null
 }
 
 export function emptyFindings(): Findings {
@@ -86,6 +98,8 @@ export function emptyFindings(): Findings {
     bulkPath: null,
     attendance: null,
     encoding: null,
+    concurrent: null,
+    realtime: null,
   }
 }
 
@@ -476,5 +490,103 @@ export async function probeBulk(
       rowCount: logs.length,
     }
     return findings.attendance
+  })
+}
+
+/**
+ * Checklist item 10: does the device accept a second concurrent connection?
+ *
+ * This decides whether a consumer can poll and subscribe at the same time
+ * (v0.2 §3.1), which is why ZkDevice makes opening a second connection a
+ * visible decision rather than an assumption.
+ *
+ * Runs on its OWN socket and never touches the caller's session, so a refusal
+ * here says nothing about the session the rest of the probe is using — which
+ * is why a failure records `accepted: false` instead of truncating the run.
+ * Both outcomes answer the item.
+ */
+export async function probeConcurrent(
+  runner: StepRunner,
+  findings: Findings,
+  opts: { host: string; port: number; transport: 'tcp' | 'udp'; timeoutMs: number },
+): Promise<void> {
+  await runner.run('second-connection', async () => {
+    const transport =
+      opts.transport === 'tcp'
+        ? new TcpTransport({ host: opts.host, port: opts.port })
+        : new UdpTransport({ host: opts.host, port: opts.port })
+    const second = new Session(transport, { timeoutMs: opts.timeoutMs })
+    try {
+      await second.open()
+      findings.concurrent = { attempted: true, accepted: true, error: null }
+      await second.close().catch(() => {})
+    } catch (err) {
+      findings.concurrent = {
+        attempted: true,
+        accepted: false,
+        error: err instanceof Error ? err.message : String(err),
+      }
+    }
+    return findings.concurrent
+  })
+}
+
+/**
+ * Checklist items 8, 9, 12, 13 and 14: what a live subscription actually does.
+ *
+ * MUST BE LAST. Transport.listen is one-way, once per socket (v0.2 §3.1), so
+ * after this the session can never answer a request again. Nothing may follow
+ * it, and the CLI runs it only when --realtime is passed.
+ *
+ * Only event TYPES and a count are recorded. An event payload is a punch by a
+ * named person, and no checklist item needs its contents.
+ *
+ * A desync — the device pushing an event before acknowledging CMD_REG_EVENT —
+ * is item 14, and Session.subscribe tears the session down when it happens.
+ * That is designed behaviour rather than a bug, so it is recorded as an
+ * observation rather than propagated as a failure. If a real terminal does it
+ * routinely rather than rarely, v0.2 §3.1's trade-off is worth revisiting with
+ * the count this field provides.
+ */
+export async function probeRealtime(
+  session: Session,
+  runner: StepRunner,
+  findings: Findings,
+  opts: { windowSeconds: number; sleep: (ms: number) => Promise<void> },
+): Promise<void> {
+  await runner.run('realtime', async () => {
+    const types = new Set<number>()
+    let observed = 0
+    findings.realtime = {
+      windowSeconds: opts.windowSeconds,
+      registered: false,
+      eventsObserved: 0,
+      eventTypes: [],
+      desyncOnRegister: false,
+      error: null,
+    }
+    try {
+      await session.subscribe(
+        EVENT_FLAG.ATTENDANCE,
+        (pkt) => {
+          observed += 1
+          // The event type occupies the session-id slot (v0.2 §5.1) — itself a
+          // checklist item, which is why the raw type is recorded rather than a
+          // decoded name.
+          types.add(pkt.sessionId)
+        },
+        () => {},
+      )
+      findings.realtime.registered = true
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err)
+      findings.realtime.error = message
+      findings.realtime.desyncOnRegister = /out of step/.test(message)
+      return findings.realtime
+    }
+    await opts.sleep(opts.windowSeconds * 1000)
+    findings.realtime.eventsObserved = observed
+    findings.realtime.eventTypes = [...types].sort((a, b) => a - b)
+    return findings.realtime
   })
 }

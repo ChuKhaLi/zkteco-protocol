@@ -2,7 +2,9 @@
 import { writeFile } from 'node:fs/promises'
 import { parseArgs } from 'node:util'
 import { pathToFileURL } from 'node:url'
-import { auditChecksums, emptyFindings, probeBulk, probeIdentity, probeState } from './diagnostics/probe.js'
+import {
+  auditChecksums, emptyFindings, probeBulk, probeConcurrent, probeIdentity, probeRealtime, probeState,
+} from './diagnostics/probe.js'
 import { renderJson, renderMarkdown, renderRawCapture, type ProbeResult } from './diagnostics/report.js'
 import { StepRunner } from './diagnostics/step.js'
 import { TracingTransport } from './diagnostics/TracingTransport.js'
@@ -30,9 +32,9 @@ export interface CliOptions {
   attendance: 'auto' | 'always' | 'never'
   rawCapture: string | null
   out: string | null
-  /** 0 (the default) means off. Task 10 wires this up; see main(). */
+  /** 0 (the default) means off — the realtime probe is opt-in; see runProbe(). */
   realtimeSeconds: number
-  /** Task 10 wires this up; see main(). */
+  /** false (the default) means off — the second-connection probe is opt-in; see runProbe(). */
   concurrent: boolean
 }
 
@@ -214,16 +216,11 @@ export async function writeOutputs(
  * control read (`probeIdentity`'s CMD_GET_VERSION) must precede the
  * parameter sweep it disambiguates, and free-sizes (`probeState`) must
  * precede the attendance-size decision `probeBulk` makes from it.
- * `probeConcurrent` — opt-in via `--concurrent` — would run next, because it
- * needs the first session still usable. `probeRealtime` — opt-in via
- * `--realtime` — runs last of all, because subscribing flips the transport
- * one-way (`Transport.listen`) and nothing can follow it.
- *
- * TASK 10 TODO: neither probe exists yet. Wire `probeConcurrent(session, ...)`
- * here, gated on `opts.concurrent`, immediately after `probeBulk` and before
- * the checksum audit below (the session is still open and unsubscribed at
- * that point). Wire `probeRealtime(session, ...)` after that, gated on
- * `opts.realtimeSeconds > 0`, and nothing else may run after it.
+ * `probeConcurrent` — opt-in via `--concurrent` — runs next, because it
+ * needs the first session still usable and its own socket doesn't touch that
+ * session. `probeRealtime` — opt-in via `--realtime` — runs last of all,
+ * because subscribing flips the transport one-way (`Transport.listen`) and
+ * nothing can follow it.
  */
 async function runProbe(session: Session, traced: TracingTransport, opts: CliOptions): Promise<ProbeResult> {
   const startedAt = new Date().toISOString()
@@ -238,9 +235,20 @@ async function runProbe(session: Session, traced: TracingTransport, opts: CliOpt
       session, runner, findings, { transport: opts.transport, attendance: opts.attendance }, traced.events,
     )
 
-    // TASK 10 GAP -- see this function's doc comment. `opts.concurrent` and
-    // `opts.realtimeSeconds` are already parsed and threaded through; only
-    // the probes themselves are missing.
+    if (opts.concurrent) {
+      await probeConcurrent(runner, findings, {
+        host: opts.host, port: opts.port, transport: opts.transport, timeoutMs: opts.timeoutMs,
+      })
+    }
+
+    // MUST BE LAST: subscribing flips the transport one-way (Transport.listen
+    // is one-way, once per socket), so nothing may run after this.
+    if (opts.realtimeSeconds > 0) {
+      await probeRealtime(session, runner, findings, {
+        windowSeconds: opts.realtimeSeconds,
+        sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+      })
+    }
 
     findings.checksum = auditChecksums(traced.events)
   } finally {
@@ -267,20 +275,6 @@ export async function main(): Promise<void> {
     process.stderr.write(`${(err as Error).message}\n`)
     process.exitCode = 1
     return
-  }
-
-  // Neither probe exists yet (Task 10). A flag that silently does nothing is
-  // worse than one that does not exist -- see this file's runProbe() doc
-  // comment for where these get wired up.
-  if (opts.realtimeSeconds > 0) {
-    process.stderr.write(
-      '--realtime was given, but the realtime probe is not implemented yet (Task 10); it will not run.\n',
-    )
-  }
-  if (opts.concurrent) {
-    process.stderr.write(
-      '--concurrent was given, but the second-connection probe is not implemented yet (Task 10); it will not run.\n',
-    )
   }
 
   const traced = new TracingTransport(makeTransport(opts), () => Date.now())
