@@ -408,7 +408,11 @@ export async function probeState(
     const res = await session.tryExecute(CMD.GET_TIME)
     if (res.command === CMD.ACK_ERROR || res.data.length < 4) return null
     const device = decodeZkTime(res.data.readUInt32LE(0))
-    const hostLocal = new Date(hostNowSeconds * 1000).toISOString().slice(0, 19).replace('T', ' ')
+    // Keeps decodeZkTime's `T` separator (src/codec/time.ts), NOT a space:
+    // item 21 prints deviceLocal and hostLocal adjacent in one sentence and
+    // side-by-side comparison is the whole point of the field, so the two must
+    // line up character for character.
+    const hostLocal = new Date(hostNowSeconds * 1000).toISOString().slice(0, 19)
     const deviceEpoch = deviceEpochSeconds(device)
     // Recorded side by side and NOT judged. Device clocks drift and reset; the
     // library returns readings verbatim (v0.1 §3) and so does this. Whether a

@@ -571,10 +571,28 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
   return rows
 }
 
+/**
+ * Escapes a value going into a pipe-delimited table cell.
+ *
+ * `errorMessage` is the one column fed from an `Error` whose message can
+ * originate outside this codebase — `ZkConnectionError(err.message)` wraps the
+ * OS's text (`tcp.ts:35,111`) — and item 5's observation quotes it verbatim.
+ * An unescaped `|` shifts every cell after it, so a Markdown renderer displays
+ * the wrong value under a labelled heading: a step whose "Raw bytes" column
+ * shows a fragment of an error message. A table that puts a wrong value under
+ * a right heading is the exact failure this tool exists to avoid, so this runs
+ * on every cell rather than on the one that can reach it today.
+ */
+function escapeCell(value: string): string {
+  return value.replaceAll('|', '\\|')
+}
+
 function formatChecklistTable(rows: readonly ChecklistRow[]): string {
   const lines = ['| # | Item | Status | Observation |', '|---|---|---|---|']
   for (const row of rows) {
-    lines.push(`| ${row.item} | ${row.question} | ${row.state} | ${row.observation} |`)
+    lines.push(
+      `| ${row.item} | ${escapeCell(row.question)} | ${row.state} | ${escapeCell(row.observation)} |`,
+    )
   }
   return lines.join('\n')
 }
@@ -584,12 +602,20 @@ function formatStepTable(steps: readonly StepResult[]): string {
   // Deliberately omits `value` (safe by construction — see the redaction note
   // on renderJson). `rawByteLength` is included: since Fix round 1 it is a
   // count, never the bytes themselves (see StepResult.rawByteLength's doc
-  // comment), which is exactly what the design spec's §5.1 "per-step
-  // outcomes (command, ack code, body length)" content list asks for.
+  // comment).
+  //
+  // Design spec §5.1 asks for "per-step outcomes (command, ack code, body
+  // length)". This table delivers the body length, and only when an error
+  // happened to carry `raw`. The command number and the ack code are NOT here
+  // and never have been: `StepResult` does not carry them — they live on
+  // `TraceEvent`, which reaches only the opt-in raw capture. Naming that gap
+  // rather than citing the requirement as though it were met; closing it means
+  // threading trace data into `StepResult`, which is a change to what a step
+  // records, not to how it is printed.
   const lines = ['| Step | Outcome | Error | Message | Raw bytes |', '|---|---|---|---|---|']
   for (const step of steps) {
     lines.push(
-      `| ${step.name} | ${step.outcome} | ${step.errorClass ?? ''} | ${step.errorMessage ?? ''} | ${step.rawByteLength ?? ''} |`,
+      `| ${escapeCell(step.name)} | ${step.outcome} | ${escapeCell(step.errorClass ?? '')} | ${escapeCell(step.errorMessage ?? '')} | ${step.rawByteLength ?? ''} |`,
     )
   }
   return lines.join('\n')

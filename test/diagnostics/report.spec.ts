@@ -448,6 +448,64 @@ describe('item 2 — checksum and reply-id reconciliation (M-9)', () => {
   })
 })
 
+/**
+ * Deferred minor 5. `errorMessage` is the one column fed from an Error whose
+ * message can originate in the OS (`ZkConnectionError(err.message)` at
+ * tcp.ts:35,111). A literal `|` in it shifts every cell after it, so a
+ * Markdown renderer puts the WRONG VALUE under the "Raw bytes" heading — a
+ * step table displaying a wrong value in a labelled column is the exact
+ * failure mode this tool exists to avoid.
+ */
+describe('pipe-delimited cells survive a message containing a pipe', () => {
+  /** Splits a table row on unescaped pipes, the way a Markdown renderer does. */
+  function cells(line: string): string[] {
+    return line.split(/(?<!\\)\|/).slice(1, -1).map((c) => c.trim())
+  }
+
+  it('keeps every step column under its own heading', () => {
+    const result = {
+      ...sample(),
+      steps: [{
+        name: 'users',
+        outcome: 'malformed' as const,
+        errorClass: 'ZkProtocolError',
+        errorMessage: 'connect ECONNREFUSED a | b | c',
+        rawByteLength: 8,
+      }],
+    }
+    const row = renderMarkdown(result).split('\n').find((l) => l.startsWith('| users |'))!
+    expect(cells(row)).toEqual([
+      'users', 'malformed', 'ZkProtocolError', 'connect ECONNREFUSED a \\| b \\| c', '8',
+    ])
+  })
+
+  it('leaves a message with no pipe untouched', () => {
+    const result = {
+      ...sample(),
+      steps: [{
+        name: 'users', outcome: 'malformed' as const,
+        errorClass: 'ZkProtocolError', errorMessage: 'no pipe here', rawByteLength: 8,
+      }],
+    }
+    const row = renderMarkdown(result).split('\n').find((l) => l.startsWith('| users |'))!
+    expect(row).toContain('| no pipe here |')
+    expect(row).not.toContain('\\')
+  })
+
+  it('escapes the checklist observation too, which interpolates the same message', () => {
+    // Item 5's observation quotes errorMessage verbatim.
+    const result = {
+      ...sample(),
+      steps: [{
+        name: 'firmware', outcome: 'malformed' as const, errorClass: 'ZkProtocolError',
+        errorMessage: 'TCP declared payload size 99 exceeds the 8-byte maximum | truncated',
+      }],
+    }
+    const row = renderMarkdown(result).split('\n').find((l) => l.startsWith('| 5 |'))!
+    expect(cells(row)).toHaveLength(4)
+  })
+})
+
 describe('renderRawCapture', () => {
   it('emits one JSON object per line, after a header line', () => {
     const events: TraceEvent[] = [

@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
-  ZkAuthError, ZkConnectionError, ZkFramingError, ZkProtocolError, ZkTimeoutError,
+  ZkAuthError, ZkConnectionError, ZkError, ZkFramingError, ZkProtocolError, ZkTimeoutError,
 } from '../../src/errors.js'
 import { StepRunner, classifyError, refused, stopsTheRun } from '../../src/diagnostics/step.js'
 
@@ -14,11 +14,18 @@ describe('classifyError', () => {
     expect(classifyError(new Error('x'))).toBe('malformed')
   })
 
-  it('classifies ZkAuthError before ZkProtocolError, which are siblings', () => {
-    // Both extend ZkError, neither extends the other. An ordering bug here
-    // would silently report every unauthorized device as malformed, and the
-    // report would answer the wrong checklist item.
-    expect(classifyError(new ZkAuthError('unauthorized'))).not.toBe('malformed')
+  it('keeps the ZkError base class in the fallthrough, where a catch-all would swallow its subclasses', () => {
+    // The old name here claimed an ordering between ZkAuthError and
+    // ZkProtocolError was load-bearing. It is not: they are mutually exclusive
+    // siblings, and ZkProtocolError has no branch at all. What IS load-bearing
+    // is that no `err instanceof ZkError` branch precedes the three specific
+    // ones -- ZkError is their base, so a catch-all placed first would report
+    // every unauthorized device, every timeout and every dropped connection as
+    // 'malformed', answering three checklist items with the wrong evidence.
+    expect(classifyError(new ZkError('bare base class'))).toBe('malformed')
+    for (const err of [new ZkAuthError('x'), new ZkTimeoutError('x'), new ZkConnectionError('x')]) {
+      expect(classifyError(err)).not.toBe('malformed')
+    }
   })
 })
 
@@ -42,7 +49,12 @@ describe('StepRunner', () => {
     expect(runner.truncated).toBeNull()
   })
 
-  it('keeps running after a step the device answered with a refusal', async () => {
+  it('keeps running after a malformed answer, and records it as malformed', async () => {
+    // Named for what it exercises. Under its old name ("a step the device
+    // answered with a refusal") a reader grepping for refusal coverage found
+    // this test, which throws ZkProtocolError and asserts 'malformed' --
+    // 'refused' became a real, distinct outcome in R7 and has its own test
+    // below.
     const runner = new StepRunner()
     await runner.run('bad', async () => { throw new ZkProtocolError('nope') })
     const after = await runner.run('good', async () => 7)

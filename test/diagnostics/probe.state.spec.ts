@@ -86,6 +86,20 @@ describe('probeState', () => {
     expect(typeof findings.clock?.skewSeconds).toBe('number')
   })
 
+  // Deferred minor 3. Item 21 prints the two side by side in one sentence, and
+  // side-by-side comparison is the field's entire purpose -- `device=
+  // 2026-08-31T04:12:00 host=2026-08-31 04:12:07` makes a reader do character
+  // arithmetic to line them up. decodeZkTime builds `local` with a T
+  // (src/codec/time.ts), so the host clock matches it.
+  it('formats the host clock the same way as the device clock', async () => {
+    running = await startEmulator({ transport: 'tcp', deviceTimeRaw: 0 })
+    session = await open(running.port)
+    const findings = emptyFindings()
+    await probeState(session, new StepRunner(), findings, 1_756_000_000)
+    expect(findings.clock?.hostLocal).toBe('2025-08-24T01:46:40')
+    expect(findings.clock?.hostLocal).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/)
+  })
+
   it('keeps going when the device refuses the clock', async () => {
     running = await startEmulator({
       transport: 'tcp',

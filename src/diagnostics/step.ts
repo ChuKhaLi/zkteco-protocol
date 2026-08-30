@@ -4,10 +4,17 @@ import type { StepOutcome, StepResult } from './types.js'
 /**
  * Classifies a thrown error into the outcome the report records.
  *
- * ZkAuthError is tested FIRST and this ordering is load-bearing: it and
- * ZkProtocolError are siblings under ZkError, neither extending the other, so
- * a `ZkError` catch-all placed earlier would report every unauthorized device
- * as malformed and answer the wrong checklist item.
+ * The three classes tested here are mutually exclusive siblings under ZkError,
+ * none extending another, so their RELATIVE order cannot change any outcome —
+ * an earlier comment here claimed it was load-bearing, and it is not.
+ *
+ * What is load-bearing is the ABSENCE of a `ZkError` catch-all before them.
+ * ZkError is the base of all four subclasses, so a catch-all placed first
+ * would swallow every one of these branches and report every unauthorized
+ * device, every timeout and every dropped connection as 'malformed' — three
+ * checklist items answered with the wrong evidence, invisibly. ZkProtocolError
+ * has no branch at all and reaches the fallthrough, which is why 'malformed'
+ * must stay the fallthrough rather than becoming a branch of its own.
  *
  * Anything unrecognised is 'malformed' rather than a stop condition. A bug in
  * this tool must not masquerade as a device that went silent.
@@ -85,8 +92,17 @@ export class StepRunner {
   }
 
   /**
-   * Runs one step. Returns its value, or undefined if it did not produce one
-   * (including when the callback reports `refused(value)`).
+   * Runs one step.
+   *
+   * Returns the callback's value — including the value inside a
+   * `refused(value)`, which `probeConcurrent` and `probeRealtime` both pass a
+   * real one. Returns undefined only when the callback threw, or when the run
+   * was already truncated. (This sentence previously said `refused(value)`
+   * returned undefined: Task 3 wrote it under a ruling that had removed
+   * `refused()` entirely, and Task 7 restored the mechanism without revisiting
+   * the text. No caller consumes the return today, so the difference was never
+   * behavioural — it was a docblock describing behaviour the code did not
+   * have, in the file whose job is classifying evidence.)
    *
    * Once the run is truncated, later steps are NOT executed — returning
    * undefined without touching the socket. Recording them as skipped would be
