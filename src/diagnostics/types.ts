@@ -21,3 +21,30 @@ export interface TraceEvent {
   errorClass?: string
   errorMessage?: string
 }
+
+/**
+ * What one probe step observed.
+ *
+ * The outcome and the decision to continue are two independent axes, and
+ * conflating them is the mistake this type exists to prevent — see
+ * `stopsTheRun`. A reader must be able to tell "the device rejected this" from
+ * "the device sent something we could not parse" without inferring it from a
+ * message string, because those answer different checklist items.
+ */
+export type StepOutcome =
+  | 'ok'
+  | 'refused'
+  | 'unauthorized'
+  | 'malformed'
+  | 'silent'
+  | 'dropped'
+
+export interface StepResult<T = unknown> {
+  name: string
+  outcome: StepOutcome
+  value?: T
+  errorClass?: string
+  errorMessage?: string
+  /** Hex the error already carried, when it carried any. */
+  raw?: string
+}
