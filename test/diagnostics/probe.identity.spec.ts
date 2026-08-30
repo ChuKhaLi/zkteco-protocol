@@ -102,4 +102,17 @@ describe('probeIdentity', () => {
     expect(findings.identity.serialNumberPresent).toBe(true)
     expect(JSON.stringify(findings)).not.toContain('SN-123')
   })
+
+  it('keeps the serial number value out of the step trace as well as findings', async () => {
+    // The parameter sweep's runner.run callback return value lands in
+    // StepResult.value, which flows into the rendered report independently
+    // of `findings`. A guard that only inspects `findings` would miss a leak
+    // through this sibling field.
+    running = await startEmulator({ transport: 'tcp', params: PARAMS, firmware: 'Ver 6.60' })
+    session = await open(running.port)
+    const runner = new StepRunner()
+    const findings = emptyFindings()
+    await probeIdentity(session, runner, findings)
+    expect(JSON.stringify(runner.steps)).not.toContain('SN-123')
+  })
 })

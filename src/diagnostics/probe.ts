@@ -143,7 +143,15 @@ export async function probeIdentity(
       else if (key === DEVICE_PARAM.DEVICE_NAME) findings.identity.deviceName = value
       else if (key === DEVICE_PARAM.PLATFORM) findings.identity.platform = value
       else if (key === DEVICE_PARAM.OS) findings.identity.os = value
-      return value
+      // Never the raw value: StepRunner.run stores whatever is returned here
+      // as StepResult.value, which flows into the report independently of
+      // `findings`. The sanctioned fields (device name, platform, OS,
+      // firmware) already reach the report through findings.identity; nothing
+      // needs them here too. Returning the value only for ~SerialNumber would
+      // fix today's leak but not tomorrow's — the next sensitive keyword
+      // added to DEVICE_PARAM would reopen it. Null, uniformly, closes the
+      // whole class.
+      return null
     })
   }
 }
