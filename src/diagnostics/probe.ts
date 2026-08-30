@@ -1,5 +1,6 @@
 import { CMD } from '../codec/commands.js'
 import { checksum16 } from '../codec/checksum.js'
+import { decodePayload } from '../codec/packet.js'
 import { DEVICE_PARAM } from '../codec/params.js'
 import { readNulTerminated } from '../codec/records/shared.js'
 import { decodeZkTime } from '../codec/time.js'
@@ -342,17 +343,61 @@ export function encodingVerdict(
 }
 
 /**
+ * Infers which bulk-read path answered the user list, from the wire trace.
+ *
+ * `readBulk` dispatches through the library's own PREPARE_BUFFER/READ_BUFFER
+ * commands and falls back to the legacy exchange transparently when the
+ * device refuses them — it gives its caller no signal of its own about which
+ * path actually delivered the data. This reconstructs that from what went
+ * out on the wire, using the same direct-versus-wrapped distinction
+ * `probeBulk`'s own attendance-guard tests use to check a request reached (or
+ * didn't reach) the socket.
+ *
+ * A direct send of CMD_USERTEMP_RRQ is checked FIRST and unconditionally,
+ * because it is decisive proof the legacy exchange ran — and it is the ONLY
+ * shape that can appear as a fallback after an earlier, failed buffered
+ * attempt. "First match in trace order" would get this backwards: a refused
+ * PREPARE_BUFFER send is still recorded before the legacy fallback that
+ * follows it, so scanning forward and stopping at the first recognised shape
+ * would report 'buffered' for a read that buffered never actually served.
+ * Only once no legacy send is found does a PREPARE_BUFFER send wrapping
+ * CMD_USERTEMP_RRQ count as buffered.
+ *
+ * Neither shape recognised (e.g. no trace was supplied) is null — honest
+ * beats confidently wrong, the same principle `encodingVerdict` applies to
+ * an all-ASCII name list.
+ */
+export function inferBulkPath(events: readonly TraceEvent[]): 'buffered' | 'legacy' | null {
+  const sent = events.filter((e) => e.direction === 'send' && e.command !== undefined)
+  if (sent.some((e) => e.command === CMD.USERTEMP_RRQ)) return 'legacy'
+
+  const wrapsUserList = (e: TraceEvent): boolean => {
+    if (e.command !== CMD.PREPARE_BUFFER || !e.hex) return false
+    // <int8 1><int16 command><int32 fct><int32 ext> -- the target command is
+    // the uint16 at offset 1 of the request body, same layout readBulkBuffered
+    // writes it in.
+    const { data } = decodePayload(Buffer.from(e.hex, 'hex'))
+    return data.length >= 3 && data.readUInt16LE(1) === CMD.USERTEMP_RRQ
+  }
+  if (sent.some(wrapsUserList)) return 'buffered'
+
+  return null
+}
+
+/**
  * Step 7 of the probe: the user list, then the attendance log.
  *
- * Which bulk path the firmware took is recorded because it answers whether
- * 1503/1504 are implemented, and — since v0.3.1 — checklist item 23 as well.
- * It is inferred from the trace by the caller rather than guessed here.
+ * Which bulk path the firmware took for the user read is recorded because it
+ * answers whether 1503/1504 are implemented, and — since v0.3.1 — checklist
+ * item 23 as well. It is inferred from the wire trace the caller supplies —
+ * see `inferBulkPath`.
  */
 export async function probeBulk(
   session: Session,
   runner: StepRunner,
   findings: Findings,
   opts: { transport: 'tcp' | 'udp'; attendance: 'auto' | 'always' | 'never' },
+  events: readonly TraceEvent[],
 ): Promise<void> {
   // The list is captured in this closure variable rather than returned from
   // the step, deliberately. StepRunner.run stores whatever the callback
@@ -368,7 +413,7 @@ export async function probeBulk(
   })
   if (users) {
     findings.encoding = encodingVerdict(users.map((u) => u.name))
-    findings.bulkPath = 'buffered'
+    findings.bulkPath = inferBulkPath(events)
   }
 
   const recordCount = findings.freeSizes?.recordCount ?? 0
