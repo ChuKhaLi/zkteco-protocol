@@ -57,22 +57,68 @@ export class UdpTransport implements Transport {
   }
 
   /**
-   * Records a socket failure and tells whoever is waiting on this transport.
+   * Reports a socket failure to whoever is waiting on this transport, or
+   * holds it for the next consumer if nobody is waiting yet.
+   *
+   * DECISION RULE: a UDP socket failure is delivered to exactly one consumer
+   * and is then forgotten. It is never replayed.
+   *
+   * The asymmetry with TcpTransport, which keeps its failure for the life of
+   * the object, is the point. A TCP failure means the connection is gone, so
+   * every later receive() really is doomed and repeating the reason is the
+   * most useful thing the transport can do. UDP has no connection to lose:
+   * the socket stays bound and usable, and a post-bind error can be about one
+   * datagram rather than about the socket. On Windows an ICMP
+   * port-unreachable is delivered as ECONNRESET even on an UNCONNECTED
+   * socket, so a single datagram sent to a powered-down terminal used to end
+   * this transport for the rest of its life.
+   *
+   * This does not hide a socket that really is dead. The next operation on it
+   * raises a FRESH error, which is a more accurate report than a replayed
+   * stale one. The cost is that a receive() issued between the clearing and
+   * the next real error waits out its timeout instead of failing fast —
+   * accepted, because at that moment this transport genuinely does not know
+   * whether the socket is dead.
+   *
+   * At most one of the two consumers below can exist at a time: receive()
+   * refuses while a listener is attached, and listen() refuses while a
+   * receive() is pending. So delivering to the first one found is delivering
+   * to the only one there is.
    *
    * The socket is deliberately not closed here, mirroring TcpTransport: the
    * owner closes it, and a transport that closed itself would turn a reported
    * failure back into a silent one for anything that looked afterwards.
    */
   private fail(err: Error): void {
-    this.failure = err
     const failWaiter = this.failWaiter
     if (failWaiter) {
       this.waiter = null
       this.failWaiter = null
       failWaiter(err)
+      return
     }
     const listenerError = this.listenerError
-    if (listenerError) listenerError(err)
+    if (listenerError) {
+      listenerError(err)
+      return
+    }
+    // Nobody to tell yet, so hold it for whoever arrives next: a consumer
+    // that attaches to a dead socket and then waits forever is a hang, not a
+    // failure.
+    this.failure = err
+  }
+
+  /**
+   * Takes the held failure, if there is one, clearing it as it goes.
+   *
+   * Reading and clearing are one operation on purpose — a caller that read it
+   * without clearing would replay it, which is the behaviour the rule on
+   * fail() exists to prevent.
+   */
+  private takeFailure(): Error | null {
+    const err = this.failure
+    this.failure = null
+    return err
   }
 
   send(payload: Buffer): Promise<void> {
@@ -100,7 +146,8 @@ export class UdpTransport implements Transport {
     }
     const queued = this.queue.shift()
     if (queued) return Promise.resolve(queued)
-    if (this.failure) return Promise.reject(this.failure)
+    const held = this.takeFailure()
+    if (held) return Promise.reject(held)
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.waiter = null
@@ -131,8 +178,9 @@ export class UdpTransport implements Transport {
     for (const payload of queued) onPacket(payload)
     // A failure recorded before listen() would otherwise never be reported:
     // a listener attached over a dead socket that then waits forever is a
-    // hang, not a failure.
-    if (this.failure) onError(this.failure)
+    // hang, not a failure. Taken rather than read, per the rule on fail().
+    const held = this.takeFailure()
+    if (held) onError(held)
   }
 
   close(): Promise<void> {

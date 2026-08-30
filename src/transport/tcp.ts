@@ -77,6 +77,20 @@ export class TcpTransport implements Transport {
     }
   }
 
+  /**
+   * Records a socket failure and tells whoever is waiting on this transport.
+   *
+   * The failure is kept for the life of the object, deliberately, and this is
+   * where TcpTransport and UdpTransport part company. A TCP failure means the
+   * connection is gone — 'close' and 'error' both route here — so every later
+   * receive() on this transport really is doomed, and answering each one with
+   * the reason is the most useful thing it can do.
+   *
+   * UdpTransport forgets a failure once it has been delivered, because a UDP
+   * socket has no connection to lose and stays usable after an error about a
+   * single datagram. See the decision rule on UdpTransport.fail; the
+   * difference is a considered one, not drift.
+   */
   private fail(err: Error): void {
     this.failure = err
     const failWaiter = this.failWaiter

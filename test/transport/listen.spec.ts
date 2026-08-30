@@ -2,7 +2,7 @@ import dgram from 'node:dgram'
 import { afterEach, describe, expect, it } from 'vitest'
 import { CMD } from '../../src/codec/commands.js'
 import { encodePayload, decodePayload } from '../../src/codec/packet.js'
-import { ZkConnectionError } from '../../src/errors.js'
+import { ZkConnectionError, ZkTimeoutError } from '../../src/errors.js'
 import { TcpTransport } from '../../src/transport/tcp.js'
 import { UdpTransport } from '../../src/transport/udp.js'
 import type { Transport } from '../../src/transport/Transport.js'
@@ -177,5 +177,35 @@ describe('Transport.listen over udp, failure paths', () => {
     const pending = transport.receive(30_000)
     socketOf(transport).emit('error', new Error('simulated socket failure'))
     await expect(pending).rejects.toThrow(ZkConnectionError)
+  }, 5000)
+
+  it('reports a recorded failure once and does not replay it to the next receive()', async () => {
+    // UDP has no connection to lose. The socket stays bound and usable, so one
+    // transient error -- on Windows an ICMP port-unreachable surfaces as
+    // ECONNRESET even on an UNCONNECTED socket -- used to end this transport
+    // for the rest of its life. The rule is that a failure reaches exactly one
+    // consumer and is then forgotten; a socket that really is dead raises a
+    // FRESH error on the next operation, so nothing is masked.
+    running = await startEmulator({ transport: 'udp' })
+    transport = new UdpTransport({ host: '127.0.0.1', port: running.port })
+    await transport.connect()
+    socketOf(transport).emit('error', new Error('simulated socket failure'))
+
+    await expect(transport.receive(50)).rejects.toThrow(/simulated socket failure/)
+    // Timing out is the honest outcome here: the transport does not know the
+    // socket is dead, so it waits for a reply like any other receive() rather
+    // than answering with a failure it has already reported.
+    await expect(transport.receive(50)).rejects.toBeInstanceOf(ZkTimeoutError)
+  })
+
+  it('does not record a failure that was delivered straight to a pending receive()', async () => {
+    running = await startEmulator({ transport: 'udp' })
+    transport = new UdpTransport({ host: '127.0.0.1', port: running.port })
+    await transport.connect()
+    const pending = transport.receive(30_000)
+    socketOf(transport).emit('error', new Error('simulated socket failure'))
+    await expect(pending).rejects.toThrow(ZkConnectionError)
+    // Delivered to the waiter, so there is nothing left to hand anyone else.
+    await expect(transport.receive(50)).rejects.toBeInstanceOf(ZkTimeoutError)
   }, 5000)
 })
