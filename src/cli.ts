@@ -120,7 +120,35 @@ export function parseCliArgs(argv: string[]): CliOptions {
  */
 export function resolveReportTargets(out: string | null): { markdown: string; json: string } {
   const base = out ?? 'zkteco-report.md'
-  return { markdown: out === null ? 'stdout' : out, json: deriveJsonPath(base) }
+  const markdown = out === null ? 'stdout' : out
+  const json = deriveJsonPath(base)
+  // `--out report.json` derives the IDENTICAL path for the sidecar, and both
+  // targets are then written in order: the Markdown report lands, stderr
+  // announces it, and the sidecar overwrites it a millisecond later while
+  // writeOutputs reports success and the process exits 0. Someone who wants
+  // the JSON is exactly the person who types that. Disambiguate rather than
+  // reject -- both artifacts are mandatory, and losing one to a flag spelling
+  // helps nobody.
+  if (!samePath(markdown, json)) return { markdown, json }
+  return { markdown, json: `${json.slice(0, json.lastIndexOf('.'))}.sidecar.json` }
+}
+
+/**
+ * Would these two paths write the same file?
+ *
+ * Compared case-insensitively because this tool runs on Windows, where
+ * `report.JSON` and `report.json` ARE one file. On a case-sensitive
+ * filesystem the worst this costs is a disambiguated name for two paths that
+ * would not actually have collided -- both files still get written, which is
+ * the failure this check exists to prevent, in reverse and harmless.
+ *
+ * Not a path resolution: `./report.md` and `report.md` still slip past. That
+ * is deliberate -- resolving would need the cwd, and this function is pure so
+ * the routing decision stays checkable without a filesystem. It catches the
+ * collision the tool DERIVES for itself, which is the one nobody typed.
+ */
+function samePath(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase()
 }
 
 /** Swaps a trailing file extension for `.json`, or appends one if there is none. */
@@ -190,6 +218,22 @@ export async function writeOutputs(
   opts: CliOptions,
 ): Promise<void> {
   const targets = resolveReportTargets(opts.out)
+
+  // Checked BEFORE the first write, so a colliding flag cannot destroy a
+  // report on its way to failing. `--raw-capture` is a path the operator typed
+  // in full, so this rejects rather than renaming it behind their back -- and
+  // it rejects loudly, because the raw capture is UNREDACTED: landing it on
+  // top of a shareable artifact turns "the report" into the comm key, the
+  // serial and every employee name, under a filename that says otherwise.
+  if (opts.rawCapture !== null) {
+    const clash = [targets.markdown, targets.json].find((t) => samePath(t, opts.rawCapture as string))
+    if (clash) {
+      throw new Error(
+        `--raw-capture ${opts.rawCapture} would overwrite ${clash}. The raw capture is UNREDACTED; give it a path of its own.`,
+      )
+    }
+  }
+
   const markdown = renderMarkdown(result)
   const json = JSON.stringify(renderJson(result), null, 2)
 

@@ -107,6 +107,20 @@ describe('resolveReportTargets', () => {
       markdown: 'out.dir/report', json: 'out.dir/report.json',
     })
   })
+
+  // I-8. `--out report.json` derived the identical path for the sidecar, so
+  // the sidecar silently overwrote the Markdown report -- after stderr had
+  // already announced writing both. It is a natural thing for someone who
+  // wants the JSON to type.
+  it('does not derive a sidecar path that would overwrite the Markdown report', () => {
+    expect(resolveReportTargets('report.json')).toEqual({
+      markdown: 'report.json', json: 'report.sidecar.json',
+    })
+  })
+
+  it('disambiguates case-insensitively, since Windows paths are', () => {
+    expect(resolveReportTargets('report.JSON').json).toBe('report.sidecar.json')
+  })
 })
 
 /** A minimal ProbeResult, the same shape test/diagnostics/report.spec.ts builds. */
@@ -191,6 +205,44 @@ describe('writeOutputs (Ruling F7 — announce every file written, on stderr onl
 
     // Nothing wrote to stdout at all in this mode (Markdown went to a file).
     expect(stdoutSpy).not.toHaveBeenCalled()
+  })
+
+  it('keeps the Markdown report intact when --out itself ends in .json (I-8)', async () => {
+    const opts: CliOptions = {
+      ...parseCliArgs(['192.168.1.201']), out: join(dir, 'report.json'), rawCapture: null,
+    }
+    await writeOutputs(sampleResult(), [], opts)
+
+    // The report the operator asked for is still a report, not a sidecar that
+    // landed on top of it a millisecond after stderr announced both.
+    expect(readFileSync(join(dir, 'report.json'), 'utf8')).toContain('ZKTeco bring-up report')
+    expect(readFileSync(join(dir, 'report.sidecar.json'), 'utf8')).toContain('"libraryVersion"')
+    expect(stderrText()).toContain(join(dir, 'report.sidecar.json'))
+  })
+
+  it('refuses to point the UNREDACTED raw capture at a shareable artifact, before writing anything', async () => {
+    const opts: CliOptions = {
+      ...parseCliArgs(['192.168.1.201']),
+      out: join(dir, 'report.md'),
+      rawCapture: join(dir, 'report.md'),
+    }
+    await expect(writeOutputs(sampleResult(), [], opts)).rejects.toThrow(/report\.md/)
+    // Nothing was written: the check runs before the first writeFile, so a
+    // colliding flag cannot destroy a report on its way to failing.
+    expect(existsSync(join(dir, 'report.md'))).toBe(false)
+    expect(existsSync(join(dir, 'report.json'))).toBe(false)
+  })
+
+  it('still writes all three when the raw capture has a path of its own', async () => {
+    const opts: CliOptions = {
+      ...parseCliArgs(['192.168.1.201']),
+      out: join(dir, 'report.md'),
+      rawCapture: join(dir, 'trace.jsonl'),
+    }
+    await writeOutputs(sampleResult(), [], opts)
+    for (const f of ['report.md', 'report.json', 'trace.jsonl']) {
+      expect(existsSync(join(dir, f))).toBe(true)
+    }
   })
 
   it('does not mix an announcement into stdout when the Markdown itself goes there', async () => {
