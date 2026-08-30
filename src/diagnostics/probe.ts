@@ -7,6 +7,7 @@ import { decodeZkTime } from '../codec/time.js'
 import { FREE_SIZES_OFFSET } from '../commands/info.js'
 import { getUsers } from '../commands/users.js'
 import { getAttendanceLogs } from '../commands/attendance.js'
+import { ZkAuthError } from '../errors.js'
 import type { Session } from '../session/Session.js'
 import type { ZkNaiveTime, ZkUser } from '../types.js'
 import { refused, type StepRunner } from './step.js'
@@ -161,6 +162,18 @@ export async function probeIdentity(
     // ACK_ERROR is decoded inline rather than thrown, so it is reported here
     // rather than via classifyError — see Refused's doc comment.
     if (res.command === CMD.ACK_ERROR) return refused(null)
+    // Must be checked before the decode below: this is the read in the
+    // library with no other validation of any kind (no echo, no length
+    // check), so an ACK_UNAUTH reply is the case with nothing else to catch
+    // it — readNulTerminated would otherwise decode its (usually empty) body
+    // as if it were a genuine firmware string, indistinguishable from a
+    // device that truly answered with no value. Mirrors
+    // src/commands/device.ts's readFirmware() exactly; unlike that function
+    // this one cannot propagate the throw (runner.run is the boundary), so it
+    // surfaces as classifyError's 'unauthorized' outcome instead.
+    if (res.command === CMD.ACK_UNAUTH) {
+      throw new ZkAuthError('CMD_GET_VERSION answered ACK_UNAUTH', res.data)
+    }
     const value = readNulTerminated(res.data, 0, res.data.length)
     findings.identity.firmwareVersion = value
     return value
@@ -175,13 +188,21 @@ export async function probeIdentity(
   for (const key of Object.values(DEVICE_PARAM)) {
     await runner.run(`param:${key}`, async () => {
       const res = await session.tryExecute(CMD.OPTIONS_RRQ, nulTerminated(key))
+      // Must be checked before answeredKeyword below, for the same reason
+      // getParameters() in src/commands/device.ts carries this guard on its
+      // own tryExecute call: it does not inherit Session.execute's ACK_UNAUTH
+      // guard, and without one here an ACK_UNAUTH reply would just fall into
+      // the "not answered" branch below as outcome 'ok' — a step actively
+      // claiming success on a read the device refused to authorize.
+      if (res.command === CMD.ACK_UNAUTH) {
+        throw new ZkAuthError(`CMD_OPTIONS_RRQ for ${key} answered ACK_UNAUTH`, res.data)
+      }
       if (!answeredKeyword(res.command, res.data, key)) {
         findings.parameters.push({ key, answered: false, empty: false })
-        // Only ACK_ERROR is a refusal in the StepOutcome sense (see Refused's
-        // doc comment). ACK_UNAUTH and a mismatched echo also land here —
-        // findings.parameters records all three alike as `answered: false`,
-        // unchanged — but they are not what item 16 means by a refusal, so
-        // the step outcome stays 'ok' for those two.
+        // The only case left here is ACK_ERROR or a mismatched echo — ACK_UNAUTH
+        // was already sent to the guard above. Only ACK_ERROR is a refusal in
+        // the StepOutcome sense (see Refused's doc comment); a mismatched
+        // echo stays 'ok', findings.parameters unchanged either way.
         return res.command === CMD.ACK_ERROR ? refused(null) : null
       }
       const value = paramValue(res.data) ?? ''

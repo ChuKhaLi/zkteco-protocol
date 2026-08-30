@@ -1,9 +1,10 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { Session } from '../../src/session/Session.js'
 import { TcpTransport } from '../../src/transport/tcp.js'
+import { CMD } from '../../src/codec/commands.js'
 import { StepRunner } from '../../src/diagnostics/step.js'
 import { emptyFindings, probeIdentity } from '../../src/diagnostics/probe.js'
-import { startEmulator, type Emulator } from '../emulator/index.js'
+import { reply, startEmulator, type Emulator } from '../emulator/index.js'
 
 let running: Emulator | null = null
 let session: Session | null = null
@@ -114,6 +115,46 @@ describe('probeIdentity', () => {
     const paramSteps = runner.steps.filter((s) => s.name.startsWith('param:'))
     expect(paramSteps.length).toBeGreaterThan(0)
     expect(paramSteps.every((s) => s.outcome === 'refused')).toBe(true)
+  })
+
+  it('does not fabricate a firmware value from an ACK_UNAUTH reply, and records unauthorized', async () => {
+    // CMD_GET_VERSION is the read with no other validation of any kind (no
+    // echo, no length check) -- an ACK_UNAUTH reply falling through to the
+    // decode below would be read as a genuine firmware string. Mirrors
+    // src/commands/device.ts's readFirmware() guard.
+    running = await startEmulator({
+      transport: 'tcp',
+      params: PARAMS,
+      handlers: { [CMD.GET_VERSION]: (req, state) => [reply(state, req, CMD.ACK_UNAUTH)] },
+    })
+    session = await open(running.port)
+    const runner = new StepRunner()
+    const findings = emptyFindings()
+    await probeIdentity(session, runner, findings)
+    expect(findings.identity.firmwareVersion).toBeNull()
+    const firmwareStep = runner.steps.find((s) => s.name === 'firmware')
+    expect(firmwareStep?.outcome).toBe('unauthorized')
+    // stopsTheRun already says 'unauthorized' is continuable -- assert it,
+    // don't assume it.
+    expect(runner.truncated).toBeNull()
+    expect(runner.steps.some((s) => s.name === 'keyword-shape-ab')).toBe(true)
+  })
+
+  it('records unauthorized, not ok, when a parameter read answers ACK_UNAUTH', async () => {
+    running = await startEmulator({
+      transport: 'tcp',
+      params: PARAMS,
+      firmware: 'Ver 6.60',
+      handlers: { [CMD.OPTIONS_RRQ]: (req, state) => [reply(state, req, CMD.ACK_UNAUTH)] },
+    })
+    session = await open(running.port)
+    const runner = new StepRunner()
+    const findings = emptyFindings()
+    await probeIdentity(session, runner, findings)
+    const paramSteps = runner.steps.filter((s) => s.name.startsWith('param:'))
+    expect(paramSteps.length).toBeGreaterThan(0)
+    expect(paramSteps.every((s) => s.outcome === 'unauthorized')).toBe(true)
+    expect(runner.truncated).toBeNull()
   })
 
   it("records a refused firmware read as 'refused', not 'ok'", async () => {
