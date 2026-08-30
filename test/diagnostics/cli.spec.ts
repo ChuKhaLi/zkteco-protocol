@@ -1,5 +1,13 @@
-import { describe, expect, it } from 'vitest'
-import { exitCodeFor, parseCliArgs, resolveReportTargets } from '../../src/cli.js'
+import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { emptyFindings } from '../../src/diagnostics/probe.js'
+import type { ProbeResult } from '../../src/diagnostics/report.js'
+import {
+  describeWrite, exitCodeFor, parseCliArgs, resolveReportTargets, writeOutputs,
+} from '../../src/cli.js'
+import type { CliOptions } from '../../src/cli.js'
 
 describe('parseCliArgs', () => {
   it('takes the host as a positional and defaults everything else', () => {
@@ -98,5 +106,111 @@ describe('resolveReportTargets', () => {
     expect(resolveReportTargets('out.dir/report')).toEqual({
       markdown: 'out.dir/report', json: 'out.dir/report.json',
     })
+  })
+})
+
+/** A minimal ProbeResult, the same shape test/diagnostics/report.spec.ts builds. */
+function sampleResult(): ProbeResult {
+  return {
+    libraryVersion: '0.3.2',
+    host: '192.168.1.201',
+    transport: 'tcp',
+    startedAt: '2026-08-30T00:00:00.000Z',
+    durationMs: 12,
+    truncated: null,
+    steps: [{ name: 'firmware', outcome: 'ok' }],
+    findings: emptyFindings(),
+  }
+}
+
+describe('describeWrite', () => {
+  // Ruling F7: writeOutputs() always writes its files with no prompt and no
+  // --force flag, so an unannounced write (new file OR silent overwrite) is
+  // the actual defect a reviewer hit -- a file landing with zero signal on
+  // either stream. Pure and exported so the exact wording is checkable
+  // without a stream or a filesystem.
+  it('names the kind and the resolved path', () => {
+    expect(describeWrite('the JSON sidecar', 'zkteco-report.json')).toBe(
+      'wrote the JSON sidecar to zkteco-report.json\n',
+    )
+  })
+})
+
+/** Not generic, unlike `vi.spyOn` itself -- pins a concrete return type so a
+ * `let` holding the result doesn't need (and can't cleanly get) one of its own. */
+function spyOnWrite(stream: NodeJS.WriteStream) {
+  return vi.spyOn(stream, 'write').mockImplementation(() => true)
+}
+
+describe('writeOutputs (Ruling F7 — announce every file written, on stderr only)', () => {
+  let dir: string
+  let stdoutSpy: ReturnType<typeof spyOnWrite>
+  let stderrSpy: ReturnType<typeof spyOnWrite>
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'zkteco-cli-spec-'))
+    stdoutSpy = spyOnWrite(process.stdout)
+    stderrSpy = spyOnWrite(process.stderr)
+  })
+
+  afterEach(() => {
+    vi.restoreAllMocks()
+    rmSync(dir, { recursive: true, force: true })
+  })
+
+  function stdoutText(): string {
+    return stdoutSpy.mock.calls.map((c) => String(c[0])).join('')
+  }
+  function stderrText(): string {
+    return stderrSpy.mock.calls.map((c) => String(c[0])).join('')
+  }
+
+  it('announces the JSON sidecar, the Markdown file, and the raw capture -- each exactly once, on stderr, not stdout', async () => {
+    const opts: CliOptions = {
+      ...parseCliArgs(['192.168.1.201']),
+      out: join(dir, 'report.md'),
+      rawCapture: join(dir, 'trace.jsonl'),
+    }
+    const result = sampleResult()
+
+    await writeOutputs(result, [], opts)
+
+    // All three files genuinely landed.
+    expect(existsSync(join(dir, 'report.md'))).toBe(true)
+    expect(existsSync(join(dir, 'report.json'))).toBe(true)
+    expect(existsSync(join(dir, 'trace.jsonl'))).toBe(true)
+    expect(readFileSync(join(dir, 'report.md'), 'utf8')).toContain('ZKTeco bring-up report')
+
+    // Every write is announced on stderr, naming its resolved path.
+    const err = stderrText()
+    expect(err).toContain(join(dir, 'report.md'))
+    expect(err).toContain(join(dir, 'report.json'))
+    expect(err).toContain(join(dir, 'trace.jsonl'))
+    expect(err.match(/\n/g)?.length).toBe(3) // exactly one line per file, no more
+
+    // Nothing wrote to stdout at all in this mode (Markdown went to a file).
+    expect(stdoutSpy).not.toHaveBeenCalled()
+  })
+
+  it('does not mix an announcement into stdout when the Markdown itself goes there', async () => {
+    const opts: CliOptions = { ...parseCliArgs(['192.168.1.201']), out: null, rawCapture: null }
+    const result = sampleResult()
+
+    await writeOutputs(result, [], opts)
+
+    // The Markdown is the primary artifact on stdout -- and ONLY the
+    // Markdown; an announcement line mixed in here is exactly what would
+    // corrupt `zkteco-protocol host > report.md`.
+    const out = stdoutText()
+    expect(out).toContain('ZKTeco bring-up report')
+    expect(out).not.toMatch(/^wrote /m)
+
+    // The JSON sidecar (still a real file by default) is announced, and
+    // only on stderr.
+    const err = stderrText()
+    expect(err).toMatch(/wrote the JSON sidecar to /)
+    expect(err).not.toContain('ZKTeco bring-up report')
+
+    rmSync('zkteco-report.json', { force: true }) // the default target, written to CWD
   })
 })

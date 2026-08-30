@@ -153,7 +153,35 @@ function makeTransport(opts: CliOptions): Transport {
   return opts.transport === 'tcp' ? new TcpTransport(t) : new UdpTransport(t)
 }
 
-async function writeOutputs(
+/**
+ * The stderr line printed after `writeOutputs` actually writes a file.
+ *
+ * Pure and exported so the wording is checkable without a stream or a
+ * filesystem. Ruling F7: `writeOutputs` writes every one of its files with no
+ * prompt and no `--force` flag -- the reviewer's finding was that a run from
+ * a scratch directory left `zkteco-report.json` on disk with stdout AND
+ * stderr both silent, so neither "a new file appeared" nor "an existing one
+ * was just clobbered" was visible anywhere. One line per file, always, is
+ * what fixes both halves of that at once: whoever is watching stderr sees
+ * every file this run touched, freshly written or overwritten alike.
+ */
+export function describeWrite(kind: string, path: string): string {
+  return `wrote ${kind} to ${path}\n`
+}
+
+/**
+ * Writes the run's artifacts, announcing every file it actually writes.
+ *
+ * Announcements go to stderr ONLY, never stdout -- stdout is where the
+ * Markdown itself lands when `--out` was not given, and mixing an
+ * announcement line into that stream would corrupt the most obvious way
+ * someone captures it, `zkteco-protocol host > report.md` (Ruling F7).
+ *
+ * Exported so this can be verified directly against a real temp directory
+ * and spied `process.stdout`/`process.stderr` writers, without needing a
+ * session or a socket -- see test/diagnostics/cli.spec.ts.
+ */
+export async function writeOutputs(
   result: ProbeResult,
   events: readonly TraceEvent[],
   opts: CliOptions,
@@ -166,11 +194,15 @@ async function writeOutputs(
     process.stdout.write(markdown)
   } else {
     await writeFile(targets.markdown, markdown, 'utf8')
+    process.stderr.write(describeWrite('the Markdown report', targets.markdown))
   }
+
   await writeFile(targets.json, json, 'utf8')
+  process.stderr.write(describeWrite('the JSON sidecar', targets.json))
 
   if (opts.rawCapture) {
     await writeFile(opts.rawCapture, renderRawCapture(events), 'utf8')
+    process.stderr.write(describeWrite('the raw capture', opts.rawCapture))
   }
 }
 
