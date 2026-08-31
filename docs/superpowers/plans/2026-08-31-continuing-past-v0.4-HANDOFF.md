@@ -4,8 +4,8 @@
 **For:** a session picking this repository up cold
 **Repository:** https://github.com/ChuKhaLi/zkteco-protocol — public, MIT, `main`
 **State:** v0.4.1. 570 tests, 1 skipped. Zero runtime dependencies.
-**Updated 2026-08-31 (later the same day):** §5's backlog was cleared; that section now records the
-outcome. Everything else below describes v0.4.0 and is unchanged.
+**Updated 2026-08-31 (later the same day), for v0.4.1:** §3, §4.3, §5, §7 and §8 were rewritten.
+Everything else describes v0.4.0 and is unchanged, and still accurate.
 **Not published to npm.** The name is still unclaimed.
 
 This continues `2026-08-30-continuing-past-v0.3-HANDOFF.md`, which continues two before it. All
@@ -84,6 +84,12 @@ absence is meaningful, not vacuous); item 1 reads "not answered" naming `--raw-c
 remedy; and with the flag, item 1 flips to "answered" naming the real file while the serial's hex
 *is* present in the capture.
 
+**Re-run for v0.4.1**, same result on every check above, plus the two the release added: item 2's
+comm-key row renders the no-key sentence, and the step table's new columns are populated —
+`keyword-shape-ab` as `11 x2` and `users` as `1503 x3`, which is the request-shape A/B and the
+buffered read counted correctly. **Run it again for every release.** It is the only check in this
+repository that exercises what a stranger actually installs.
+
 ---
 
 ## 4. What this cycle actually taught, which is the most useful thing here
@@ -138,6 +144,45 @@ Worse than leaks for this tool, because its only product is evidence:
 
 **Every checklist fix needs a test in both directions.** A single test fixes one direction and ships
 the other; that is precisely how `bulkPath` reached review.
+
+### 4.3 What v0.4.1 added to this, which is about §5 rather than about code
+
+v0.4.1 fixed five of the six items §5 carried. The lesson is not in any of the five. It is that
+**§5's own one-line summaries undersold what was in them, and the summaries were written by the
+people who had just decided not to fix them.** That is this document's defect shape — a record that
+reports less trouble than it holds — occurring in the register of known defects.
+
+Two of the six were not what they said:
+
+- **Item 4 read as a doc inaccuracy and was a live bug.** "The desync teardown's guarantee is
+  enforced one layer below where its JSDoc states it" sounds like a comment pointing at the wrong
+  file. What it actually meant: nothing on the request path read `open_`, so a session torn down for
+  desync *resolved* the next `execute()` with the stranded ACK_OK — the precise off-by-one the
+  teardown exists to prevent. Every real transport masked it by having a dead socket, and the
+  existing test asserted `ZkConnectionError`, which the dead socket supplies. The test would have
+  passed with nothing in this library refusing at all.
+- **Item 3 outlived its own resolution.** The v0.2 and v0.3 handoffs listed a real defect: "a
+  recorded UDP transport failure is sticky and never cleared". v0.3.2 fixed it. What v0.4's §5 then
+  carried forward was the residue — TCP's stickiness, which is not a defect at all but the argued
+  counterpart of that fix, spelled out on `TcpTransport.fail` in a docblock ending "the difference is
+  a considered one, not drift". The entry survived the thing it described, shed the word "defect"
+  nowhere, and cost every later reader the time to work out that there was nothing to do.
+
+**So: when you accept an item instead of fixing it, write down what it costs if you are wrong — and
+when you fix one, delete it rather than rewriting it into its own aftermath.** "Accepted rather than
+fixed. None blocks anything" was true of four items, false of item 4, and inapplicable to item 3,
+and nothing in the wording distinguished the three cases.
+
+One trap from the fixes worth keeping, because it will recur wherever argv meets the wire:
+**a flag is not evidence that the thing it enables happened.** `Session.open` sends CMD_AUTH only
+when the device answers CONNECT with ACK_UNAUTH, so `--comm-key` against a device that never demands
+one exercises `mixCommKey` zero times — and the operator who passed the flag is the likeliest reader
+of all to assume it was checked. Item 2's comm-key verdict is read off the trace for that reason,
+with `configured` taken from argv only because the wire cannot show it.
+
+Also worth knowing: the cycle's tests were written first and each red was checked for the *reason*
+it was red, per §4's standing instruction. That is how item 4's live bug surfaced — the fix was
+scoped as a docblock edit until a transport that answers everything showed `execute()` resolving.
 
 ---
 
@@ -211,10 +256,15 @@ and a diagnostic must not quietly reintroduce what the library refuses.
 three handoffs made. It used to mean "start a research project". It now means "run one command and
 send back two files". Every item in §4 exists to make that hour productive.
 
-**Second: publish, so someone else can.** See §5. The reachable-but-unbuilt read commands —
-workcodes, SMS, access-control config — remain the wrong next move: each is built from documentation
-nobody has checked against a device, so each grows the published surface *and* the checklist while
-confidence stays flat.
+**Second: publish, so someone else can.** See the end of §5. The reachable-but-unbuilt read
+commands — workcodes, SMS, access-control config — remain the wrong next move: each is built from
+documentation nobody has checked against a device, so each grows the published surface *and* the
+checklist while confidence stays flat.
+
+**The backlog is no longer a third option, and that is what v0.4.1 changed.** §5 was the only list
+of known defects this repository had, and clearing it took one session. Nothing is deferred, nothing
+is accepted-but-broken. Whatever you pick up next is a choice between the two above, not a decision
+you can postpone by fixing something small first.
 
 **Do not** start access control or write paths. **Do not** add checklist items; the twenty-three
 existing ones are the backlog.
@@ -224,8 +274,12 @@ existing ones are the backlog.
 ## 8. Sources
 
 Unchanged. `adrobinoga/zk-protocol` carries no license — read for understanding, restate in our own
-words. `zkteco-js` is MIT. **`pyzk` is GPL-2.0: execute it, never read it.** v0.4 added no oracle
-capture and read no new source.
+words. `zkteco-js` is MIT. **`pyzk` is GPL-2.0: execute it, never read it.** Neither v0.4 nor v0.4.1
+added an oracle capture or read a new source.
+
+`PROVENANCE.md` was re-checked against v0.4.1's stricter `classifyChecksum` and needs no change:
+the four excluded packets do match the checksum they transmitted, so they stay 'ambiguous' under the
+new rule, and the 18 / 14 / 4 split the reply-id adjudication rests on is untouched.
 
 The binding authority for everything v0.4 added is
 `docs/superpowers/specs/2026-08-30-zkteco-bringup-kit-design.md`. Read §12 of the v0.1 spec — all
