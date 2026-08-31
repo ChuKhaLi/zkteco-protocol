@@ -27,5 +27,9 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm typecheck
-      - run: pnpm test
+      # Before the tests, not after: test/smoke.spec.ts reads dist/index.js to
+      # check the diagnostics and CLI code stayed out of the library bundle.
+      # Built afterwards, that file does not exist yet and the test cannot pass
+      # -- CI was red on every push from 2026-08-31 for exactly this reason.
       - run: pnpm build
+      - run: pnpm test
