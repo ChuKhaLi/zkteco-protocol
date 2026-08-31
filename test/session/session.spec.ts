@@ -5,8 +5,10 @@ import { UdpTransport } from '../../src/transport/udp.js'
 import { CMD } from '../../src/codec/commands.js'
 import { checksum16 } from '../../src/codec/checksum.js'
 import { encodePayload } from '../../src/codec/packet.js'
-import { ZkAuthError, ZkProtocolError, ZkTimeoutError } from '../../src/errors.js'
+import { ZkAuthError, ZkConnectionError, ZkProtocolError, ZkTimeoutError } from '../../src/errors.js'
 import { reply, startEmulator, type Emulator } from '../emulator/index.js'
+import { EVENT_FLAG } from '../../src/codec/events.js'
+import type { Transport } from '../../src/transport/Transport.js'
 
 let running: Emulator | null = null
 let session: Session | null = null
@@ -177,3 +179,91 @@ for (const transportKind of ['tcp', 'udp'] as const) {
     })
   })
 }
+
+/**
+ * A transport that answers whatever it was scripted to answer and never fails,
+ * including after close().
+ *
+ * That last part is the entire point. Session.subscribe's doc comment says a
+ * desynced session "is torn down here ... and cannot be polled afterwards",
+ * but nothing on the request path read `open_`: the refusal came from the
+ * socket being destroyed, one layer below the promise. Against a real
+ * transport a test cannot tell those two apart, because both produce a
+ * ZkConnectionError. Against this one, only Session can refuse.
+ */
+class ScriptedTransport implements Transport {
+  readonly sent: Buffer[] = []
+  closed = false
+  constructor(private readonly replies: Buffer[]) {}
+  async connect(): Promise<void> {}
+  async send(payload: Buffer): Promise<void> { this.sent.push(payload) }
+  async receive(): Promise<Buffer> {
+    const next = this.replies.shift()
+    if (!next) throw new Error('ScriptedTransport ran out of replies')
+    return next
+  }
+  listen(): void {}
+  /** Deliberately inert: a closed transport here still answers. */
+  async close(): Promise<void> { this.closed = true }
+}
+
+const ackOk = (sessionId = 1, replyId = 0): Buffer =>
+  encodePayload({ command: CMD.ACK_OK, sessionId, replyId })
+
+describe('Session refuses requests once it is no longer open', () => {
+  it('refuses after a desynced subscribe, with the transport still willing to answer', async () => {
+    // The device pushes an event where the CMD_REG_EVENT ack belongs (an
+    // event packet IS command REG_EVENT -- see isEventPacket), so the real
+    // ACK_OK is stranded and every later reply would be off by one.
+    const transport = new ScriptedTransport([
+      ackOk(9),
+      encodePayload({ command: CMD.REG_EVENT, sessionId: EVENT_FLAG.ATTENDANCE, replyId: 1 }),
+      // Scripted and never reached: if Session let this request through, the
+      // transport would answer it and the assertion below would fail.
+      ackOk(9, 2),
+    ])
+    const s = new Session(transport, { timeoutMs: 500 })
+    await s.open()
+
+    await expect(s.subscribe(EVENT_FLAG.ATTENDANCE, () => {}, () => {}))
+      .rejects.toThrow(/out of step/)
+
+    await expect(s.execute(CMD.GET_FREE_SIZES)).rejects.toBeInstanceOf(ZkConnectionError)
+    await expect(s.execute(CMD.GET_FREE_SIZES)).rejects.toThrow(/torn down|not open/i)
+  })
+
+  it('refuses a request on a session that was never opened', async () => {
+    const transport = new ScriptedTransport([ackOk()])
+    const s = new Session(transport, { timeoutMs: 500 })
+
+    await expect(s.execute(CMD.GET_FREE_SIZES)).rejects.toBeInstanceOf(ZkConnectionError)
+    // Nothing reached the wire: the guard refused before transmit().
+    expect(transport.sent).toHaveLength(0)
+  })
+
+  it('refuses a request after an ordinary close', async () => {
+    // Uniform beats special case. The desync teardown and an orderly goodbye
+    // leave the session in the same state, and one rule covers both rather
+    // than a guard that only the interesting path gets.
+    const transport = new ScriptedTransport([ackOk(9), ackOk(9, 1)])
+    const s = new Session(transport, { timeoutMs: 500 })
+    await s.open()
+    await s.close()
+    const sentDuringSession = transport.sent.length
+
+    await expect(s.execute(CMD.GET_FREE_SIZES)).rejects.toBeInstanceOf(ZkConnectionError)
+    expect(transport.sent).toHaveLength(sentDuringSession)
+  })
+
+  it('refuses receiveMore, which reads a reply without sending anything', async () => {
+    // The multi-packet read path does not go through execute(), so a guard
+    // placed only there would leave readBulk's continuation able to collect
+    // packets belonging to a session that has been torn down.
+    const transport = new ScriptedTransport([ackOk(9), ackOk(9, 1)])
+    const s = new Session(transport, { timeoutMs: 500 })
+    await s.open()
+    await s.close()
+
+    await expect(s.receiveMore()).rejects.toBeInstanceOf(ZkConnectionError)
+  })
+})

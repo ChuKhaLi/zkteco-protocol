@@ -115,9 +115,16 @@ for (const kind of ['tcp', 'udp'] as const) {
       expect((err as Error).message).toMatch(/out of step/)
       expect((err as Error).message).not.toMatch(/refused/)
 
-      // Torn down: a desynced session must not still be pollable.
+      // Torn down: a desynced session must not still be pollable. The message
+      // is asserted, not just the class, because over a real transport the
+      // destroyed socket raises ZkConnectionError too -- and that is exactly
+      // the confusion this used to rest on. Session.assertOpen is what refuses
+      // here; test/session/session.spec.ts proves it against a transport that
+      // would have answered.
       expect(session.subscribed).toBe(false)
-      await expect(session.execute(CMD.GET_FREE_SIZES)).rejects.toThrow(ZkConnectionError)
+      const refusal = await session.execute(CMD.GET_FREE_SIZES).then(() => null, (e: unknown) => e)
+      expect(refusal).toBeInstanceOf(ZkConnectionError)
+      expect((refusal as Error).message).toMatch(/this session is not open/)
     })
   })
 }

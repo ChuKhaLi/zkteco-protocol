@@ -2,7 +2,7 @@ import { CMD } from '../codec/commands.js'
 import { decodePayload, encodePayload, type DecodedPacket } from '../codec/packet.js'
 import { mixCommKey } from '../codec/commkey.js'
 import { encodeEventMask, isEventPacket } from '../codec/events.js'
-import { ZkAuthError, ZkProtocolError } from '../errors.js'
+import { ZkAuthError, ZkConnectionError, ZkProtocolError } from '../errors.js'
 import type { Transport } from '../transport/Transport.js'
 
 export interface SessionOptions {
@@ -95,6 +95,7 @@ export class Session {
    * a malformed packet all still propagate.
    */
   async tryExecute(command: number, data?: Buffer): Promise<DecodedPacket> {
+    this.assertOpen()
     return this.send(command, data)
   }
 
@@ -165,7 +166,9 @@ export class Session {
    * stays usable (design spec §3.4); a desync makes every later reply
    * silently wrong, which is the exact misroute §3.1 rejected the
    * multiplexing design to avoid. So the session is torn down here, before
-   * the error propagates, and cannot be polled afterwards.
+   * the error propagates, and cannot be polled afterwards -- enforced by
+   * `assertOpen` on this class's own request path, not left to the socket
+   * being gone, which is where that guarantee used to actually live.
    *
    * Buffering the early event and replaying it onto the stream was considered
    * and rejected (RULING R11). It would preserve the punch, but only by
@@ -239,9 +242,45 @@ export class Session {
     return decodePayload(await this.transport.receive(this.opts.timeoutMs))
   }
 
-  /** Receives one further packet in an ongoing multi-packet exchange. */
+  /**
+   * Receives one further packet in an ongoing multi-packet exchange.
+   *
+   * Guarded like `tryExecute` rather than left to the transport: this path
+   * sends nothing, so a torn-down session reaching it would be collecting
+   * packets belonging to an exchange that no longer has an owner.
+   */
   async receiveMore(): Promise<DecodedPacket> {
+    this.assertOpen()
     return decodePayload(await this.transport.receive(this.opts.timeoutMs))
+  }
+
+  /**
+   * Refuses a request from a session that is no longer open.
+   *
+   * The guarantee `subscribe` promises used to be delivered one layer down:
+   * `abandon` set `open_ = false` and closed the socket, nothing on the
+   * request path ever read `open_`, and what actually refused the next call
+   * was the destroyed socket. That worked, and it was untestable -- against a
+   * real transport a ZkConnectionError from the guard and one from the socket
+   * are indistinguishable, so the docblock's claim rested on a mechanism no
+   * test could pin. It also meant a transport that queued, reconnected, or
+   * simply had not noticed the close yet would answer, and the reply would be
+   * the one this session's teardown existed to stop being read.
+   *
+   * ZkConnectionError, deliberately: the class callers already handle for a
+   * session they can no longer use. Only the message changes, naming this
+   * layer as the refuser.
+   *
+   * Applied to the public request path, NOT to `send`. `close` sets `open_`
+   * false and then sends its goodbye through `send`, and on UDP that goodbye
+   * is the only thing telling the device to release the session slot.
+   */
+  private assertOpen(): void {
+    if (this.open_) return
+    throw new ZkConnectionError(
+      'this session is not open: it was closed, or torn down after its reply stream went out of ' +
+        'step. Reconnect before using it again',
+    )
   }
 
   /**
