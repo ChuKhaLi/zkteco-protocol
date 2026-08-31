@@ -539,7 +539,7 @@ describe('pipe-delimited cells survive a message containing a pipe', () => {
     }
     const row = renderMarkdown(result).split('\n').find((l) => l.startsWith('| users |'))!
     expect(cells(row)).toEqual([
-      'users', 'malformed', 'ZkProtocolError', 'connect ECONNREFUSED a \\| b \\| c', '8',
+      'users', '', '', 'malformed', 'ZkProtocolError', 'connect ECONNREFUSED a \\| b \\| c', '8',
     ])
   })
 
@@ -567,6 +567,46 @@ describe('pipe-delimited cells survive a message containing a pipe', () => {
     }
     const row = renderMarkdown(result).split('\n').find((l) => l.startsWith('| 5 |'))!
     expect(cells(row)).toHaveLength(4)
+  })
+
+  /**
+   * Design spec 5.1's "per-step outcomes (command, ack code, body length)".
+   * The table delivered the body length alone and said so in a comment rather
+   * than claiming the requirement was met; StepResult now carries the other
+   * two, attributed from the trace span each step produced.
+   */
+  describe('the command and ack columns', () => {
+    function stepRow(step: StepResult): string[] {
+      const result = { ...sample(), steps: [step] }
+      const row = renderMarkdown(result).split('\n').find((l) => l.startsWith(`| ${step.name} |`))!
+      return cells(row)
+    }
+
+    it('puts the command and the ack code under their own headings', () => {
+      expect(stepRow({
+        name: 'firmware', outcome: 'ok', command: 1100, ackCode: 2000, exchanges: 1,
+      })).toEqual(['firmware', '1100', '2000', 'ok', '', '', ''])
+    })
+
+    it('marks a step that made more than one exchange, so one command cannot read as one round trip', () => {
+      const [, command] = stepRow({
+        name: 'users', outcome: 'ok', command: 1503, ackCode: 2000, exchanges: 3,
+      })
+      expect(command).toBe('1503 x3')
+    })
+
+    it('leaves both cells empty for a step that reached no wire', () => {
+      // Empty, not '0' and not 'undefined': 0 is a real command number.
+      expect(stepRow({ name: 'skipped', outcome: 'ok' })).toEqual(
+        ['skipped', '', '', 'ok', '', '', ''],
+      )
+    })
+
+    it('shows the command of a step whose reply never came, with the ack left empty', () => {
+      expect(stepRow({
+        name: 'clock', outcome: 'silent', command: 201, exchanges: 1,
+      })).toEqual(['clock', '201', '', 'silent', '', '', ''])
+    })
   })
 })
 

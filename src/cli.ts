@@ -271,7 +271,15 @@ async function runProbe(session: Session, traced: TracingTransport, opts: CliOpt
   const startedAt = new Date().toISOString()
   const t0 = Date.now()
   const findings = emptyFindings()
-  const runner = new StepRunner()
+  // The trace is handed to the runner so each step can carry the command it
+  // sent and the code the device answered (design spec 5.1). A reader, not the
+  // array: TracingTransport appends to its own log, and the runner needs the
+  // length before a step as well as the entries after it.
+  //
+  // probeConcurrent's step comes back with these absent, correctly -- it opens
+  // a SECOND connection over an untraced transport, so none of its traffic is
+  // in this log and there is nothing here to attribute.
+  const runner = new StepRunner(() => traced.events)
 
   try {
     await probeIdentity(session, runner, findings)

@@ -1,5 +1,5 @@
 import { ZkAuthError, ZkConnectionError, ZkError, ZkTimeoutError } from '../errors.js'
-import type { StepOutcome, StepResult } from './types.js'
+import type { StepOutcome, StepResult, TraceEvent } from './types.js'
 
 /**
  * Classifies a thrown error into the outcome the report records.
@@ -83,6 +83,14 @@ export class StepRunner {
   private readonly results: StepResult<unknown>[] = []
   private stopped: { after: string; reason: StepOutcome } | null = null
 
+  /**
+   * @param trace Reads the trace log as it stands now. Optional, and a reader
+   *   rather than the array itself: the runner needs the length before a step
+   *   and the entries after it, and a `TracingTransport` appends to its own
+   *   private log. Without it, a step records what it always did.
+   */
+  constructor(private readonly trace?: () => readonly TraceEvent[]) {}
+
   get steps(): readonly StepResult<unknown>[] {
     return this.results
   }
@@ -110,17 +118,18 @@ export class StepRunner {
    */
   async run<T>(name: string, fn: () => Promise<T | Refused<T>>): Promise<T | undefined> {
     if (this.stopped) return undefined
+    const from = this.trace?.().length ?? 0
     try {
       const outcome = await fn()
       if (isRefused(outcome)) {
-        this.results.push({ name, outcome: 'refused', value: outcome.value })
+        this.results.push({ name, outcome: 'refused', value: outcome.value, ...this.attribute(from) })
         return outcome.value
       }
-      this.results.push({ name, outcome: 'ok', value: outcome })
+      this.results.push({ name, outcome: 'ok', value: outcome, ...this.attribute(from) })
       return outcome
     } catch (err) {
       const outcome = classifyError(err)
-      const result: StepResult<unknown> = { name, outcome }
+      const result: StepResult<unknown> = { name, outcome, ...this.attribute(from) }
       if (err instanceof Error) {
         result.errorClass = err.constructor.name
         result.errorMessage = err.message
@@ -134,5 +143,35 @@ export class StepRunner {
       if (stopsTheRun(outcome)) this.stopped = { after: name, reason: outcome }
       return undefined
     }
+  }
+
+  /**
+   * Attributes the trace span a step produced back to that step.
+   *
+   * The span is everything appended from `from` onward, which is exactly what
+   * this step's callback caused: `run` is not re-entrant and the probe awaits
+   * each step before starting the next.
+   *
+   * The reply taken is the first `recv` after that send -- the pairing the
+   * request/response loop enforces, and the same one `auditReplyIds` uses. A
+   * 'push' is skipped: an unsolicited realtime event acknowledges nothing.
+   *
+   * Attribution happens on the failure path too. A step that threw is the one
+   * a reader most needs the command for, and the events are already recorded
+   * by then -- `TracingTransport` writes them as the payloads move, not when
+   * the step returns.
+   */
+  private attribute(from: number): Pick<StepResult, 'command' | 'ackCode' | 'exchanges'> {
+    const span = (this.trace?.() ?? []).slice(from)
+    const sends = span.filter((e) => e.direction === 'send')
+    const first = sends[0]
+    if (!first) return {}
+    const ack = span.slice(span.indexOf(first) + 1).find((e) => e.direction === 'recv')
+    const attributed: Pick<StepResult, 'command' | 'ackCode' | 'exchanges'> = {
+      exchanges: sends.length,
+    }
+    if (first.command !== undefined) attributed.command = first.command
+    if (ack?.command !== undefined) attributed.ackCode = ack.command
+    return attributed
   }
 }

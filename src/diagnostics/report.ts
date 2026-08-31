@@ -632,20 +632,39 @@ function formatStepTable(steps: readonly StepResult[]): string {
   // comment).
   //
   // Design spec §5.1 asks for "per-step outcomes (command, ack code, body
-  // length)". This table delivers the body length, and only when an error
-  // happened to carry `raw`. The command number and the ack code are NOT here
-  // and never have been: `StepResult` does not carry them — they live on
-  // `TraceEvent`, which reaches only the opt-in raw capture. Naming that gap
-  // rather than citing the requirement as though it were met; closing it means
-  // threading trace data into `StepResult`, which is a change to what a step
-  // records, not to how it is printed.
-  const lines = ['| Step | Outcome | Error | Message | Raw bytes |', '|---|---|---|---|---|']
+  // length)". All three are here now: `StepResult` carries the command and the
+  // ack code as of the trace attribution in `StepRunner.attribute`, and the
+  // body length is still the count an error happened to arrive with. This
+  // comment used to name the gap instead, which was the honest thing to do
+  // while `TraceEvent` -- and so the opt-in raw capture -- was the only place
+  // those two numbers existed.
+  const lines = [
+    '| Step | Command | Ack | Outcome | Error | Message | Raw bytes |',
+    '|---|---|---|---|---|---|---|',
+  ]
   for (const step of steps) {
     lines.push(
-      `| ${escapeCell(step.name)} | ${step.outcome} | ${escapeCell(step.errorClass ?? '')} | ${escapeCell(step.errorMessage ?? '')} | ${step.rawByteLength ?? ''} |`,
+      `| ${escapeCell(step.name)} | ${commandCell(step)} | ${step.ackCode ?? ''} | ${step.outcome} | ${escapeCell(step.errorClass ?? '')} | ${escapeCell(step.errorMessage ?? '')} | ${step.rawByteLength ?? ''} |`,
     )
   }
   return lines.join('\n')
+}
+
+/**
+ * The command cell, carrying the exchange count when there was more than one.
+ *
+ * A step is one row, and the bulk steps are three round trips: PREPARE_BUFFER,
+ * READ_BUFFER, FREE_DATA. Printing `1503` alone would read as a single
+ * exchange, and a reader counting round trips off this table would undercount
+ * the run. The suffix appears only where it changes the reading.
+ *
+ * Empty for a step that reached no wire, never `0` — that is a real command
+ * number, and nothing in the cell would tell a reader it was invented.
+ */
+function commandCell(step: StepResult): string {
+  if (step.command === undefined) return ''
+  const many = step.exchanges !== undefined && step.exchanges > 1
+  return many ? `${step.command} x${step.exchanges}` : String(step.command)
 }
 
 /**

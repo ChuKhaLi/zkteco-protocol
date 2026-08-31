@@ -46,6 +46,32 @@ export interface StepResult<T = unknown> {
   errorClass?: string
   errorMessage?: string
   /**
+   * The first command this step put on the wire, and the code the device
+   * answered it with.
+   *
+   * Design spec §5.1 asks for "per-step outcomes (command, ack code, body
+   * length)"; a step used to carry only the last of the three, because these
+   * two live on `TraceEvent` and `TraceEvent` reaches only the opt-in raw
+   * capture. They are attributed here from the trace span a step produced.
+   *
+   * FIRST rather than last: a step is named for the command it is about, and
+   * `readBulk`'s buffered path ends on FREE_DATA, so the last command would
+   * print the cleanup. `exchanges` is what keeps that honest -- one command
+   * with no count reads as one round trip, which for the bulk steps it is not.
+   *
+   * All three are absent, never zero, when a step reached no wire: 0 is a real
+   * command number, and a reader cannot tell a fabricated one from a real one.
+   * `command` and `ackCode` are absent too when the payload did not decode,
+   * while `exchanges` still counts what was sent.
+   *
+   * Numbers only. Neither carries identity, so this adds nothing to the
+   * redaction surface -- see `rawByteLength` below for the rule that governs
+   * anything that does.
+   */
+  command?: number
+  ackCode?: number
+  exchanges?: number
+  /**
    * How many bytes the error already carried, when it carried any — never the
    * bytes themselves.
    *

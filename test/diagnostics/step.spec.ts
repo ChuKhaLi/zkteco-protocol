@@ -3,6 +3,9 @@ import {
   ZkAuthError, ZkConnectionError, ZkError, ZkFramingError, ZkProtocolError, ZkTimeoutError,
 } from '../../src/errors.js'
 import { StepRunner, classifyError, refused, stopsTheRun } from '../../src/diagnostics/step.js'
+import { CMD } from '../../src/codec/commands.js'
+import { encodePayload } from '../../src/codec/packet.js'
+import type { TraceEvent } from '../../src/diagnostics/types.js'
 
 describe('classifyError', () => {
   it('maps each error class to its outcome', () => {
@@ -109,5 +112,113 @@ describe('StepRunner', () => {
     expect(value).toBeNull()
     expect(runner.steps[0]).toMatchObject({ name: 'param:~Foo', outcome: 'refused', value: null })
     expect(runner.truncated).toBeNull()
+  })
+})
+
+/**
+ * Design spec 5.1 asks for "per-step outcomes (command, ack code, body
+ * length)". Only the body length was ever there: StepResult did not carry the
+ * other two, they live on TraceEvent, and TraceEvent reaches only the opt-in
+ * raw capture. The comment in formatStepTable named that gap rather than
+ * citing the requirement as met -- this closes it.
+ *
+ * Numbers only, never bytes. A command and an ack code carry no identity, so
+ * this adds nothing to the redaction surface the report has to defend.
+ */
+describe('StepRunner with a trace', () => {
+  /** Mirrors what TracingTransport.record produces for a decodable payload. */
+  function traced(): { events: TraceEvent[]; exchange: (command: number, ack: number) => void } {
+    const events: TraceEvent[] = []
+    const record = (direction: TraceEvent['direction'], command: number): void => {
+      const payload = encodePayload({ command, sessionId: 1, replyId: events.length })
+      events.push({
+        seq: events.length,
+        direction,
+        offsetMs: 0,
+        hex: payload.toString('hex'),
+        command,
+        sessionId: 1,
+        replyId: events.length,
+      })
+    }
+    return {
+      events,
+      exchange: (command, ack) => { record('send', command); record('recv', ack) },
+    }
+  }
+
+  it('records the command a step sent and the code the device answered', async () => {
+    const t = traced()
+    const runner = new StepRunner(() => t.events)
+    await runner.run('firmware', async () => { t.exchange(CMD.GET_VERSION, CMD.ACK_OK); return 'x' })
+
+    expect(runner.steps[0]).toMatchObject({
+      name: 'firmware', outcome: 'ok', command: CMD.GET_VERSION, ackCode: CMD.ACK_OK, exchanges: 1,
+    })
+  })
+
+  it('reports the FIRST command of a multi-exchange step, and how many there were', async () => {
+    // readBulk's buffered path is PREPARE_BUFFER, READ_BUFFER, FREE_DATA in
+    // one step. Printing the last command would name the cleanup; printing
+    // one command with no count would read as a single round trip.
+    const t = traced()
+    const runner = new StepRunner(() => t.events)
+    await runner.run('users', async () => {
+      t.exchange(CMD.PREPARE_BUFFER, CMD.ACK_OK)
+      t.exchange(CMD.READ_BUFFER, CMD.ACK_OK)
+      t.exchange(CMD.FREE_DATA, CMD.ACK_ERROR)
+      return []
+    })
+
+    expect(runner.steps[0]).toMatchObject({
+      command: CMD.PREPARE_BUFFER, ackCode: CMD.ACK_OK, exchanges: 3,
+    })
+  })
+
+  it('attributes only the events a step produced, not the ones before it', async () => {
+    const t = traced()
+    const runner = new StepRunner(() => t.events)
+    await runner.run('firmware', async () => { t.exchange(CMD.GET_VERSION, CMD.ACK_OK); return 'x' })
+    await runner.run('clock', async () => { t.exchange(CMD.GET_TIME, CMD.ACK_UNAUTH); return 'y' })
+
+    expect(runner.steps[1]).toMatchObject({
+      command: CMD.GET_TIME, ackCode: CMD.ACK_UNAUTH, exchanges: 1,
+    })
+  })
+
+  it('leaves the fields absent for a step that reached no wire at all', async () => {
+    // Absent, not zero: 0 is a command number, and a reader cannot tell a
+    // fabricated one from a real one.
+    const t = traced()
+    const runner = new StepRunner(() => t.events)
+    await runner.run('skipped', async () => 'nothing sent')
+
+    const step = runner.steps[0]!
+    expect(step.command).toBeUndefined()
+    expect(step.ackCode).toBeUndefined()
+    expect(step.exchanges).toBeUndefined()
+  })
+
+  it('records the command even when the step then threw', async () => {
+    // The failing step is the one a reader most needs the command for.
+    const t = traced()
+    const runner = new StepRunner(() => t.events)
+    await runner.run('clock', async () => {
+      t.exchange(CMD.GET_TIME, CMD.ACK_ERROR)
+      throw new ZkProtocolError('device rejected command 201')
+    })
+
+    expect(runner.steps[0]).toMatchObject({
+      outcome: 'malformed', command: CMD.GET_TIME, ackCode: CMD.ACK_ERROR,
+    })
+  })
+
+  it('works with no trace supplied, leaving the fields absent', async () => {
+    // Every existing caller constructs StepRunner with no arguments.
+    const runner = new StepRunner()
+    await runner.run('firmware', async () => 'x')
+
+    expect(runner.steps[0]).toMatchObject({ name: 'firmware', outcome: 'ok' })
+    expect(runner.steps[0]!.command).toBeUndefined()
   })
 })

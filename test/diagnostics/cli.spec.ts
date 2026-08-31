@@ -338,4 +338,32 @@ describe('main (end to end, against the emulator)', () => {
     // absence above just as well.
     expect(markdown).toContain('MB360')
   })
+
+  it('fills the step table command and ack columns from the real run', async () => {
+    // StepRunner takes the trace as a constructor argument, and every caller
+    // built one with no arguments until this run did. A runner constructed
+    // without it records exactly what it always did, and every assertion about
+    // the OTHER columns still passes -- so the two new columns would ship empty
+    // on every real invocation with nothing going red.
+    running = await startEmulator({
+      transport: 'tcp',
+      params: { '~SerialNumber': 'SN-DO-NOT-LEAK', '~DeviceName': 'MB360' },
+      firmware: 'Ver 6.60',
+      info: { userCount: 0, recordCount: 0, recordCapacity: 1000 },
+    })
+    dir = mkdtempSync(join(tmpdir(), 'zk-cli-'))
+    const out = join(dir, 'report.md')
+    vi.spyOn(process.stderr, 'write').mockReturnValue(true)
+    process.argv = ['node', 'cli.js', '127.0.0.1', '--port', String(running.port), '--out', out]
+
+    await main()
+
+    const row = readFileSync(out, 'utf8').split('\n').find((l) => l.startsWith('| firmware |'))
+    expect(row, 'no step row for firmware').toBeDefined()
+    const [, , command, ack] = row!.split('|').map((c) => c.trim())
+    // CMD_GET_VERSION answered ACK_OK. Written as literals rather than read
+    // back out of CMD, so a wrong constant cannot agree with itself.
+    expect(command).toBe('1100')
+    expect(ack).toBe('2000')
+  })
 })
