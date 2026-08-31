@@ -111,4 +111,24 @@ describe('oracle fixtures', () => {
     const result = classifyChecksum(connectPacket)
     expect(result).toBe('ambiguous')
   })
+
+  it('a replyId === 0 packet whose checksum matches neither hypothesis is not ambiguous', () => {
+    // The arithmetical tie at replyId === 0 says the two hypotheses cannot be
+    // told APART. It does not say the packet is sound. A capture whose
+    // transmitted checksum survives neither hypothesis is corrupt or foreign,
+    // and 'neither' is the class that says so -- "investigate before trusting
+    // any of it", per classifyChecksum's own doc comment. Testing the tie
+    // before comparing to p.checksum reports that packet as 'ambiguous'
+    // instead, which a reader takes as "sound, but carries no evidence".
+    const handshakeFixture = JSON.parse(
+      readFileSync(path.join(DIR, 'handshake-tcp-pyzk.json'), 'utf8'),
+    ) as OracleFixture
+    const connectPacket = handshakeFixture.packets[0]!
+    expect(connectPacket.replyId).toBe(0)
+    // Pins the fixture this test's meaning rests on: 0xFC17 is the checksum
+    // pyzk actually transmitted, so the corruption below really is one.
+    expect(connectPacket.checksum).toBe(0xfc17)
+
+    expect(classifyChecksum({ ...connectPacket, checksum: 0x0001 })).toBe('neither')
+  })
 })
