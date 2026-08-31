@@ -1,0 +1,169 @@
+#!/usr/bin/env node
+/**
+ * The packed-tarball drill: build, pack, install into a clean directory, and
+ * drive the INSTALLED cli against the emulator.
+ *
+ * Every other check in this repository runs the cli from source, sharing
+ * node_modules, tsconfig and build output. A published consumer has none of
+ * those, and that gap is not hypothetical -- a top-level `await main()` once
+ * made the CJS build fail and silently drop dist/index.cjs, the package's own
+ * `main` entry, with no test failing anywhere.
+ *
+ * Run from the repository root:
+ *   node .claude/skills/release-drill/scripts/drill.mjs
+ *
+ * Exit code 0 means every check below passed. Any failure prints what was
+ * expected, what was found, and where the artifacts were left for inspection.
+ */
+import { spawn, spawnSync } from 'node:child_process'
+import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync, mkdirSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+
+const IS_WINDOWS = process.platform === 'win32'
+/** Values baked into tools/emulator-serve.ts. Kept in sync by hand; the drill
+ *  fails loudly rather than silently if they drift, because the serial check
+ *  would go vacuous. */
+const SERIAL = 'SN-PACKTEST-001'
+const DEVICE_NAME = 'MB360'
+
+const checks = []
+let workdir = null
+let emulator = null
+
+function check(name, ok, detail) {
+  checks.push({ name, ok, detail })
+  process.stdout.write(`${ok ? '  ok  ' : ' FAIL '} ${name}${detail ? ` — ${detail}` : ''}\n`)
+}
+
+function run(command, args, opts = {}) {
+  const res = spawnSync(command, args, { encoding: 'utf8', shell: IS_WINDOWS, ...opts })
+  if (res.error) throw res.error
+  return res
+}
+
+function must(condition, message) {
+  if (!condition) {
+    process.stderr.write(`\ndrill aborted: ${message}\n`)
+    cleanup()
+    process.exit(2)
+  }
+}
+
+function killEmulator() {
+  if (!emulator || emulator.killed) return
+  // tsx spawns a child of its own, so killing the wrapper leaves the socket
+  // bound and the next run picks a different port while this one leaks.
+  if (IS_WINDOWS) spawnSync('taskkill', ['/pid', String(emulator.pid), '/T', '/F'], { shell: true })
+  else emulator.kill('SIGTERM')
+  emulator = null
+}
+
+function cleanup() {
+  killEmulator()
+  if (workdir && !process.env.KEEP_DRILL_ARTIFACTS) rmSync(workdir, { recursive: true, force: true })
+}
+
+process.on('SIGINT', () => { cleanup(); process.exit(130) })
+
+// --- 1. build -------------------------------------------------------------
+process.stdout.write('building...\n')
+must(run('pnpm', ['build']).status === 0, 'pnpm build failed')
+must(existsSync('dist/index.cjs'), 'dist/index.cjs is missing — the CJS pass failed silently')
+check('dist/index.cjs exists (the package main entry)', true)
+
+// --- 2. pack --------------------------------------------------------------
+workdir = mkdtempSync(join(tmpdir(), 'zk-drill-'))
+const packed = run('npm', ['pack', '--pack-destination', workdir, '--json'])
+must(packed.status === 0, `npm pack failed:\n${packed.stderr}`)
+const tarball = join(workdir, JSON.parse(packed.stdout)[0].filename)
+must(existsSync(tarball), `packed tarball not found at ${tarball}`)
+
+// --- 3. install into a directory that shares nothing with this repo -------
+const consumer = join(workdir, 'consumer')
+mkdirSync(consumer)
+writeFileSync(join(consumer, 'package.json'), '{"name":"drill-consumer","private":true}\n')
+const install = run('npm', ['install', tarball], { cwd: consumer })
+must(install.status === 0, `npm install failed:\n${install.stderr}`)
+// "added 1 package" is the zero-runtime-dependencies rule, observed from
+// outside rather than asserted from package.json.
+check(
+  'install pulls exactly 1 package, 0 transitive dependencies',
+  /added 1 package/.test(install.stdout),
+  install.stdout.trim().split('\n').find((l) => l.includes('package')) ?? 'no package line',
+)
+
+// --- 4. start the emulator ------------------------------------------------
+const portFile = join(workdir, 'port.txt')
+emulator = spawn('npx', ['tsx', 'tools/emulator-serve.ts', portFile], {
+  stdio: 'ignore', shell: IS_WINDOWS, detached: !IS_WINDOWS,
+})
+const deadline = Date.now() + 30_000
+while (!existsSync(portFile) && Date.now() < deadline) {
+  spawnSync(process.execPath, ['-e', 'setTimeout(()=>{},200)'])
+}
+must(existsSync(portFile), 'emulator never wrote its port file within 30s')
+const port = readFileSync(portFile, 'utf8').trim()
+
+// --- 5. the default run, which is what the README documents first ---------
+function invoke(outName, extraArgs = []) {
+  const out = join(workdir, outName)
+  const res = run('npx', ['zkteco-protocol', '127.0.0.1', '--port', port, '--out', out, ...extraArgs], {
+    cwd: consumer,
+  })
+  return { res, out, json: out.replace(/\.md$/, '.json') }
+}
+
+const plain = invoke('report.md')
+check('default run exits 0', plain.res.status === 0, `exit ${plain.res.status}`)
+must(existsSync(plain.out), 'no Markdown report was written')
+const md = readFileSync(plain.out, 'utf8')
+const json = readFileSync(plain.json, 'utf8')
+
+check('the serial appears nowhere in the Markdown report', !md.includes(SERIAL))
+check('the serial appears nowhere in the JSON sidecar', !json.includes(SERIAL))
+// The positive control. Without it, a renderer that wrote nothing would pass
+// both absence checks above just as well.
+check(
+  `${DEVICE_NAME} IS present, so the absence above is meaningful`,
+  md.includes(DEVICE_NAME),
+  'positive control',
+)
+const item1 = md.split('\n').find((l) => l.startsWith('| 1 |')) ?? ''
+check(
+  'item 1 reads "not answered" and names --raw-capture as the remedy',
+  /not answered/.test(item1) && /--raw-capture/.test(item1),
+  item1.slice(0, 90),
+)
+
+// --- 6. the --raw-capture run: item 1 must flip, and the bytes must be there
+const capturePath = join(workdir, 'trace.jsonl')
+const captured = invoke('report-capture.md', ['--raw-capture', capturePath])
+check('--raw-capture run exits 0', captured.res.status === 0, `exit ${captured.res.status}`)
+const capturedMd = readFileSync(captured.out, 'utf8')
+const item1Captured = capturedMd.split('\n').find((l) => l.startsWith('| 1 |')) ?? ''
+check(
+  'item 1 flips to "answered" and names the real capture file',
+  /answered/.test(item1Captured) && item1Captured.includes('trace.jsonl'),
+  item1Captured.slice(0, 90),
+)
+check('the Markdown still hides the serial with a capture written', !capturedMd.includes(SERIAL))
+// The capture is unredacted BY DESIGN -- that is the whole reason it is
+// opt-in and carries a header saying so. Asserting the bytes ARE there keeps
+// the two artifacts' different jobs honest in both directions.
+const captureHex = readFileSync(capturePath, 'utf8')
+check(
+  'the raw capture DOES contain the serial, as its opt-in contract promises',
+  captureHex.includes(Buffer.from(SERIAL, 'latin1').toString('hex')),
+)
+
+// --- done -----------------------------------------------------------------
+killEmulator()
+const failed = checks.filter((c) => !c.ok)
+process.stdout.write(`\n${checks.length - failed.length}/${checks.length} checks passed\n`)
+if (failed.length > 0) {
+  process.stdout.write(`artifacts left in ${workdir} for inspection\n`)
+  process.exitCode = 1
+} else {
+  cleanup()
+}
