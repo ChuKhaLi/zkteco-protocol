@@ -4,8 +4,8 @@
 **For:** a session picking this repository up cold
 **Repository:** https://github.com/ChuKhaLi/zkteco-protocol — public, MIT, `main`
 **State:** v0.4.1. 570 tests, 1 skipped. Zero runtime dependencies.
-**Updated 2026-08-31 (later the same day), for v0.4.1:** §3, §4.3, §5, §7 and §8 were rewritten.
-Everything else describes v0.4.0 and is unchanged, and still accurate.
+**Updated 2026-08-31 (later the same day), for v0.4.1:** §3, §3.1, §4.3, §5, §7 and §8 were
+rewritten. Everything else describes v0.4.0 and is unchanged, and still accurate.
 **Not published to npm.** The name is still unclaimed.
 
 This continues `2026-08-30-continuing-past-v0.3-HANDOFF.md`, which continues two before it. All
@@ -89,6 +89,35 @@ comm-key row renders the no-key sentence, and the step table's new columns are p
 `keyword-shape-ab` as `11 x2` and `users` as `1503 x3`, which is the request-shape A/B and the
 buffered read counted correctly. **Run it again for every release.** It is the only check in this
 repository that exercises what a stranger actually installs.
+
+### 3.1 CI was red for the whole of v0.4, and nobody noticed
+
+**Read this before trusting a green tick on anything in this repository's history.**
+
+`.github/workflows/ci.yml` ran `pnpm build` *after* `pnpm test`. `test/smoke.spec.ts` reads
+`dist/index.js` to check that the diagnostics and CLI code stayed out of the library bundle, so in
+CI that file did not exist yet and the test failed with ENOENT — on every run, on all six matrix
+jobs, from the moment the bundle test was added.
+
+- Last green run before the fix: **2026-08-30T16:52**, which predates the bundle test.
+- Red on every push after that, including **v0.4.0 itself**. Four consecutive failures.
+- Fixed in v0.4.1 by moving the build above the tests. First green run: **33404490059**, all six
+  jobs.
+
+Two things follow, and the second is the one that matters:
+
+1. **v0.4.0 shipped with CI red.** Its verification was somebody's local run, and the §4 defect
+   count is what human review caught, not what CI caught. CI caught nothing, because CI never
+   reported anything but failure and the failure was ignored.
+2. **The bundle test reads whatever `dist/` happens to be on disk.** It passed locally throughout
+   because a build had been run at some point; it never checked that the bundle it read was built
+   from the source next to it. In CI the ordering now guarantees a fresh one. Locally it does not,
+   so `pnpm build` before `pnpm test` is the only way to make that assertion mean anything — and a
+   stale `dist/` is the one way this suite can still tell you something untrue.
+
+The general shape is the one §4 is about, one level up from the code: **a check that reports less
+than it appears to.** Here it was not even reporting green — it was reporting red, in a place nobody
+was looking. Check the CI tab after a push. It is cheap and it was worth nothing for two days.
 
 ---
 
@@ -263,8 +292,8 @@ checklist while confidence stays flat.
 
 **The backlog is no longer a third option, and that is what v0.4.1 changed.** §5 was the only list
 of known defects this repository had, and clearing it took one session. Nothing is deferred, nothing
-is accepted-but-broken. Whatever you pick up next is a choice between the two above, not a decision
-you can postpone by fixing something small first.
+is accepted-but-broken, and CI is green again (§3.1). Whatever you pick up next is a choice between
+the two above, not a decision you can postpone by fixing something small first.
 
 **Do not** start access control or write paths. **Do not** add checklist items; the twenty-three
 existing ones are the backlog.
