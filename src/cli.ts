@@ -3,7 +3,7 @@ import { writeFile } from 'node:fs/promises'
 import { parseArgs } from 'node:util'
 import { pathToFileURL } from 'node:url'
 import {
-  auditChecksums, auditReplyIds, emptyFindings, probeBulk, probeConcurrent, probeIdentity,
+  auditChecksums, auditCommKey, auditReplyIds, emptyFindings, probeBulk, probeConcurrent, probeIdentity,
   probeRealtime, probeState,
 } from './diagnostics/probe.js'
 import { renderJson, renderMarkdown, renderRawCapture, type ProbeResult } from './diagnostics/report.js'
@@ -297,6 +297,12 @@ async function runProbe(session: Session, traced: TracingTransport, opts: CliOpt
 
     findings.checksum = auditChecksums(traced.events)
     findings.replyIds = auditReplyIds(traced.events)
+    // `opts.commKey !== 0` is the ONE thing the trace cannot show, and it is
+    // not the verdict: Session.open sends CMD_AUTH only when the device
+    // answers CONNECT with ACK_UNAUTH, so a run given --comm-key against a
+    // device that never asks exercises the mixing zero times. Whether it was
+    // exercised, and whether the device took it, are read off the wire.
+    findings.commKey = auditCommKey(traced.events, opts.commKey !== 0)
   } finally {
     await session.close().catch(() => {})
   }

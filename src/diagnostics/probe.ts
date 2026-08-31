@@ -98,6 +98,23 @@ export interface Findings {
    * echo is data, not a failure.
    */
   replyIds: { repliesChecked: number; echoedRequestId: number }
+  /**
+   * The third part of item 2: was the comm-key mixing exercised at all, and
+   * did the device accept it?
+   *
+   * Three states a reader has to be able to tell apart, which is why this is
+   * not one boolean. `configured` comes from argv; the other two come from the
+   * trace, and they are NOT interchangeable with it. `Session.open` sends
+   * CMD_AUTH only when the device answers CONNECT with ACK_UNAUTH, so a run
+   * given --comm-key against a device that never demands one exercises
+   * `mixCommKey` zero times. Reading the flag as the verdict would report an
+   * audit that never ran -- this project's recurring defect shape, in the row
+   * whose whole subject is what the evidence supports.
+   *
+   * Booleans only. The key itself never enters `Findings`, per the uniform
+   * redaction rule: the report is meant to be pasted into a public issue.
+   */
+  commKey: { configured: boolean; authSent: boolean; authAccepted: boolean | null }
   bulkPath: 'buffered' | 'legacy' | null
   /**
    * Did CMD_PREPARE_BUFFER's 11-byte (odd-length) request reach the wire?
@@ -145,6 +162,7 @@ export function emptyFindings(): Findings {
       sent: { packetsChecked: 0, mismatches: 0 },
     },
     replyIds: { repliesChecked: 0, echoedRequestId: 0 },
+    commKey: { configured: false, authSent: false, authAccepted: null },
     bulkPath: null,
     bulkPrepareAttempted: false,
     attendance: null,
@@ -390,6 +408,30 @@ export function auditReplyIds(events: readonly TraceEvent[]): Findings['replyIds
     if (event.replyId === lastRequestId) echoedRequestId += 1
   }
   return { repliesChecked, echoedRequestId }
+}
+
+/**
+ * The third part of item 2, read from the wire rather than from argv.
+ *
+ * `configured` is the one thing the trace cannot show: no CMD_AUTH on the wire
+ * is produced both by a run with no key and by a run whose key the device
+ * never asked for, and those are different answers for a reader deciding
+ * whether §5's mixing has been checked against this firmware.
+ *
+ * The reply taken is the first `recv` after the CMD_AUTH, which is the pairing
+ * `Session.open` enforces -- it awaits exactly one reply there. A CMD_AUTH with
+ * no reply at all reports `authAccepted: false`: the device did not accept it,
+ * and defaulting an absence to the flattering answer is how item 12 came to
+ * report 'answered' for a primitive this library does not have.
+ */
+export function auditCommKey(
+  events: readonly TraceEvent[],
+  configured: boolean,
+): Findings['commKey'] {
+  const sentAt = events.findIndex((e) => e.direction === 'send' && e.command === CMD.AUTH)
+  if (sentAt === -1) return { configured, authSent: false, authAccepted: null }
+  const reply = events.slice(sentAt + 1).find((e) => e.direction === 'recv')
+  return { configured, authSent: true, authAccepted: reply?.command === CMD.ACK_OK }
 }
 
 /**

@@ -5,9 +5,10 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { emptyFindings } from '../../src/diagnostics/probe.js'
 import type { ProbeResult } from '../../src/diagnostics/report.js'
 import {
-  describeWrite, exitCodeFor, parseCliArgs, resolveReportTargets, writeOutputs,
+  describeWrite, exitCodeFor, main, parseCliArgs, resolveReportTargets, writeOutputs,
 } from '../../src/cli.js'
 import type { CliOptions } from '../../src/cli.js'
+import { startEmulator, type Emulator } from '../emulator/index.js'
 
 describe('parseCliArgs', () => {
   it('takes the host as a positional and defaults everything else', () => {
@@ -265,5 +266,76 @@ describe('writeOutputs (Ruling F7 — announce every file written, on stderr onl
     expect(err).not.toContain('ZKTeco bring-up report')
 
     rmSync('zkteco-report.json', { force: true }) // the default target, written to CWD
+  })
+})
+
+/**
+ * The only test that drives main() itself.
+ *
+ * Everything else in this file exercises the pure helpers, and the probe
+ * invariants suite reassembles the run out of probeIdentity/probeState/... by
+ * hand. Neither notices if runProbe stops calling one of the audits, because
+ * neither runs runProbe -- the emptyFindings() default would simply travel to
+ * the renderer and read there as a legitimate "not exercised". This closes
+ * that hole for the audit added alongside it.
+ */
+describe('main (end to end, against the emulator)', () => {
+  let running: Emulator | null = null
+  let dir: string | null = null
+  const argv = process.argv
+  const exitCode = process.exitCode
+
+  afterEach(async () => {
+    await running?.close(); running = null
+    if (dir) rmSync(dir, { recursive: true, force: true })
+    dir = null
+    process.argv = argv
+    process.exitCode = exitCode
+    vi.restoreAllMocks()
+  })
+
+  const COMM_KEY = 483927
+
+  it('reports the comm-key mixing the device demanded, and prints the key nowhere', async () => {
+    // The emulator computes its expectation with the library's own
+    // mixCommKey, so "accepted" here proves the verdict is WIRED AND RENDERED
+    // -- not that the mixing is right for real firmware. Only hardware can
+    // answer that, which is the whole reason checklist item 2 exists.
+    running = await startEmulator({
+      transport: 'tcp',
+      commKey: COMM_KEY,
+      params: { '~SerialNumber': 'SN-DO-NOT-LEAK', '~DeviceName': 'MB360' },
+      firmware: 'Ver 6.60',
+      info: { userCount: 0, recordCount: 0, recordCapacity: 1000 },
+    })
+    dir = mkdtempSync(join(tmpdir(), 'zk-cli-'))
+    const out = join(dir, 'report.md')
+    // Ruling F7 puts every "wrote ..." line on stderr; silenced so the suite's
+    // own output stays clean, not because anything asserts on it.
+    vi.spyOn(process.stderr, 'write').mockReturnValue(true)
+    process.argv = [
+      'node', 'cli.js', '127.0.0.1',
+      '--port', String(running.port),
+      '--comm-key', String(COMM_KEY),
+      '--out', out,
+    ]
+
+    await main()
+
+    const markdown = readFileSync(out, 'utf8')
+    const json = readFileSync(join(dir, 'report.json'), 'utf8')
+    // Scoped to item 2's row: items 5 and 23 legitimately say "not exercised"
+    // about entirely different things on this same run.
+    const row = markdown.split('\n').find((l) => /^\| 2 \|/.test(l))
+    expect(row, 'no row for item 2').toBeDefined()
+    expect(row).toMatch(/comm-key mixing: exercised and accepted/i)
+    expect(row).not.toMatch(/not exercised/i)
+    // The key is a secret its operator typed on a command line, and the
+    // Markdown report is written to be pasted into a public issue.
+    expect(markdown).not.toContain(String(COMM_KEY))
+    expect(json).not.toContain(String(COMM_KEY))
+    // Positive control: a renderer that wrote nothing would satisfy every
+    // absence above just as well.
+    expect(markdown).toContain('MB360')
   })
 })

@@ -5,7 +5,7 @@ import { Session } from '../../src/session/Session.js'
 import { TcpTransport } from '../../src/transport/tcp.js'
 import { StepRunner } from '../../src/diagnostics/step.js'
 import {
-  auditChecksums, auditReplyIds, emptyFindings, FREE_SIZES_RAW_MAX_BYTES, probeState,
+  auditChecksums, auditCommKey, auditReplyIds, emptyFindings, FREE_SIZES_RAW_MAX_BYTES, probeState,
 } from '../../src/diagnostics/probe.js'
 import { reply, startEmulator, type Emulator } from '../emulator/index.js'
 import type { TraceEvent } from '../../src/diagnostics/types.js'
@@ -144,7 +144,16 @@ describe('probeState', () => {
 /** One traced payload, in the given direction. */
 function event(direction: TraceEvent['direction'], payload: Buffer, seq = 0): TraceEvent {
   const decoded = { seq, direction, offsetMs: 0, hex: payload.toString('hex') }
-  return direction === 'error' ? decoded : { ...decoded, replyId: payload.readUInt16LE(6) }
+  // command and sessionId are recorded alongside replyId because that is what
+  // TracingTransport.record actually produces (it decodes the payload and
+  // copies all three). A helper that emitted fewer fields would let a test
+  // pass against an event shape the real tracer never emits.
+  return direction === 'error' ? decoded : {
+    ...decoded,
+    command: payload.readUInt16LE(0),
+    sessionId: payload.readUInt16LE(4),
+    replyId: payload.readUInt16LE(6),
+  }
 }
 
 describe('auditChecksums', () => {
@@ -221,5 +230,57 @@ describe('auditReplyIds', () => {
   it('ignores a reply with no request before it', () => {
     const [, orphan] = exchange(7, 7)
     expect(auditReplyIds([orphan!])).toEqual({ repliesChecked: 0, echoedRequestId: 0 })
+  })
+})
+
+/**
+ * Item 2's third part. The checksum formulation and the reply-id quirk were
+ * audited from the trace; comm-key mixing was not, and the row said so and
+ * told the reader to go and read the raw capture by hand.
+ *
+ * The trace already holds the answer, and the flag does not. `Session.open`
+ * sends CMD_AUTH only when the device answers CONNECT with ACK_UNAUTH, so
+ * `--comm-key` against a device that never demands one exercises `mixCommKey`
+ * exactly zero times. Reading `configured` as "mixing was checked" would be
+ * this project's recurring defect: reporting success while proving less.
+ */
+describe('auditCommKey', () => {
+  const connect = event('send', encodePayload({ command: CMD.CONNECT, sessionId: 0, replyId: 0 }))
+  const demand = event('recv', encodePayload({ command: CMD.ACK_UNAUTH, sessionId: 9, replyId: 0 }), 1)
+  const welcome = event('recv', encodePayload({ command: CMD.ACK_OK, sessionId: 9, replyId: 0 }), 1)
+  const sendsKey = event('send', encodePayload({ command: CMD.AUTH, sessionId: 9, replyId: 1 }), 2)
+
+  it('reports mixing unexercised when no comm key was configured', () => {
+    expect(auditCommKey([connect, welcome], false)).toEqual({
+      configured: false, authSent: false, authAccepted: null,
+    })
+  })
+
+  it('reports mixing unexercised when a key was configured but never demanded', () => {
+    expect(auditCommKey([connect, welcome], true)).toEqual({
+      configured: true, authSent: false, authAccepted: null,
+    })
+  })
+
+  it('reports the device accepting the mixed key', () => {
+    const accepts = event('recv', encodePayload({ command: CMD.ACK_OK, sessionId: 9, replyId: 1 }), 3)
+    expect(auditCommKey([connect, demand, sendsKey, accepts], true)).toEqual({
+      configured: true, authSent: true, authAccepted: true,
+    })
+  })
+
+  it('reports the device rejecting the mixed key', () => {
+    const rejects = event('recv', encodePayload({ command: CMD.ACK_UNAUTH, sessionId: 9, replyId: 1 }), 3)
+    expect(auditCommKey([connect, demand, sendsKey, rejects], true)).toEqual({
+      configured: true, authSent: true, authAccepted: false,
+    })
+  })
+
+  it('reports a CMD_AUTH that got no reply at all as unaccepted, not as accepted', () => {
+    // A run that times out mid-handshake writes no report today, but the
+    // verdict must not default to the flattering answer if that ever changes.
+    expect(auditCommKey([connect, demand, sendsKey], true)).toEqual({
+      configured: true, authSent: true, authAccepted: false,
+    })
   })
 })

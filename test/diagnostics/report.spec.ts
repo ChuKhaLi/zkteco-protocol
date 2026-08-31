@@ -443,8 +443,72 @@ describe('item 2 — checksum and reply-id reconciliation (M-9)', () => {
     expect(checklistState(md, 2)).toBe('answered')
     expect(md).toMatch(/2 \|[^\n]*19 DEVICE packet\(s\)/)
     expect(md).toMatch(/2 \|[^\n]*17 of 19 repl\(ies\) echoed/)
-    // The un-audited third says so, rather than hiding under `answered`.
-    expect(md).toMatch(/2 \|[^\n]*Comm-key mixing is NOT reconciled/)
+    // The third part reports its own verdict rather than hiding under
+    // `answered` -- see the block below for all four of them.
+    expect(md).toMatch(/2 \|[^\n]*[Cc]omm-key mixing/)
+  })
+
+  /**
+   * Item 2's third part used to end at "check the CMD_AUTH exchange in the raw
+   * capture by hand". The trace answers it, and the flag does not: CMD_AUTH is
+   * sent only when the device answers CONNECT with ACK_UNAUTH, so a run given
+   * --comm-key against a device that never asks exercises mixCommKey zero
+   * times. Each state below has to read differently from the others, because a
+   * reader deciding whether 5's mixing has been checked cannot act on a row
+   * that collapses "confirmed" into "never ran".
+   */
+  describe('the comm-key third', () => {
+    function withCommKey(commKey: Findings['commKey']): string {
+      const result = sample()
+      result.findings.checksum = {
+        received: { packetsChecked: 19, mismatches: 0 },
+        sent: { packetsChecked: 19, mismatches: 0 },
+      }
+      result.findings.commKey = commKey
+      const row = renderMarkdown(result).split('\n').find((l) => /^\| 2 \|/.test(l))
+      expect(row, 'no row for item 2').toBeDefined()
+      return row!
+    }
+
+    it('says the mixing was exercised and accepted when the device took the key', () => {
+      const row = withCommKey({ configured: true, authSent: true, authAccepted: true })
+      expect(row).toMatch(/comm-key mixing: exercised/i)
+      expect(row).toMatch(/accepted/i)
+      expect(row).not.toMatch(/not exercised/i)
+    })
+
+    it('says the mixing was rejected when the device refused the key', () => {
+      const row = withCommKey({ configured: true, authSent: true, authAccepted: false })
+      expect(row).toMatch(/rejected/i)
+      expect(row).not.toMatch(/accepted/i)
+    })
+
+    it('says the mixing never ran when a key was given but never demanded', () => {
+      // The state that would otherwise be read as confirmation: the operator
+      // passed --comm-key, so they have every reason to assume it was checked.
+      const row = withCommKey({ configured: true, authSent: false, authAccepted: null })
+      expect(row).toMatch(/not exercised/i)
+      expect(row).toMatch(/never demanded/i)
+      expect(row).not.toMatch(/accepted/i)
+    })
+
+    it('says the mixing never ran when no key was given, and names the remedy', () => {
+      const row = withCommKey({ configured: false, authSent: false, authAccepted: null })
+      expect(row).toMatch(/not exercised/i)
+      expect(row).toMatch(/--comm-key/)
+      expect(row).not.toMatch(/never demanded/i)
+    })
+
+    it('leaves the row answered on the checksum reconciliation alone', () => {
+      // The other two thirds were answered; an unexercised mixing does not
+      // retract them. The observation carries the distinction, not the state.
+      const result = sample()
+      result.findings.checksum = {
+        received: { packetsChecked: 19, mismatches: 0 },
+        sent: { packetsChecked: 19, mismatches: 0 },
+      }
+      expect(checklistState(renderMarkdown(result), 2)).toBe('answered')
+    })
   })
 })
 

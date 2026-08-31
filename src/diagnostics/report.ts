@@ -271,9 +271,15 @@ function item1Observation(result: ProbeResult): string {
  * disagree. Ours is still reported, as the positive control it is.
  *
  * The reply-id verdict spec §5.1 asks for is now computed too
- * (`auditReplyIds`). The third part, comm-key mixing, is NOT audited here:
- * it is only exercised when a comm key is set, and this row says so rather
- * than letting `answered` quietly cover it.
+ * (`auditReplyIds`), and so is the third part -- see `commKeyObservation`,
+ * which replaced a sentence telling the reader to go and check the CMD_AUTH
+ * exchange in the raw capture by hand.
+ *
+ * The row's STATE still keys off the checksum reconciliation alone. Mixing
+ * that was never exercised does not retract the two thirds that were answered,
+ * and it does not get to claim the row either; the observation carries that
+ * distinction, which is what a three-question row in a one-state table needs
+ * its prose for.
  */
 function item2Observation(f: Findings): string {
   const { received, sent } = f.checksum
@@ -283,8 +289,29 @@ function item2Observation(f: Findings): string {
     `checksums: ${received.packetsChecked} DEVICE packet(s) reconciled locally, ${received.mismatches} mismatch(es)` +
     ` (our own ${sent.packetsChecked} sent packet(s) re-checked as a positive control, ${sent.mismatches} mismatch(es) — any mismatch there is a bug in this tool, not the device).` +
     ` Reply ids: ${r.echoedRequestId} of ${r.repliesChecked} repl(ies) echoed the request's reply id.` +
-    ` Comm-key mixing is NOT reconciled by this row — it is only exercised when a comm key is set; check the CMD_AUTH exchange in the raw capture by hand.`
+    ` ${commKeyObservation(f.commKey)}`
   )
+}
+
+/**
+ * The comm-key third of item 2, in the four states a reader must tell apart.
+ *
+ * "A key was given" is not one of them, deliberately. `Session.open` sends
+ * CMD_AUTH only when the device answers CONNECT with ACK_UNAUTH, so a run
+ * invoked with --comm-key against a device that never demands one exercises
+ * `mixCommKey` zero times -- and that operator is the likeliest of all readers
+ * to assume the mixing was checked, because they passed the flag. That state
+ * gets the most explicit sentence here for exactly that reason.
+ */
+function commKeyObservation(c: Findings['commKey']): string {
+  if (c.authSent) {
+    return c.authAccepted
+      ? 'Comm-key mixing: exercised and accepted — the device demanded a key and took the mixed value, so §5 mixing is confirmed against this firmware.'
+      : 'Comm-key mixing: exercised and rejected — the device did not take the mixed value. Either §5 mixing is wrong for this firmware or the key is, and this row cannot tell which.'
+  }
+  return c.configured
+    ? 'Comm-key mixing: not exercised — a comm key was given, but the device never demanded one, so no CMD_AUTH was sent and §5 mixing is still unchecked against this firmware.'
+    : 'Comm-key mixing: not exercised — no comm key was given. Re-run with --comm-key against a device that demands one to put §5 mixing to the test.'
 }
 
 /**
