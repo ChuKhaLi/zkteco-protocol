@@ -3,7 +3,9 @@
 **Date:** 2026-08-31
 **For:** a session picking this repository up cold
 **Repository:** https://github.com/ChuKhaLi/zkteco-protocol — public, MIT, `main`
-**State:** v0.4.0 merged and pushed. 539 tests, 1 skipped. Zero runtime dependencies.
+**State:** v0.4.1. 570 tests, 1 skipped. Zero runtime dependencies.
+**Updated 2026-08-31 (later the same day):** §5's backlog was cleared; that section now records the
+outcome. Everything else below describes v0.4.0 and is unchanged.
 **Not published to npm.** The name is still unclaimed.
 
 This continues `2026-08-30-continuing-past-v0.3-HANDOFF.md`, which continues two before it. All
@@ -139,28 +141,56 @@ the other; that is precisely how `bulkPath` reached review.
 
 ---
 
-## 5. Outstanding items
+## 5. Outstanding items — cleared in v0.4.1
 
-Accepted rather than fixed. None blocks anything.
+All six were accepted rather than fixed at v0.4.0. Five are now fixed; the sixth was never a
+defect. **None of them was the reason to pick this repository up — §7 still is.**
 
-1. `classifyChecksum` tests `'ambiguous'` before comparing to the transmitted checksum. Carried from
-   v0.3.
-2. The oracle fixture count guard cannot notice a misfiled fixture whose packets are all
-   `replyId === 0`. Carried from v0.1.
-3. A recorded UDP transport failure — fixed in v0.3.2; TCP's remains sticky, deliberately.
-4. The desync teardown's guarantee is enforced one layer below where its JSDoc states it. Carried
-   from v0.2.
-5. Item 2's third part — comm-key mixing — is still not audited. The row says so rather than letting
-   `answered` cover it.
-6. `formatStepTable` does not render command or ack code; those live on `TraceEvent`, not
-   `StepResult`. The comment names the gap rather than implying the requirement is met.
+1. **Fixed.** `classifyChecksum` tested the arithmetical tie before comparing anything to the
+   transmitted checksum, so a `replyId === 0` packet matching NEITHER hypothesis came back
+   `'ambiguous'` — the class the adjudication drops as uninformative — instead of `'neither'`, the
+   class that means investigate. A corrupt capture was reported as a benign one, and dropped in
+   silence. Carried from v0.3.
+2. **Fixed.** The oracle guard was `discriminatingPackets === 14`, and a fixture whose packets all
+   carry `replyId === 0` moves that number by zero. `fixtureInventory()` now pins fixtures, packets,
+   ambiguous and discriminating together, plus the exact filename list — `readdirSync` is not
+   recursive, so a fixture moved up out of `commkey/`, `params/` or `realtime/` was being adjudicated
+   as handshake evidence with nothing to notice. Carried from v0.1.
+3. **Not a defect. Ruled, not fixed.** The recorded UDP transport failure was fixed in v0.3.2 and
+   TCP's remains sticky. That asymmetry is argued in full on `TcpTransport.fail` — a TCP connection
+   really is gone, a UDP socket has no connection to lose — and the docblock already ends "the
+   difference is a considered one, not drift". There was nothing to do. **Stop carrying it as an
+   outstanding item.**
+4. **Fixed.** `subscribe`'s docblock said a desynced session "cannot be polled afterwards", and
+   nothing on the request path read `open_`; the refusal came from the destroyed socket, one layer
+   down. Untestable as written, too — against a real transport a refusal from the session and one
+   from a dead socket are both `ZkConnectionError`. Driven against a transport that answers
+   everything and never fails, the old code *resolved* `execute()` with the stranded ACK_OK: the
+   exact off-by-one the teardown exists to prevent. `Session.assertOpen` now guards `tryExecute` and
+   `receiveMore` (not the private `send` — `close()` clears the flag before sending its goodbye, and
+   on UDP that goodbye is the only thing releasing the device's session slot). Carried from v0.2.
+5. **Fixed.** Item 2's comm-key third has a verdict, read off the trace. The trap worth remembering:
+   **the flag is not the answer.** `Session.open` sends CMD_AUTH only when the device answers CONNECT
+   with ACK_UNAUTH, so `--comm-key` against a device that never demands one exercises `mixCommKey`
+   zero times — and that operator is the likeliest reader of all to assume it was checked. Four
+   states, each rendering differently; booleans only, the key never enters `Findings`.
+6. **Fixed.** The step table carries `Command` and `Ack`, attributed from the trace span each step
+   produced. First command rather than last (the bulk path ends on FREE_DATA), with an `x3` suffix
+   where a step made more than one exchange, because one command with no count reads as one round
+   trip. Absent, never `0`, for a step that reached no wire.
 
-**And one decision, not a task.** Whether to publish to npm is the owner's call. The argument for it
-is now stronger than vanity: the README's own instruction is `npx zkteco-protocol <host>`, and that
-command works for nobody today. A tool built for a stranger who owns a terminal is reachable only by
-someone who clones the repo.
+**Two things the v0.4.1 pass added that were not on the list.**
 
----
+- The first test that drives `main()` end to end. Everything else exercises the pure helpers, and
+  the invariants suite reassembles the run by hand, so neither would notice `runProbe` dropping an
+  audit — `emptyFindings()`'s default would travel to the renderer and read as a legitimate
+  "not exercised". Both new findings are wired through it.
+- `VERSION` is now pinned to `package.json`'s version. Ruling R3 put both bumps in one task so they
+  could not drift and then left the pairing to convention.
+
+**And one decision, still not a task.** Whether to publish to npm is the owner's call, and the name
+was still unclaimed as of 2026-08-31. The argument is unchanged and is now slightly stronger: the
+README's own instruction is `npx zkteco-protocol <host>`, and that command works for nobody today.
 
 ## 6. What is not implemented
 
