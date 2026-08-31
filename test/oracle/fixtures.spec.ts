@@ -1,7 +1,7 @@
 import { readFileSync, readdirSync } from 'node:fs'
 import path from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { classifyChecksum, type OracleFixture } from '../../tools/oracle/analyze.js'
+import { classifyChecksum, fixtureInventory, type OracleFixture } from '../../tools/oracle/analyze.js'
 import { START_MARKER } from '../../src/codec/framing.js'
 import { CMD } from '../../src/codec/commands.js'
 
@@ -15,6 +15,23 @@ const DIR = path.join('test', 'fixtures', 'oracle')
 const fixtures = readdirSync(DIR)
   .filter((f) => f.endsWith('.json'))
   .map((f) => JSON.parse(readFileSync(path.join(DIR, f), 'utf8')) as OracleFixture)
+
+// Hand-derived by reading the eight files in test/fixtures/oracle: 18 packets
+// in total, of which pyzk's four initial CMD_CONNECTs carry replyId === 0 and
+// are therefore arithmetically ambiguous. Pinned as a whole rather than as the
+// discriminating count alone -- see the blind-spot test at the bottom of this
+// file for why that count on its own could not do the job.
+const EXPECTED_FILES = [
+  'auth-tcp-pyzk.json',
+  'auth-tcp-zkteco-js.json',
+  'auth-udp-pyzk.json',
+  'auth-udp-zkteco-js.json',
+  'handshake-tcp-pyzk.json',
+  'handshake-tcp-zkteco-js.json',
+  'handshake-udp-pyzk.json',
+  'handshake-udp-zkteco-js.json',
+]
+const EXPECTED_INVENTORY = { fixtures: 8, packets: 18, ambiguous: 4, discriminating: 14 }
 
 describe('oracle fixtures', () => {
   it('exist for both oracles on both transports', () => {
@@ -62,21 +79,19 @@ describe('oracle fixtures', () => {
     // opposite of what Session.send actually does. The set must equal
     // exactly {'self'} -- what it contains, not just how many things it has.
     const verdicts = new Map<string, Set<string>>()
-    let discriminatingPackets = 0
     for (const fixture of fixtures) {
       const classes = fixture.packets.map((p) => classifyChecksum(p))
-      // Exclude ambiguous packets; they provide no evidence
+      // Exclude ambiguous packets; they provide no evidence. 'neither' is NOT
+      // excluded -- a packet matching no hypothesis has to reach the set below
+      // and fail this loudly rather than be dropped with the uninformative.
       const nonAmbiguous = new Set(classes.filter((c) => c !== 'ambiguous'))
       verdicts.set(`${fixture.source}/${fixture.transport}`, nonAmbiguous)
-      discriminatingPackets += classes.filter((c) => c !== 'ambiguous').length
     }
     const flattened = new Set([...verdicts.values()].flatMap((s) => [...s]))
-    // 18 packets total across all 8 fixtures, minus the 4 that are
-    // arithmetically ambiguous (replyId === 0): pyzk's initial CMD_CONNECT,
-    // captured once per handshake/auth x TCP/UDP fixture. PROVENANCE.md
-    // claims 14 discriminating packets; this pins that claim to what the
-    // suite actually classifies, now that every fixture is included.
-    expect(discriminatingPackets).toBe(14)
+    // How many packets this verdict rests on is pinned by EXPECTED_INVENTORY
+    // and the two tests at the bottom of this file, not counted a second time
+    // here: PROVENANCE.md's claim of 14 discriminating packets is an inventory
+    // question, and counting it in this test left the corpus itself unguarded.
     expect(flattened, `oracles disagree: ${JSON.stringify([...verdicts])}`).toEqual(new Set(['self']))
   })
 
@@ -130,5 +145,48 @@ describe('oracle fixtures', () => {
     expect(connectPacket.checksum).toBe(0xfc17)
 
     expect(classifyChecksum({ ...connectPacket, checksum: 0x0001 })).toBe('neither')
+  })
+
+  it('the fixture tree is exactly the eight files this adjudication was counted over', () => {
+    // readdirSync is not recursive, so a fixture belonging in commkey/, params/
+    // or realtime/ that lands here instead is read as handshake evidence. The
+    // presence test above cannot see it either: it deduplicates by
+    // source/transport, so a ninth file duplicating an existing combo is
+    // invisible there by construction.
+    expect(readdirSync(DIR).filter((f) => f.endsWith('.json')).sort()).toEqual(EXPECTED_FILES)
+  })
+
+  it('the adjudication covers the whole inventory, not just its discriminating packets', () => {
+    expect(fixtureInventory(fixtures)).toEqual(EXPECTED_INVENTORY)
+  })
+
+  it('an all-replyId-0 fixture moves the inventory even though it adds no evidence', () => {
+    // The blind spot the inventory exists to close, stated as a test rather
+    // than as a note in a handoff. Every packet in this fixture classifies as
+    // 'ambiguous', so it contributes nothing to the discriminating count --
+    // the only number the guard used to check. Filed under a source/transport
+    // combo that already exists, it clears the presence test too.
+    //
+    // The packet is pyzk's real UDP CMD_CONNECT, copied verbatim: a synthetic
+    // one could be dismissed as not resembling anything a capture produces.
+    const misfiled: OracleFixture = {
+      source: 'pyzk',
+      transport: 'udp',
+      commKey: 0,
+      emulatorSessionId: 0,
+      packets: [
+        { hex: 'e80317fc00000000', command: 1000, checksum: 0xfc17, sessionId: 0, replyId: 0 },
+      ],
+    }
+
+    const withMisfiled = fixtureInventory([...fixtures, misfiled])
+
+    // What the old guard looked at, unmoved: this is the failure being fixed.
+    expect(withMisfiled.discriminating).toBe(EXPECTED_INVENTORY.discriminating)
+    // What the new guard looks at, moved.
+    expect(withMisfiled.fixtures).toBe(9)
+    expect(withMisfiled.packets).toBe(19)
+    expect(withMisfiled.ambiguous).toBe(5)
+    expect(withMisfiled).not.toEqual(EXPECTED_INVENTORY)
   })
 })

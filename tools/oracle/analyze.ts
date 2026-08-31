@@ -76,3 +76,38 @@ export function classifyChecksum(p: CapturedPacket): ChecksumClass {
   if (checksumPrevious === p.checksum) return 'previous-reply-id'
   return 'neither'
 }
+
+/** What an adjudication was actually carried out over. */
+export interface FixtureInventory {
+  fixtures: number
+  packets: number
+  ambiguous: number
+  discriminating: number
+}
+
+/**
+ * Counts the corpus a reply-id adjudication rests on.
+ *
+ * `discriminating` is the number PROVENANCE.md quotes, and pinning it alone
+ * leaves a hole: a fixture whose packets all carry replyId === 0 classifies
+ * entirely as 'ambiguous' and moves that count by zero. Such a fixture could be
+ * added, duplicated, or moved up out of commkey/, params/ or realtime/ without
+ * any guard noticing, and would then be adjudicated as handshake evidence in
+ * silence. `fixtures` and `packets` move for every one of those, which is the
+ * whole reason they are counted here rather than derived at the call site.
+ *
+ * 'neither' is deliberately counted as discriminating. It is not evidence, but
+ * it must never be quietly dropped the way 'ambiguous' is: a packet matching no
+ * hypothesis has to reach the verdict set and fail the adjudication loudly.
+ */
+export function fixtureInventory(fixtures: readonly OracleFixture[]): FixtureInventory {
+  let packets = 0
+  let ambiguous = 0
+  for (const fixture of fixtures) {
+    for (const p of fixture.packets) {
+      packets += 1
+      if (classifyChecksum(p) === 'ambiguous') ambiguous += 1
+    }
+  }
+  return { fixtures: fixtures.length, packets, ambiguous, discriminating: packets - ambiguous }
+}
