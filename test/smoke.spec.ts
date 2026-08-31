@@ -3,7 +3,18 @@ import { VERSION } from '../src/index.js'
 
 describe('toolchain', () => {
   it('runs tests and resolves source imports', () => {
-    expect(VERSION).toBe('0.4.0')
+    expect(VERSION).toBe('0.4.1')
+  })
+
+  it('reports the same version the package publishes', async () => {
+    // The bring-up kit plan's Ruling R3 moved these two bumps into one task
+    // precisely so they could not drift, and then left the pairing to a
+    // convention: the literal above pins VERSION, and nothing pinned it to
+    // package.json. A consumer reads the version off the report this library
+    // writes; npm reads it off the manifest. They have to be the same string.
+    const { readFileSync } = await import('node:fs')
+    const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as { version: string }
+    expect(VERSION).toBe(pkg.version)
   })
 
   it('keeps diagnostics and CLI code out of the library bundle', async () => {
