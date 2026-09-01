@@ -48,10 +48,14 @@ absence is meaningful, not vacuous), and item 1 names `--raw-capture` as the rem
 asserts they agree.
 
 That drill is scripted: `pnpm release:drill` runs all eleven checks and exits 1 with a named temp
-directory on failure. `docs/RELEASING.md` is the whole release procedure — the npm account, the
-by-hand first publish and why it cannot be automated, trusted publishing, and the tagged-release
-pipeline in `.github/workflows/release.yml`. Read its §5 before claiming the pipeline proves
-something.
+directory on failure. It also runs in CI on every tag, which is the only reason it has ever run on
+Linux.
+
+**The package is published, and releases go through the tag — never by hand.** Bump `version` and
+`VERSION` together, push `v<version>`, approve the `npm-publish` environment; the pipeline publishes
+with provenance and creates the GitHub Release. `docs/RELEASING.md` is the procedure, and its §5
+lists what the pipeline does *not* prove. 0.4.2 is the only version without a provenance
+attestation, because npm cannot configure a trusted publisher for a package that does not yet exist.
 
 ## Architecture
 
@@ -109,8 +113,10 @@ These are project decisions with reasons recorded; do not relax them without rea
 ## The defect shape this project keeps catching
 
 **Code, a test, or a comment that reports success while proving less than it appears to.** It has
-been found at least 29 times across v0.1–v0.4 (9, 5, 6, 9), and in the last three of those cycles
-every instance originated in the plan rather than in an implementer. Concretely, when working here:
+been found at least 32 times across v0.1–v0.4.3 (9, 5, 6, 9, 3), and in three of those cycles every
+instance originated in the plan rather than in an implementer. The v0.4.3 three are the worst so
+far, because one of them was in the shipped product: the CLI exited 0 having done nothing at all on
+every platform but Windows. Concretely, when working here:
 
 - Check that a failing test fails for the *reason intended*. A prescribed mutation that never
   reaches its assertion turns a test red while proving nothing.
@@ -119,6 +125,10 @@ every instance originated in the plan rather than in an implementer. Concretely,
   `false`, and `'ambiguous'` is not `'neither'`.
 - A flag is not evidence that the thing it enables happened. `--comm-key` against a device that
   never demands one exercises the mixing zero times.
+- **A check that has only ever run in one environment has established something about that
+  environment and nothing else.** Every green run of the packed-tarball drill before 2026-09-01 was
+  a fact about Windows. The first time it ran on Linux — because the release pipeline put it in CI —
+  it found a CLI that had never worked there and would have been published that way.
 - When you fix a recorded defect, delete its entry rather than rewriting it into its aftermath.
 
 ## Docs

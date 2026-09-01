@@ -6,6 +6,11 @@
 **State:** v0.4.1, 570 tests, 1 skipped, zero runtime dependencies. CI green.
 **Not published to npm.** Re-checked 2026-09-01: the name is still unclaimed.
 
+**A newer handoff exists: `2026-09-01-continuing-past-v0.4.3-HANDOFF.md`.** Read it for the current
+state. It corrects two sentences in this one — §3's framing of publishing as a decision with no
+engineering in it, and the claim that the §5 backlog was the last work doable without a device.
+Both were wrong, and the way they were wrong is the most useful thing in that document.
+
 This is short on purpose. `2026-08-31-continuing-past-v0.4-HANDOFF.md` is still the substantive
 document and everything in it remains accurate — read it, and the three it continues. This one
 records only what changed after it and what that leaves you facing.
