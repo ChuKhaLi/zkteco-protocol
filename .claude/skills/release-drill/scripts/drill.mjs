@@ -50,6 +50,25 @@ function must(condition, message) {
   }
 }
 
+/**
+ * The cli's own account of a run, for a failure that would otherwise report
+ * only that a file is missing.
+ *
+ * Worth the eight lines: the bin-entry defect found on Linux showed up here as
+ * "no Markdown report was written" while the cli had exited 0 with both streams
+ * empty -- the one fact that identifies the bug, and the one fact the abort did
+ * not carry. Reproducing it by hand was the only way to see it.
+ */
+function describeRun(res) {
+  const out = (res.stdout ?? '').trim()
+  const err = (res.stderr ?? '').trim()
+  return [
+    `\n  exit:   ${res.status}`,
+    `\n  stdout: ${out ? out.slice(0, 400) : '(empty)'}`,
+    `\n  stderr: ${err ? err.slice(0, 400) : '(empty)'}`,
+  ].join('')
+}
+
 function killEmulator() {
   if (!emulator || emulator.killed) return
   // tsx spawns a child of its own, so killing the wrapper leaves the socket
@@ -116,7 +135,7 @@ function invoke(outName, extraArgs = []) {
 
 const plain = invoke('report.md')
 check('default run exits 0', plain.res.status === 0, `exit ${plain.res.status}`)
-must(existsSync(plain.out), 'no Markdown report was written')
+must(existsSync(plain.out), `no Markdown report was written${describeRun(plain.res)}`)
 const md = readFileSync(plain.out, 'utf8')
 const json = readFileSync(plain.json, 'utf8')
 
@@ -140,6 +159,10 @@ check(
 const capturePath = join(workdir, 'trace.jsonl')
 const captured = invoke('report-capture.md', ['--raw-capture', capturePath])
 check('--raw-capture run exits 0', captured.res.status === 0, `exit ${captured.res.status}`)
+must(
+  existsSync(captured.out),
+  `no Markdown report was written for the --raw-capture run${describeRun(captured.res)}`,
+)
 const capturedMd = readFileSync(captured.out, 'utf8')
 const item1Captured = capturedMd.split('\n').find((l) => l.startsWith('| 1 |')) ?? ''
 check(
