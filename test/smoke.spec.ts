@@ -3,7 +3,7 @@ import { VERSION } from '../src/index.js'
 
 describe('toolchain', () => {
   it('runs tests and resolves source imports', () => {
-    expect(VERSION).toBe('0.4.2')
+    expect(VERSION).toBe('0.4.3')
   })
 
   it('reports the same version the package publishes', async () => {

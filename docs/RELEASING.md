@@ -1,9 +1,13 @@
 # Releasing `zkteco-protocol`
 
-**State as of 2026-09-01:** not published. The name is unclaimed (`npm view zkteco-protocol`
-returns a 404). §0 and §2.2 are done — the npm account exists with 2FA at `auth-and-writes`, and
-the `npm-publish` environment gates the publish job on a review. The publish itself has not
-happened, and the trusted publisher in §2.1 cannot be configured until it has.
+**State as of 2026-09-01:** published. `zkteco-protocol@0.4.2` is on the registry — one version,
+zero dependencies, `latest`, maintainer `chukhali`. §0 through §2 are done: the account has 2FA,
+the `npm-publish` environment gates the publish job on a review, and the trusted publisher is
+configured against `release.yml` with `npm publish` as its only allowed action.
+
+**What has still never run is the pipeline's own publish.** 0.4.2 was published by hand and
+therefore carries no provenance attestation. §3 is the procedure; 0.4.3 is its first exercise and
+the first evidence the OIDC half works at all.
 
 **The first published version is 0.4.2, not 0.4.1.** 0.4.1's CLI never ran at all when installed
 from a tarball on any platform but Windows: npm links a bin as a symlink, the entry guard compared
@@ -55,6 +59,12 @@ npm publish --access public
 
 The dry run should list exactly `dist/`, `README.md`, `LICENSE` and `PROVENANCE.md` — the `files`
 field in `package.json`. If anything else appears, stop and fix `files` first.
+
+**Run the publish in an interactive terminal, not through a tool or a script.** npm enrols a
+security key (WebAuthn), not a TOTP app: there is no six-digit code, so `--otp` has nothing to be
+given and the 2FA challenge has to reach a browser or Windows Hello. A non-interactive shell cannot
+be prompted and fails with `EOTP`, whose message — "requires a one-time password from your
+authenticator" — reads as a missing code rather than as a missing terminal.
 
 Then check it landed:
 
@@ -159,7 +169,10 @@ Stated because this project's signature defect is a check that reports more than
 - **The publish job rebuilds.** It publishes a build of the same commit with the same frozen
   lockfile that the drill ran against — not literally the bytes the drill installed. What the drill
   establishes is that a build of this commit packs, installs with zero transitive dependencies, and
-  produces a correctly redacted report.
+  produces a correctly redacted report. One data point against this being a real gap: 0.4.2's
+  published tarball has shasum `fd2920178c1059d013ec5ae96dd7987c0707f37e`, which a fresh local
+  `npm pack` of the same commit reproduces exactly. That is one sample on one machine, not a
+  determinism guarantee — but the gap is narrower than this bullet used to imply.
 - **The release job runs one OS and one Node version** (ubuntu-latest, Node 24). The 2×3 platform
   matrix stays CI's job on `main`, which is why step 2 of §3 says to look at it.
 - **A dry run cannot exercise OIDC.** The first tagged release is the first evidence the
