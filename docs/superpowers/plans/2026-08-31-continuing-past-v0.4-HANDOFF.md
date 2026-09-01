@@ -8,6 +8,10 @@
 rewritten. Everything else describes v0.4.0 and is unchanged, and still accurate.
 **Not published to npm.** The name is still unclaimed.
 
+**A newer handoff exists: `2026-09-01-continuing-past-v0.4.1-HANDOFF.md`.** Read it for the current
+state and for the tooling added after this document was written. This one remains the substantive
+record of the v0.4 cycle and everything in it is still accurate.
+
 This continues `2026-08-30-continuing-past-v0.3-HANDOFF.md`, which continues two before it. All
 remain accurate about everything they describe. Read them — they are extended here, not superseded.
 
@@ -72,6 +76,11 @@ collapse them.
 ---
 
 ## 3. Verified against a packed tarball, not just from source
+
+**This is now scripted — do not do it by hand.** Run
+`node .claude/skills/release-drill/scripts/drill.mjs` from the repository root, or invoke the
+`release-drill` skill, which explains how to read a failure. The rest of this section is why it
+exists and what it establishes; the steps below were the manual procedure it replaced.
 
 Before publishing anything, run `tools/emulator-serve.ts` and drive the **installed** CLI against
 it. Every other check in this repo runs the CLI from source, sharing node_modules, tsconfig and
