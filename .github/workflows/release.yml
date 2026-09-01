@@ -1,0 +1,124 @@
+name: Release
+
+# Publishing is triggered by a tag and gated by an environment, so the
+# irreversible step needs a deliberate act (the tag) and then a second human
+# decision (the approval) taken with the verification results already visible.
+#
+# npm authentication is trusted publishing (OIDC): there is no NPM_TOKEN in
+# this repository and there should never be one. The trusted publisher is
+# configured against THIS filename -- renaming this file breaks publishing
+# until the trust relationship is updated. See docs/RELEASING.md.
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Run every gate and stop before publishing'
+        type: boolean
+        default: true
+
+jobs:
+  # Everything that can fail without touching the registry. Split from the
+  # publish job on purpose: an environment approval gates a whole job, not a
+  # step, so with one job the approval would be requested before any test had
+  # run and would mean nothing.
+  verify:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      # Before the tests, not after -- test/smoke.spec.ts reads dist/index.js,
+      # and CI was red for two days over exactly this ordering. See ci.yml.
+      - run: pnpm build
+      - run: pnpm test
+
+      # The tag is the version claim, so it is checked rather than trusted.
+      # package.json's version and src/index.ts's VERSION are already asserted
+      # to agree by test/smoke.spec.ts, which ran above; this ties both to the
+      # tag being released.
+      #
+      # A prerelease tag is refused outright rather than half-handled:
+      # publishing an rc as `latest` is a real footgun, and the dist-tag branch
+      # that would prevent it has never run. Build it when an rc is actually
+      # wanted.
+      - name: The tag must be exactly v<package.json version>
+        if: github.ref_type == 'tag'
+        run: |
+          set -euo pipefail
+          tag="$GITHUB_REF_NAME"
+          version="$(node -p "require('./package.json').version")"
+          if [ "$tag" != "v$version" ]; then
+            echo "tag $tag does not match package.json version $version" >&2
+            exit 1
+          fi
+          case "$version" in
+            *[!0-9.]*) echo "refusing a non-plain-semver version: $version" >&2; exit 1 ;;
+          esac
+          echo "tag $tag agrees with package.json"
+
+      # The only check in this repository that exercises what a stranger
+      # actually installs: builds, packs, installs the tarball into a directory
+      # sharing nothing with this repo, and drives the INSTALLED cli against
+      # the emulator. Everything else runs the cli from source, sharing
+      # node_modules, tsconfig and build output.
+      - name: Packed-tarball release drill
+        run: pnpm release:drill
+
+  publish:
+    needs: verify
+    # workflow_dispatch defaults to a dry run, which stops here: the verify job
+    # has done everything that does not touch the registry. Dispatching against
+    # a tag with dry_run unchecked is the recovery path for a publish that
+    # failed after verification passed.
+    if: github.ref_type == 'tag' && (github.event_name == 'push' || inputs.dry_run == false)
+    runs-on: ubuntu-latest
+    environment: npm-publish
+    permissions:
+      contents: write   # gh release create
+      id-token: write   # trusted publishing (OIDC)
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      # Trusted publishing needs npm >= 11.5.1 and Node >= 22.14.0. setup-node
+      # ships whatever npm came with the Node release, which has been older
+      # than that, so npm is upgraded and both versions are printed rather than
+      # assumed.
+      - run: npm install -g npm@11
+      - run: node --version && npm --version
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm build
+
+      # This is a rebuild from the same commit and the same frozen lockfile as
+      # the drill ran against -- not literally the bytes the drill installed.
+      # What the drill proves is that a build of this commit packs, installs
+      # with zero transitive dependencies, and produces a correct redacted
+      # report. Say what it proves; do not imply it signed off these bytes.
+      - name: Publish to npm
+        run: npm publish --access public
+
+      # After the publish, never before: a failed publish must not leave a
+      # Release announcing a version nobody can install. The reverse failure
+      # leaves the package published and the Release missing, which one
+      # `gh release create` fixes by hand.
+      - name: Create the GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag

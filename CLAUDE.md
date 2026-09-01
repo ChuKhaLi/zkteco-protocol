@@ -47,6 +47,12 @@ absence is meaningful, not vacuous), and item 1 names `--raw-capture` as the rem
 `package.json`'s `version` and `src/index.ts`'s `VERSION` must be bumped together; `test/smoke.spec.ts`
 asserts they agree.
 
+That drill is scripted: `pnpm release:drill` runs all eleven checks and exits 1 with a named temp
+directory on failure. `docs/RELEASING.md` is the whole release procedure — the npm account, the
+by-hand first publish and why it cannot be automated, trusted publishing, and the tagged-release
+pipeline in `.github/workflows/release.yml`. Read its §5 before claiming the pipeline proves
+something.
+
 ## Architecture
 
 Four layers, each unaware of the one above it:
