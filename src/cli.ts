@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { realpathSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { parseArgs } from 'node:util'
 import { pathToFileURL } from 'node:url'
@@ -379,7 +380,38 @@ export async function main(): Promise<void> {
 // (dist/cli.js, per the bin field) working under either format, and turns
 // an unexpected escape past every internal try/catch in main() into a
 // message and a non-zero exit rather than a raw unhandled-rejection crash.
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+/**
+ * Was this module the program's entry point?
+ *
+ * `argv[1]` is the path the shell was given; `import.meta.url` is the module
+ * Node actually loaded, with symlinks in the entry already resolved. Comparing
+ * them unresolved is the same expression as long as nothing links to this
+ * file -- and npm links a bin as a symlink on every platform but Windows, where
+ * it writes a `.cmd` shim naming the real path instead. So the naive comparison
+ * held for the one platform this was developed on and was false for every
+ * consumer who installed the package, leaving `main()` uncalled: exit 0, no
+ * report, no message, nothing. `realpathSync` is what makes the two sides
+ * comparable.
+ *
+ * Both forms are accepted because `--preserve-symlinks-main` inverts which one
+ * matches: under that flag Node keeps the link in `import.meta.url`, so the
+ * resolved path is the one that differs. Either match means the same thing.
+ *
+ * A path that cannot be resolved is not this entry. It is not an error either
+ * -- `node -e` has no `argv[1]` to resolve -- so it answers no rather than
+ * throwing out of module initialisation.
+ */
+function invokedAsMain(argv1: string | undefined): boolean {
+  if (!argv1) return false
+  if (import.meta.url === pathToFileURL(argv1).href) return true
+  try {
+    return import.meta.url === pathToFileURL(realpathSync(argv1)).href
+  } catch {
+    return false
+  }
+}
+
+if (invokedAsMain(process.argv[1])) {
   main().catch((err) => {
     process.stderr.write(`${(err as Error).stack ?? String(err)}\n`)
     process.exitCode = 1
