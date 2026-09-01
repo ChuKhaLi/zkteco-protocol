@@ -1,8 +1,16 @@
 # Releasing `zkteco-protocol`
 
 **State as of 2026-09-01:** not published. The name is unclaimed (`npm view zkteco-protocol`
-returns a 404). `.github/workflows/release.yml` exists but has never run, and nothing in this
-document below §1 has been done once.
+returns a 404). §0 and §2.2 are done — the npm account exists with 2FA at `auth-and-writes`, and
+the `npm-publish` environment gates the publish job on a review. The publish itself has not
+happened, and the trusted publisher in §2.1 cannot be configured until it has.
+
+**The first published version is 0.4.2, not 0.4.1.** 0.4.1's CLI never ran at all when installed
+from a tarball on any platform but Windows: npm links a bin as a symlink, the entry guard compared
+an unresolved `argv[1]` against a resolved `import.meta.url`, and `main()` was never called — exit
+0, no report, no message. It was found by this pipeline's first dry run, on the first Linux
+execution of the drill in this project's history, and fixed in `cdd4c51`. Publishing 0.4.1 would
+have burned that version number on a package that did nothing.
 
 Publishing is the owner's decision, not a task to be picked up — see
 `docs/superpowers/plans/2026-09-01-continuing-past-v0.4.1-HANDOFF.md` §3.
@@ -156,9 +164,11 @@ Stated because this project's signature defect is a check that reports more than
   matrix stays CI's job on `main`, which is why step 2 of §3 says to look at it.
 - **A dry run cannot exercise OIDC.** The first tagged release is the first evidence the
   authentication half works at all.
-- **The drill has never run on Linux.** Every green run of it, including the one taken before this
-  document was written, was on Windows. The first dry run is what establishes it works on the
-  runner.
+- **The drill now runs on Linux, and the first time it did it found a shipped defect.** Every green
+  run before 2026-09-01 was on Windows, and the platform it had never been run on was the one where
+  the CLI did not work. Run 33476872217 is the first green Linux drill. What that says about any
+  check here: a check that has only run in one environment has established something about that
+  environment and nothing else.
 - **No physical ZKTeco device has ever been connected to this library.** Publishing changes nothing
   about that. Keep the README's compatibility table honest.
 
