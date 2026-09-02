@@ -115,6 +115,21 @@ export interface EmulatorOptions {
   replyDelayMs?: number
   /** Extra zero bytes sent as one more DATA packet before the legacy ACK_OK. Spec v0.5 §6.3. */
   legacyOvershootBytes?: number
+  /** When false, every reply carries reply id 0 instead of echoing the request's. Experiment E1. */
+  echoReplyId?: boolean
+  /**
+   * Session id written into every reply EXCEPT CONNECT and AUTH, which carry
+   * the real one so the client adopts it first. Experiment E1's second half:
+   * does the client notice that later replies disagree with what it learned?
+   */
+  replySessionIdOverride?: number
+  /**
+   * The user record layout served. 72 is what this library reads. 28 is what
+   * zkteco-js decodes over UDP (helper/utils.js:114-126); encoded here from
+   * the ZkUser fields ONLY so experiment E4 can serve it to pyzk. This library
+   * has no 28-byte decoder and adding one would be a new hypothesis.
+   */
+  userRecordSize?: 72 | 28
 }
 
 export interface EmulatorState {
@@ -207,14 +222,20 @@ export function eventPacket(eventType: number, data: Buffer): Buffer {
   return encodePayload({ command: CMD.REG_EVENT, sessionId: eventType, replyId: 0, data })
 }
 
-/** Builds one reply payload echoing the request's reply id. */
+/** Builds one reply payload echoing the request's reply id — unless a knob says otherwise. */
 export function reply(
   state: EmulatorState,
   req: DecodedPacket,
   command: number,
   data?: Buffer,
 ): Buffer {
-  return encodePayload({ command, sessionId: state.sessionId, replyId: req.replyId, data })
+  const handshake = req.command === CMD.CONNECT || req.command === CMD.AUTH
+  const sessionId =
+    !handshake && state.opts.replySessionIdOverride !== undefined
+      ? state.opts.replySessionIdOverride
+      : state.sessionId
+  const replyId = state.opts.echoReplyId === false ? 0 : req.replyId
+  return encodePayload({ command, sessionId, replyId, data })
 }
 
 /**
@@ -265,10 +286,27 @@ export function serveDataLegacy(
   return out
 }
 
+/** The 28-byte user record zkteco-js decodes over UDP, for experiment E4 only. */
+export function encodeUser28(u: ZkUser): Buffer {
+  const b = Buffer.alloc(28)
+  b.writeUInt16LE(u.uid, 0)
+  b.writeUInt8(u.privilege, 2)
+  b.write(u.name, 8, 8, 'latin1')
+  b.writeUInt32LE(Number(u.userId) >>> 0, 24)
+  return b
+}
+
+/** The user list body in the configured record size. */
+function userBody(state: EmulatorState): Buffer {
+  const size = state.opts.userRecordSize ?? 72
+  const records = state.users.map((u) => (size === 28 ? encodeUser28(u) : Buffer.from(u.raw, 'hex')))
+  return withSizeHeader(Buffer.concat(records))
+}
+
 /** The body a buffered read is currently serving, keyed by nothing — one at a time. */
 function bufferedStream(state: EmulatorState, command: number): Buffer {
   if (command === CMD.USERTEMP_RRQ) {
-    return withSizeHeader(Buffer.concat(state.users.map((u) => Buffer.from(u.raw, 'hex'))))
+    return userBody(state)
   }
   return state.records ? attendanceBody(state.records) : withSizeHeader(Buffer.alloc(0))
 }
@@ -401,8 +439,7 @@ const baseHandlers: HandlerTable = {
   ],
   [CMD.ATTLOG_RRQ]: (req, state) =>
     serveDataLegacy(state, req, state.records ? attendanceBody(state.records) : withSizeHeader(Buffer.alloc(0))),
-  [CMD.USERTEMP_RRQ]: (req, state) =>
-    serveDataLegacy(state, req, withSizeHeader(Buffer.concat(state.users.map((u) => Buffer.from(u.raw, 'hex'))))),
+  [CMD.USERTEMP_RRQ]: (req, state) => serveDataLegacy(state, req, userBody(state)),
   [CMD.FREE_DATA]: (req, state) => [reply(state, req, CMD.ACK_OK)],
   [CMD.REG_EVENT]: (req, state) => {
     if (state.opts.refuseRegEvent) return [reply(state, req, CMD.ACK_ERROR)]

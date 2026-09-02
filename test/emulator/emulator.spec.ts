@@ -1,17 +1,20 @@
 import net from 'node:net'
 import dgram from 'node:dgram'
 import { afterEach, describe, expect, it } from 'vitest'
-import { startEmulator, type Emulator } from './index.js'
+import { encodeUser28, startEmulator, type Emulator } from './index.js'
 import { CMD } from '../../src/codec/commands.js'
 import { decodePayload, encodePayload } from '../../src/codec/packet.js'
 import { frameTcp, tryUnframeTcp } from '../../src/codec/framing.js'
 import { TcpTransport } from '../../src/transport/tcp.js'
 import { Session } from '../../src/session/Session.js'
+import type { ZkUser } from '../../src/types.js'
 
 let running: Emulator | null = null
 let session: Session | null = null
+let transport: TcpTransport | null = null
 afterEach(async () => {
   await session?.close().catch(() => {}); session = null
+  await transport?.close(); transport = null
   await running?.close(); running = null
 })
 
@@ -266,5 +269,34 @@ describe('emulator keywordForm', () => {
     const bare = await session.tryExecute(CMD.OPTIONS_RRQ, Buffer.from('~SerialNumber', 'latin1'))
     expect(withNul.command).toBe(CMD.ACK_ERROR)
     expect(bare.command).not.toBe(CMD.ACK_ERROR)
+  })
+})
+
+describe('experiment knobs', () => {
+  it('can stop echoing the reply id', async () => {
+    running = await startEmulator({ transport: 'tcp', echoReplyId: false })
+    transport = new TcpTransport({ host: '127.0.0.1', port: running.port })
+    await transport.connect(2_000)
+    await transport.send(encodePayload({ command: CMD.CONNECT, sessionId: 0, replyId: 7 }))
+    expect(decodePayload(await transport.receive(2_000)).replyId).toBe(0)
+  })
+
+  it('can answer every command after the handshake with a wrong session id', async () => {
+    running = await startEmulator({ transport: 'tcp', sessionId: 0x1111, replySessionIdOverride: 0x2222 })
+    transport = new TcpTransport({ host: '127.0.0.1', port: running.port })
+    await transport.connect(2_000)
+    await transport.send(encodePayload({ command: CMD.CONNECT, sessionId: 0, replyId: 0 }))
+    expect(decodePayload(await transport.receive(2_000)).sessionId).toBe(0x1111)
+    await transport.send(encodePayload({ command: CMD.GET_FREE_SIZES, sessionId: 0x1111, replyId: 1 }))
+    expect(decodePayload(await transport.receive(2_000)).sessionId).toBe(0x2222)
+  })
+
+  it('serves 28-byte user records when asked to', () => {
+    const u: ZkUser = { uid: 3, userId: '42', name: 'Ann', privilege: 0, hasPassword: false, cardNumber: 0, raw: '' }
+    const rec = encodeUser28(u)
+    expect(rec.length).toBe(28)
+    expect(rec.readUInt16LE(0)).toBe(3)
+    expect(rec.subarray(8, 16).toString('latin1').replace(/\0+$/, '')).toBe('Ann')
+    expect(rec.readUInt32LE(24)).toBe(42)
   })
 })
