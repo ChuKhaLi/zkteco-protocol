@@ -47,12 +47,16 @@ export function mapStatusAndVerify(
 }
 
 /**
- * Derives the record size by division, and refuses to guess.
+ * Derives the record size by division.
  *
- * If `recordCount` is even slightly stale — somebody badged between the
- * counter read and the buffer read — the quotient is garbage and a parse loop
- * would still run, emitting misaligned records with meaningless identifiers
- * and nonsense timestamps, raising nothing. No data is better than wrong data.
+ * What this refuses: a body that is not a whole number of records, and a
+ * quotient that is not a known size. What it CANNOT refuse: a count that is
+ * wrong by a divisor of the true size — the known sizes are multiples of one
+ * another, so 16 bytes over a count of 1 is "one 16-byte record" whether or
+ * not it is really two 8-byte ones. That case is caught one layer up, where
+ * getAttendanceLogs reads the count again after the transfer and refuses if
+ * it moved. Do not describe this function as refusing a stale count; until
+ * v0.5 its docblock did, and the claim was false.
  */
 export function detectRecordSize(bodyLength: number, recordCount: number): RecordSize {
   if (!Number.isInteger(recordCount) || recordCount <= 0) {

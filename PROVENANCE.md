@@ -437,10 +437,12 @@ The byte offsets `CMD_GET_FREE_SIZES` uses for `userCount`, `recordCount`, and
 documentation-derived and have never been checked against a real reply from
 hardware. Neither oracle exercises this command in a way that pins those
 offsets — the captures above cover the handshake and comm-key authentication,
-not storage counters. A wrong `recordCount` silently poisons the framing
-guard described in the design spec §5.3: the record-size division still
-"succeeds" on a stale or wrong count, and the parse loop emits misaligned
-records with meaningless identifiers and nonsense timestamps instead of
-raising anything. For that reason the offsets live as named constants in one
+not storage counters. A wrong `recordCount` silently poisons the framing guard
+described in the design spec §5.3: the record-size division still "succeeds"
+on a count that is off by a divisor of the true size. Since v0.5
+`getAttendanceLogs` reads the count on both sides of the transfer and refuses
+if it moved, which catches a count that changed during the read but not one
+that was wrong to begin with — a wrong OFFSET returns a wrong count twice,
+consistently. For that reason the offsets live as named constants in one
 place, and confirming them against a real device is item 4 on the
 first-hardware checklist.

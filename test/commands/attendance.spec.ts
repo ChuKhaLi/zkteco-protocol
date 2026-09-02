@@ -247,5 +247,38 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       await expect(getAttendanceLogs(session, transportKind)).rejects.toThrow(/answered ACK_UNAUTH/)
       await expect(getAttendanceLogs(session, transportKind)).rejects.toBeInstanceOf(ZkAuthError)
     })
+
+    it('refuses the read when the record count moved during it', async () => {
+      // One record counted, two on the wire: 16 bytes over a count of 1 is
+      // "one 16-byte record", a misaligned parse with no error (review R3).
+      // The second count read catches it.
+      let counts = 0
+      running = await startEmulator({
+        transport: transportKind,
+        info: { userCount: 0, recordCount: 1, recordCapacity: 1000 },
+        records: { size: 8, rows: [rec8(1, DAY), rec8(2, DAY)] },
+        handlers: {
+          [CMD.GET_FREE_SIZES]: (req, state) => {
+            counts += 1
+            const info = { ...state.info, recordCount: counts === 1 ? 1 : 2 }
+            return [reply(state, req, CMD.ACK_OK, encodeFreeSizes(info))]
+          },
+        },
+      })
+      session = await openSession(running.port)
+      await expect(getAttendanceLogs(session, transportKind)).rejects.toThrow(/buffer changed during the read: 1 record\(s\) before, 2 after/)
+    })
+
+    it('parses when the record count is unchanged by the read, reading it twice', async () => {
+      running = await startEmulator({
+        transport: transportKind,
+        info: { userCount: 0, recordCount: 2, recordCapacity: 1000 },
+        records: { size: 8, rows: [rec8(1, DAY), rec8(2, DAY)] },
+      })
+      session = await openSession(running.port)
+      const logs = await getAttendanceLogs(session, transportKind, { resolveUserIds: false })
+      expect(logs.map((l) => l.uid)).toEqual([1, 2])
+      expect(running.received.filter((p) => p.command === CMD.GET_FREE_SIZES)).toHaveLength(2)
+    })
   })
 }

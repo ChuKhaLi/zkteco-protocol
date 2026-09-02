@@ -152,8 +152,9 @@ export class ZkDevice {
    * The device is never disabled first. Many implementations send
    * CMD_DISABLEDEVICE before a bulk read so the buffer cannot shift
    * mid-transfer; on a polling schedule that locks employees out of badging
-   * every cycle. The interleaved-write risk is accepted instead, and the
-   * framing guard refuses anything that does not add up.
+   * every cycle. The interleaved-write risk is met by reading the record
+   * count on both sides of the transfer and refusing if it moved; the
+   * framing guard on its own cannot see a count that is stale by a divisor.
    */
   async getAttendanceLogs(opts?: GetAttendanceOptions): Promise<ZkAttendanceLog[]> {
     return getAttendanceLogs(this.requireIdleSession(), this.transportKind, opts)

@@ -1,5 +1,6 @@
 import { CMD } from '../codec/commands.js'
 import { parseAttendanceData, type DecodedAttendanceRecord } from '../codec/records/attendance.js'
+import { ZkFramingError } from '../errors.js'
 import { readBulk } from '../session/dataRead.js'
 import type { Session } from '../session/Session.js'
 import type { ZkAttendanceLog, ZkNaiveTime, ZkUser } from '../types.js'
@@ -63,6 +64,21 @@ export async function getAttendanceLogs(
   if (recordCount === 0) return []
 
   const stream = await readBulk(session, CMD.ATTLOG_RRQ, transport)
+
+  // Read again. The record-size division cannot detect a count that is stale
+  // by a divisor — 16 bytes over a count of 1 is one 16-byte record, not two
+  // 8-byte ones — so a punch landing between the first count and the read
+  // would be parsed misaligned with no error. A count that did not move
+  // across the read is the evidence that no such punch landed; a count that
+  // did costs this poll, and the next poll recovers. Disabling the device
+  // around the read, which is how other implementations avoid this, is a
+  // write path and locks employees out (spec v0.5 §7.2).
+  const after = await getInfo(session)
+  if (after.recordCount !== recordCount) {
+    throw new ZkFramingError(
+      `the attendance buffer changed during the read: ${recordCount} record(s) before, ${after.recordCount} after`,
+    )
+  }
   const records = parseAttendanceData(stream, recordCount)
 
   const needsLookup =
