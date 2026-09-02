@@ -384,6 +384,26 @@ data had already refuted.
 This is item 18 on the first-hardware checklist, and it stays open. The choice made here is a
 default that can be reversed at one call site if the first real device disagrees with it.
 
+## User record width and size
+
+**The printed user id in the 72-byte user record is nine bytes at offset 48.**
+Source reading, not hardware: `zkteco-js` `helper/utils.js:143-144` reads
+`slice(48, 48 + 9)`. This library read eight until v0.5, which returned a
+nine-digit id truncated — a different identity — and then keyed the attendance
+lookup with it. Byte 57 is interpreted by neither implementation, so the wider
+read consumes no other field. A device that stores eight leaves byte 57 NUL and
+the returned string is unchanged.
+
+**The reference decodes 28-byte user records over UDP and 72-byte records over
+TCP** (`ztcp.js:471`, `zudp.js:382`, `helper/utils.js:114-126`). Whether that
+is a property of the transport, of firmware age, or of the reference's own
+history is not recorded anywhere readable. This library reads 72 on both
+transports and refuses a body that is not a whole number of 72-byte records,
+so a 28-byte device is refused rather than misparsed. Experiment E4 (below,
+under *Black-box experiments against the buffered read*) asks `pyzk` which
+size it expects on each transport. No second decoder exists; adding one would
+be a new hypothesis.
+
 ## Inbound checksums are not validated
 
 `decodePayload` (`src/codec/packet.ts`) reads the checksum field into

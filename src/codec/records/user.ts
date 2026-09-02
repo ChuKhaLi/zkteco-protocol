@@ -21,7 +21,10 @@ function decodeOne(rec: Buffer): ZkUser {
     hasPassword,
     name: readNulTerminated(rec, 11, 24),
     cardNumber: rec.readUInt32LE(35),
-    userId: readNulTerminated(rec, 48, 8),
+    // Nine bytes, per zkteco-js helper/utils.js:143-144 (`slice(48, 48 + 9)`).
+    // Eight, before v0.5, truncated a nine-digit id into a different identity.
+    // PROVENANCE.md §User record width and size.
+    userId: readNulTerminated(rec, 48, 9),
     raw: rawBuffer.toString('hex'),
   }
 }

@@ -23,7 +23,7 @@ function emUser(uid: number, userId: string, name: string): ZkUser {
   const b = Buffer.alloc(USER_RECORD_SIZE)
   b.writeUInt16LE(uid, 0)
   b.write(name, 11, 24, 'ascii')
-  b.write(userId, 48, 8, 'ascii')
+  b.write(userId, 48, 9, 'ascii')
   return { uid, userId, name, privilege: 0, hasPassword: false, cardNumber: 0, raw: b.toString('hex') }
 }
 
@@ -86,6 +86,18 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       session = await openSession(running.port)
       const [log] = await getAttendanceLogs(session, transportKind)
       expect(log).toMatchObject({ userId: '000777', userIdSource: 'lookup', uid: 9 })
+    })
+
+    it('attributes a punch to a nine-character id without truncating it', async () => {
+      running = await startEmulator({
+        transport: transportKind,
+        info: { userCount: 1, recordCount: 1, recordCapacity: 1000 },
+        users: [emUser(9, '123456789', 'Nine')],
+        records: { size: 8, rows: [rec8(9, DAY)] },
+      })
+      session = await openSession(running.port)
+      const [log] = await getAttendanceLogs(session, transportKind)
+      expect(log).toMatchObject({ userId: '123456789', userIdSource: 'lookup' })
     })
 
     it('resolves a 16-byte record by numeric id while preserving leading zeros', async () => {

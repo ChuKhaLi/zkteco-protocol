@@ -12,7 +12,7 @@ function userRec(
   if (opts.password) b.write(opts.password, 3, 8, 'ascii')
   b.write(name, 11, 24, 'ascii')
   b.writeUInt32LE(opts.card ?? 0, 35)
-  b.write(userId, 48, 8, 'ascii')
+  b.write(userId, 48, 9, 'ascii')
   return b
 }
 
@@ -74,6 +74,13 @@ describe('parseUserData', () => {
   it('throws when the declared size exceeds what arrived', () => {
     const data = withHeader(userRec(1, '1', 'A'))
     expect(() => parseUserData(data.subarray(0, 20))).toThrow(ZkFramingError)
+  })
+
+  it('reads a nine-character printed id in full', () => {
+    // zkteco-js reads slice(48, 48 + 9) (helper/utils.js:143-144). An eight-byte
+    // read returned '12345678' — a different identity that then keyed the
+    // attendance lookup (review R4).
+    expect(parseUserData(withHeader(userRec(7, '123456789', 'Nine')))[0]!.userId).toBe('123456789')
   })
 })
 

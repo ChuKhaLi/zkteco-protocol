@@ -59,7 +59,7 @@ export interface ZkAttendanceLog {
 export interface ZkUser {
   /** Device-internal key. Recycled after deletion — NOT an identity. */
   uid: number
-  /** The identifier printed on the device. A string, so leading zeros survive. */
+  /** The identifier printed on the device, up to nine characters. A string, so leading zeros survive. */
   userId: string
   name: string
   /** Raw privilege level. Model-dependent, deliberately not decoded. */

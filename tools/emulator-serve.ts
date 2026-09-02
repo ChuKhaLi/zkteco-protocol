@@ -22,7 +22,7 @@ function emUser(uid: number, userId: string, name: string): ZkUser {
   const b = Buffer.alloc(USER_RECORD_SIZE)
   b.writeUInt16LE(uid, 0)
   b.write(name, 11, 24, 'latin1')
-  b.write(userId, 48, 8, 'latin1')
+  b.write(userId, 48, 9, 'latin1')
   return {
     uid,
     userId,
