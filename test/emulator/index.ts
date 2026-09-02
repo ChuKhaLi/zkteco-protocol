@@ -94,6 +94,8 @@ export interface EmulatorOptions {
    * (spec v0.5 §5.1) and for a reply that lands after the deadline (§5.2).
    */
   replyDelayMs?: number
+  /** Extra zero bytes sent as one more DATA packet before the legacy ACK_OK. Spec v0.5 §6.3. */
+  legacyOvershootBytes?: number
 }
 
 export interface EmulatorState {
@@ -236,6 +238,8 @@ export function serveDataLegacy(
     }
     out.push(reply(state, req, CMD.DATA, stream.subarray(off, off + chunkSize)))
   }
+  const overshoot = state.opts.legacyOvershootBytes ?? 0
+  if (overshoot > 0) out.push(reply(state, req, CMD.DATA, Buffer.alloc(overshoot)))
   out.push(reply(state, req, CMD.ACK_OK))
   return out
 }

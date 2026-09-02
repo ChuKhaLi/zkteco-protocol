@@ -59,6 +59,21 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       expect(stream.length).toBe(404)
     })
 
+    it('throws when the transfer delivers more bytes than PREPARE_DATA declared', async () => {
+      // Declared 404, served 432. The loop used to exit cleanly on >= and the
+      // record parser, whose only length guard is "too short", dropped the
+      // tail silently (review S4).
+      const rows = Array.from({ length: 50 }, (_, i) => rec8(i + 1))
+      running = await startEmulator({
+        transport: transportKind,
+        records: { size: 8, rows },
+        chunkSize: 32,
+        legacyOvershootBytes: 28,
+      })
+      session = await openSession(running.port)
+      await expect(readBulkLegacy(session, CMD.ATTLOG_RRQ)).rejects.toThrow(/delivered 432 bytes, expected 404/)
+    })
+
     it('releases the device buffer afterwards', async () => {
       running = await startEmulator({
         transport: transportKind,

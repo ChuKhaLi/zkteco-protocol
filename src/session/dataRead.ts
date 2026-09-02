@@ -1,6 +1,84 @@
 import { CMD, MAX_CHUNK } from '../codec/commands.js'
+import type { DecodedPacket } from '../codec/packet.js'
 import { ZkAuthError, ZkProtocolError } from '../errors.js'
 import type { Session } from './Session.js'
+
+/**
+ * Reads one transfer: an optional CMD_PREPARE_DATA announcement, a run of
+ * CMD_DATA packets, then ACK_OK. Every CMD_DATA packet is consumed — the run
+ * ends only at the first non-DATA packet — and the accumulated total is then
+ * compared against `expected`, so a device that keeps sending CMD_DATA past
+ * the point a shorter run would have looked complete is still caught.
+ *
+ * Shared by the legacy exchange (one transfer per read) and, since v0.5, by
+ * the buffered exchange (one transfer per READ_BUFFER chunk), because that is
+ * the shape the readable reference handles: zkteco-js's UDP chunk handler
+ * ignores PREPARE_DATA, appends DATA, and completes on ACK_OK once the total
+ * matches the size IT computed (zudp.js:335-350); its TCP handler is
+ * command-agnostic and skips the first eight accumulated bytes, which is the
+ * announcement arriving through the same accumulator (ztcp.js:389-395).
+ * Nothing in the announcement is interpreted here either — `expected` comes
+ * from the caller, who knows it from its own request.
+ *
+ * `first` is a packet the caller already consumed (an execute() reply); it is
+ * treated as the first packet of the transfer.
+ *
+ * Refuses, as ZkProtocolError: an ACK_OK before `expected` bytes (where the
+ * reference would sit until its timer fired, this says so at once), a total
+ * past `expected` (the record parsers only reject a body that is too SHORT,
+ * so an oversized one would lose its tail silently), and any other command.
+ */
+export async function readTransfer(
+  session: Session,
+  expected: number,
+  first?: DecodedPacket,
+): Promise<Buffer> {
+  const chunks: Buffer[] = []
+  let received = 0
+  let pending: DecodedPacket | null = first ?? null
+  const next = async (): Promise<DecodedPacket> => {
+    if (pending) {
+      const p = pending
+      pending = null
+      return p
+    }
+    return session.receiveMore()
+  }
+
+  const opening = await next()
+  // No announcement: the packet belongs to the loop below.
+  if (opening.command !== CMD.PREPARE_DATA) pending = opening
+
+  // Strictly sequential: the session allows one exchange at a time. Consumes
+  // every CMD_DATA packet in a row rather than stopping the instant the
+  // running total reaches `expected` — a device with more to send is still
+  // sending CMD_DATA, whether the excess lands within one oversized packet or
+  // as a separate packet arriving right after a transfer that already looked
+  // complete. Both must be caught here rather than mistaken for the close.
+  let tail: DecodedPacket
+  for (;;) {
+    const packet = await next()
+    if (packet.command !== CMD.DATA) {
+      tail = packet
+      break
+    }
+    chunks.push(packet.data)
+    received += packet.data.length
+  }
+
+  if (received < expected) {
+    throw new ZkProtocolError(
+      `transfer ended after ${received} of ${expected} bytes with command ${tail.command}`,
+    )
+  }
+  if (received > expected) {
+    throw new ZkProtocolError(`transfer delivered ${received} bytes, expected ${expected}`)
+  }
+  if (tail.command !== CMD.ACK_OK) {
+    throw new ZkProtocolError(`expected ACK_OK to close the transfer, got ${tail.command}`)
+  }
+  return Buffer.concat(chunks)
+}
 
 /**
  * Reads a bulk payload the legacy way, which older firmware understands.
@@ -9,6 +87,9 @@ import type { Session } from './Session.js'
  * PREPARE_DATA announcing a size, then a run of CMD_DATA packets, then ACK_OK.
  * The returned stream begins with its own 4-byte little-endian totalSize
  * header — the record parsers expect that header and validate against it.
+ *
+ * The size in a legacy PREPARE_DATA is read at offset 0, as it always was; no
+ * reference exists to compare against (spec §6.4).
  */
 export async function readBulkLegacy(session: Session, command: number): Promise<Buffer> {
   const res = await session.execute(command)
@@ -29,36 +110,9 @@ export async function readBulkLegacy(session: Session, command: number): Promise
   }
 
   const declared = res.data.readUInt32LE(0)
-  const chunks: Buffer[] = []
-  let received = 0
-
-  // Strictly sequential: each receiveMore() is awaited before the next is
-  // issued, because the transport rejects a second receive() while one is
-  // already pending.
-  while (received < declared) {
-    const packet = await session.receiveMore()
-    if (packet.command === CMD.DATA) {
-      chunks.push(packet.data)
-      received += packet.data.length
-      continue
-    }
-    // Anything other than a DATA packet before the declared size is reached
-    // means the transfer ended early. Returning what arrived so far would
-    // hand the record parser a body that looks complete but isn't — it must
-    // throw instead of returning a short body.
-    throw new ZkProtocolError(
-      `transfer ended after ${received} of ${declared} bytes with command ${packet.command}`,
-    )
-  }
-
-  // The device closes the run with an acknowledgement.
-  const tail = await session.receiveMore()
-  if (tail.command !== CMD.ACK_OK) {
-    throw new ZkProtocolError(`expected ACK_OK to close the transfer, got ${tail.command}`)
-  }
-
+  const body = await readTransfer(session, declared)
   await freeBuffer(session)
-  return Buffer.concat(chunks)
+  return body
 }
 
 /**
