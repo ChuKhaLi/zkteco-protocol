@@ -146,6 +146,7 @@ export class UdpTransport implements Transport {
   }
 
   close(): Promise<void> {
+    this.inbox.settle(new ZkConnectionError('transport closed while a receive was pending'))
     const sock = this.socket
     this.socket = null
     if (!sock) return Promise.resolve()

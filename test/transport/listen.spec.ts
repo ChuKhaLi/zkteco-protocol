@@ -209,3 +209,23 @@ describe('Transport.listen over udp, failure paths', () => {
     await expect(transport.receive(50)).rejects.toBeInstanceOf(ZkTimeoutError)
   }, 5000)
 })
+
+for (const kind of ['tcp', 'udp'] as const) {
+  describe(`Transport.close over ${kind}`, () => {
+    it('rejects a pending receive() at once rather than leaving it to its timer', async () => {
+      running = await startEmulator({ transport: kind, behavior: 'silent' })
+      transport = kind === 'tcp'
+        ? new TcpTransport({ host: '127.0.0.1', port: running.port })
+        : new UdpTransport({ host: '127.0.0.1', port: running.port })
+      await transport.connect(2_000)
+      // 30 s: a receive() that ends through its own timer blows this test's
+      // budget, so passing means close() is what ended it.
+      const pending = transport.receive(30_000)
+      await transport.close()
+      const err = await pending.then(() => null, (e: unknown) => e as Error)
+      expect(err).toBeInstanceOf(ZkConnectionError)
+      expect(err!.message).toMatch(/closed while a receive was pending/)
+      transport = null
+    }, 5_000)
+  })
+}
