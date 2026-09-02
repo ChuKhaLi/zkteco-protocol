@@ -698,10 +698,11 @@ and which of the two dialects the model emits.
     ACK_UNAUTH guards do not help here, since a stale reply carries a legitimate acknowledgment
     code, just to the wrong request — and
     `getTime()` is the sharpest case, since `decodeZkTime` turns any four bytes into a
-    plausible-looking date with nothing to contradict it. This is v0.1 transport architecture, not
-    something this scope introduced, and no code change is proposed here — record what a real
-    device does before deciding whether one is warranted. Not testable by the bring-up kit
-    (`npx zkteco-protocol`); it is reported there as such rather than omitted.
+    plausible-looking date with nothing to contradict it. v0.5
+    (`2026-09-02-zkteco-library-correctness-design.md` §5.2) closes the session on any timeout and
+    refuses a concurrent request, so a late reply can no longer be collected by a later request.
+    Whether a device answers late remains the question; the trace audit answers it. Not testable by
+    the bring-up kit (`npx zkteco-protocol`); it is reported there as such rather than omitted.
 
 23. Does any firmware answer **`ACK_UNAUTH` to mean "this command is not supported"** rather
     than "you are not authorized"? Since v0.3.1 `Session.execute` throws `ZkAuthError` on

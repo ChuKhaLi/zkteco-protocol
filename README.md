@@ -38,6 +38,13 @@ const logs = await dev.getAttendanceLogs()
 await dev.disconnect()
 ```
 
+A `ZkTimeoutError` closes the session. After one, every call throws
+`ZkConnectionError` until `connect()` is called again — a reply that arrives
+after the deadline would otherwise be handed to the next request as its own
+answer, and nothing in the protocol lets this library tell the two apart
+without guessing. The same deadline bounds `connect()` itself. If you retry
+on a timeout, reconnect first.
+
 ### Realtime events
 
 ```ts
@@ -173,6 +180,9 @@ record says where its identity came from:
 | `'device'` | The record carried it. Trustworthy. |
 | `'lookup'` | Resolved through the user list. May be wrong if the uid was recycled. |
 | `null` | Not determined. `userId` is `null` — never a guess. |
+
+`userId` is up to nine characters. That width follows the one readable
+reference implementation; a device storing eight returns the same string.
 
 `status` and `verifyMode` are returned as raw numbers. Their meanings differ
 between models, and decoding them would produce data that is confidently wrong.

@@ -369,17 +369,17 @@ model at four points. All four are adopted:
    of the PREPARE_DATA payload; both know the chunk size from their own request.
 
    So the legacy loop at `dataRead.ts:38-58` is extracted into
-   `readTransfer(session, expected: number): Promise<Buffer>` and both paths call it. Its contract:
-   a leading `PREPARE_DATA` packet, if one arrives, is consumed and nothing in its data is
-   interpreted; `DATA` packets are appended until `expected` bytes have arrived; the packet after
-   that must be `ACK_OK`. An `ACK_OK` before `expected` bytes is a `ZkProtocolError` (the transfer
-   ended early — where the reference would sit until its timer fires, this library says so at
-   once); a total past `expected` is a `ZkProtocolError` (§6.3); any command other than those three
-   is a `ZkProtocolError`. The legacy path passes the size it read from its own `PREPARE_DATA`
-   reply, which `execute` has already consumed; the buffered path passes `want`, the size it asked
-   for. Today the chunk is taken as the data of a single reply, which against the reference's model
-   would treat the eight-byte PREPARE_DATA payload as the chunk and leave the DATA packets in the
-   queue for the next request.
+   `readTransfer(session, expected: number, first?: DecodedPacket): Promise<Buffer>` and both paths
+   call it, `first` a packet the caller already consumed and treated as the transfer's first. Its
+   contract: a leading `PREPARE_DATA` packet, if one arrives, is consumed and nothing in its data is
+   interpreted; `DATA` packets are consumed until the first non-DATA packet, which is the transfer's
+   terminator; the total is judged then — short of `expected` (an early `ACK_OK` or any other
+   command) is a `ZkProtocolError`, past `expected` is a `ZkProtocolError` (§6.3), and a total that
+   matches but is closed by anything other than `ACK_OK` is a `ZkProtocolError`. The legacy path
+   passes the size it read from its own `PREPARE_DATA` reply, which `execute` has already consumed;
+   the buffered path passes `want`, the size it asked for. Today the chunk is taken as the data of a
+   single reply, which against the reference's model would treat the eight-byte PREPARE_DATA payload
+   as the chunk and leave the DATA packets in the queue for the next request.
 4. **The READ_BUFFER reply command is not checked beyond the three above.** The reference checks
    nothing on TCP and rejects any fourth command on UDP with an error. This library rejects a fourth
    command with `ZkProtocolError`, matching the stricter of the two, and requires no more than the
@@ -389,8 +389,10 @@ Whether the reference's model is what devices do is not known. What is known is 
 has run against devices and this library has not. E2 and E3 in §12 put `pyzk` against both models.
 
 `PROVENANCE.md` gains one section, *The buffered read — restated from a single readable source*,
-at the "source reading" level, naming the lines above, and a row in §Known divergences for each of
-the four points recording what this library believed before v0.5 and why it changed.
+at the "source reading" level, naming the lines above. The four points are recorded in that
+section's table (before-v0.5 / reference / lines), and §Known divergences carries one pointer
+paragraph rather than numbered rows, because the four points were never claims adjudicated between
+two oracles — they were a model that agreed with nothing.
 
 ### 6.2 Fallback only on `ACK_ERROR`
 
@@ -591,7 +593,7 @@ name the variants below, so a deleted fixture is noticed.
 
 | | Question | Variants | What is observable | Decision rule |
 |---|---|---|---|---|
-| E1 | Does `pyzk` rely on the reply id, or the session id, being echoed? | `echoReplyId: false`; `replySessionIdOverride` wrong | whether `pyzk` completes connect and `get_users` | Recorded in `PROVENANCE.md` §Reply binding either way. If it fails: matching is a candidate for the next cycle with black-box provenance. No code change this cycle. |
+| E1 | Does `pyzk` rely on the reply id, or the session id, being echoed? | `echoReplyId: false`; `replySessionIdOverride` wrong | whether `pyzk` completes connect and `get_users` | Recorded either way in `PROVENANCE.md` §Reply binding: not implemented, and why. If it fails: matching is a candidate for the next cycle with black-box provenance. No code change this cycle. |
 | E2 | Which offset does `pyzk` read the PREPARE_BUFFER size at? | `prepareBufferReply` both values, with a body long enough that the two readings differ | the `start`/`size` fields of the READ_BUFFER requests `pyzk` sends | Agrees with the reference: two oracles agree, recorded as the strongest level available without hardware. Disagrees: recorded as a divergence; the library keeps following the readable reference; the emulator keeps both. |
 | E3 | Which READ_BUFFER reply shape does `pyzk` complete a read under? | `chunkReply` both values | whether `get_users` completes and prints the served users | As E2. |
 | E4 | Which user record size does `pyzk` expect on each transport? | `userRecordSize` both values × TCP, UDP | whether the printed users match the served ones | Recorded under §7.4's divergence. No code change this cycle. |
@@ -648,8 +650,9 @@ exist.
   that width comes from. The compatibility table is unchanged.
 - **`CLAUDE.md`**: the architecture bullet on `dataRead.ts` says the fallback fires on `ACK_ERROR`
   only. Nothing else there changes; the rules section is untouched.
-- **`PROVENANCE.md`**: new sections *The buffered read* (§6.1), *Reply binding* (§5.5, with E1's
-  result), *User record width and size* (§7.1, §7.4, with E4's result); §Known divergences gains
+- **`PROVENANCE.md`**: new sections *The buffered read — restated from a single readable source*
+  (§6.1), *Reply binding: not implemented, and why* (§5.5, with E1's result), *User record width and
+  size* (§7.1, §7.4, with E4's result); §Known divergences gains
   one row per adopted point; §Unverified field offsets describes the count bracket (§7.2) instead
   of the framing guard alone.
 - **v0.1 spec §12 item 22**: the sentence "This is v0.1 transport architecture … no code change is

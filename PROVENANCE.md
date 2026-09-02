@@ -77,7 +77,12 @@ them are not, and none was taken.
 Where the two oracles disagreed with the documentation this project was built
 from, or with each other, the disagreement is recorded here rather than
 silently resolved in favour of one side. Two claims were adjudicated by
-captured evidence, and they went opposite ways.
+captured evidence, and they went opposite ways. The buffered read's four
+points, adopted from source reading and put to `pyzk` in v0.5, are recorded
+under *The buffered read — restated from a single readable source* below
+rather than as numbered divergences here, because they were never claims this
+project adjudicated between two oracles — they were a model that agreed with
+nothing.
 
 ### 1. The reply-id quirk — refuted
 
