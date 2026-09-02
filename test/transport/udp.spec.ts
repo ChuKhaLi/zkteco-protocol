@@ -1,3 +1,4 @@
+import dgram from 'node:dgram'
 import { afterEach, describe, expect, it } from 'vitest'
 import { UdpTransport } from '../../src/transport/udp.js'
 import { CMD } from '../../src/codec/commands.js'
@@ -70,5 +71,28 @@ describe('UdpTransport', () => {
     const reply = decodePayload(await first)
     expect(reply.command).toBe(CMD.ACK_OK)
     expect(reply.sessionId).toBe(0x66)
+  })
+
+  // Any host that could reach the client's ephemeral port used to be the
+  // device: the socket was bound on every interface and the message handler
+  // never looked at the sender. A connected socket lets the kernel drop the
+  // forgery before this library sees it.
+  it('ignores a datagram from a peer that is not the device', async () => {
+    running = await startEmulator({ transport: 'udp', behavior: 'silent' })
+    transport = new UdpTransport({ host: '127.0.0.1', port: running.port })
+    await transport.connect(2_000)
+    const clientPort = (transport as unknown as { socket: dgram.Socket }).socket.address().port
+
+    const pending = transport.receive(300)
+    const forger = dgram.createSocket('udp4')
+    const forged = encodePayload({ command: CMD.ACK_OK, sessionId: 0xbad, replyId: 0 })
+    await new Promise<void>((r) => forger.send(forged, clientPort, '127.0.0.1', () => r()))
+    try {
+      // The emulator is silent, so the ONLY thing that could resolve this is
+      // the forgery. A timeout is the pass.
+      await expect(pending).rejects.toBeInstanceOf(ZkTimeoutError)
+    } finally {
+      forger.close()
+    }
   })
 })

@@ -52,10 +52,17 @@ export class UdpTransport implements Transport {
       sock.on('message', (msg) => this.inbox.deliver(Buffer.from(msg)))
       sock.bind(0, () => {
         if (connectSettled) return
-        connectSettled = true
-        clearTimeout(timer)
-        this.socket = sock
-        resolve()
+        // Connected, not merely bound: from here the kernel delivers only
+        // datagrams from this peer and drops the rest, and send() needs no
+        // address. This is the whole of the network-level defence against a
+        // forged reply (spec v0.5 §4.4). The name is resolved once, here.
+        sock.connect(this.opts.port, this.opts.host, () => {
+          if (connectSettled) return
+          connectSettled = true
+          clearTimeout(timer)
+          this.socket = sock
+          resolve()
+        })
       })
     })
   }
@@ -75,7 +82,10 @@ export class UdpTransport implements Transport {
    * datagram rather than about the socket. On Windows an ICMP
    * port-unreachable is delivered as ECONNRESET even on an UNCONNECTED
    * socket, so a single datagram sent to a powered-down terminal used to end
-   * this transport for the rest of its life.
+   * this transport for the rest of its life. With the socket connected
+   * (v0.5), an ICMP port-unreachable surfaces as an 'error' on every
+   * platform, not only Windows; the rule is unchanged and now applies
+   * uniformly.
    *
    * This does not hide a socket that really is dead. The next operation on it
    * raises a FRESH error, which is a more accurate report than a replayed
@@ -118,9 +128,7 @@ export class UdpTransport implements Transport {
     const sock = this.socket
     if (!sock) return Promise.reject(new ZkConnectionError('transport is not connected'))
     return new Promise((resolve, reject) => {
-      sock.send(payload, this.opts.port, this.opts.host, (err) =>
-        err ? reject(new ZkConnectionError(err.message)) : resolve(),
-      )
+      sock.send(payload, (err) => (err ? reject(new ZkConnectionError(err.message)) : resolve()))
     })
   }
 
