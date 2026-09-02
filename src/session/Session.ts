@@ -290,17 +290,23 @@ export class Session {
     } catch (err) {
       // A timeout means a reply may still be coming, and the next request
       // would collect it as its own (checklist item 22). A framing failure
-      // means the stream is misaligned. Neither can be recovered from without
-      // guessing what the device put in its replies, so the session ends —
-      // the same rule open() and subscribe() apply to their own failures
-      // (spec v0.5 §5.2). The caller still receives the original error.
-      if (err instanceof ZkTimeoutError || err instanceof ZkFramingError) {
+      // means the stream is misaligned. A connection error means the socket
+      // reported a failure. None can be recovered from without guessing what
+      // the device put in its replies, so the session ends — the same rule
+      // open() and subscribe() apply to their own failures (spec v0.5 §5.2).
+      // The caller still receives the original error.
+      //
+      // The connection error goes through abandon() like the other two rather
+      // than merely clearing open_. Clearing it rested on the transport
+      // already being gone, which is true on TCP — Node destroys the socket —
+      // and false on UDP, where a post-connect 'error' reaches
+      // UdpTransport.fail(), which records the failure and leaves the socket
+      // bound. With open_ already false, close() and abandon() both returned
+      // early and nothing ever released it. abandon()'s EXIT is
+      // best-effort-swallowed, which a dead TCP socket tolerates and a live
+      // UDP one can still use, and transport.close() is idempotent.
+      if (err instanceof ZkTimeoutError || err instanceof ZkFramingError || err instanceof ZkConnectionError) {
         await this.abandon()
-      } else if (err instanceof ZkConnectionError) {
-        // The transport is already gone; no goodbye can reach anyone. Clear
-        // open_ so the next call is refused by assertOpen, naming this
-        // session, rather than by whatever the dead socket says.
-        this.open_ = false
       }
       throw err
     } finally {

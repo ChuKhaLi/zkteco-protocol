@@ -9,6 +9,17 @@ import { ZkAuthError, ZkConnectionError, ZkFramingError, ZkProtocolError, ZkTime
 import { reply, startEmulator, type Emulator } from '../emulator/index.js'
 import { EVENT_FLAG } from '../../src/codec/events.js'
 import type { Transport } from '../../src/transport/Transport.js'
+import type { EventEmitter } from 'node:events'
+
+/**
+ * The live socket a transport keeps private — a `net.Socket` or a
+ * `dgram.Socket`, both EventEmitters, and both nulled by `close()`.
+ *
+ * Same cast as `test/transport/listen.spec.ts`'s `socketOf`, widened to cover
+ * either transport so one assertion reads "the socket was released" on both.
+ */
+const socketOf = (t: Transport): EventEmitter | null =>
+  (t as unknown as { socket: EventEmitter | null }).socket
 
 let running: Emulator | null = null
 let session: Session | null = null
@@ -195,6 +206,30 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       expect(next).toBeInstanceOf(ZkConnectionError)
       expect(next!.message).toMatch(/this session is not open/)
       session = null
+    })
+
+    // A connection error used to clear `open_` without closing the transport,
+    // on the premise that the transport was already gone. True on TCP, where
+    // Node destroys the socket; false on UDP, where a post-connect 'error'
+    // only records the failure and leaves the socket bound. close() and
+    // abandon() then both returned early on `open_` being false, so nothing
+    // ever released it: the descriptor leaked and the process stayed alive.
+    // The error is emitted on the private socket rather than provoked from
+    // the network, because an ICMP unreachable is neither deterministic nor
+    // uniform across platforms; what is under test is everything downstream
+    // of the handler, which is where the leak was.
+    it('releases the transport socket when a request fails with a connection error', async () => {
+      running = await startEmulator({ transport: transportKind, handlers: { [CMD.GET_FREE_SIZES]: () => null } })
+      const transport = makeTransport(running.port)
+      session = new Session(transport, { timeoutMs: 2000 })
+      await session.open()
+      const pending = session.execute(CMD.GET_FREE_SIZES)
+      await new Promise((r) => setTimeout(r, 50))
+      socketOf(transport)!.emit('error', new Error('boom'))
+
+      await expect(pending).rejects.toBeInstanceOf(ZkConnectionError)
+      await expect(session.close()).resolves.toBeUndefined()
+      expect(socketOf(transport)).toBeNull()
     })
 
     it.skipIf(transportKind !== 'tcp')('closes the session on a framing failure and sends the goodbye', async () => {

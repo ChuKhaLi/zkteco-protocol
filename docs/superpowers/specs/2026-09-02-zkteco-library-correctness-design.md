@@ -286,10 +286,15 @@ The same teardown applies to a `ZkFramingError` from `transport.receive` (§4.5)
 misaligned, so nothing later on it can be trusted. A `ZkFramingError` from a record parser is a
 different thing — the exchange completed and the bytes were wrong — and it reaches the session
 never, since parsers run in `src/commands/` above it. A `ZkConnectionError` from
-`transport.receive` needs no goodbye, since the transport is already gone, but `open_` is cleared
-so that the next call is refused by `assertOpen` naming the closed session rather than by whatever
-the dead socket says. That last part is new: today `open_` stays true after a dropped connection,
-and the v0.4 handoff §4.3 records what it cost when refusal was left to the socket.
+`transport.receive` runs the same `abandon()` teardown: `open_` is cleared so that the next call is
+refused by `assertOpen` naming the closed session rather than by whatever the dead socket says, and
+the transport is closed rather than assumed gone. Only TCP makes that assumption safe — Node
+destroys the socket — while on UDP a post-connect `'error'` is recorded by the transport and the
+socket stays bound, so a session that only cleared `open_` left it open with nothing able to
+release it. The goodbye is best-effort either way: unsendable on a destroyed TCP socket, and on UDP
+the one thing that tells the device to release the session slot. Clearing `open_` at all is new:
+today it stays true after a dropped connection, and the v0.4 handoff §4.3 records what it cost when
+refusal was left to the socket.
 
 Cost, stated plainly: one slow reply ends a session, and a consumer that retries must reconnect
 first. On UDP, which loses packets, this will happen more often than on TCP. That is the price of
