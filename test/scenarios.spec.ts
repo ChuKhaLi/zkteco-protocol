@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { ZkDevice } from '../src/ZkDevice.js'
+import { CMD } from '../src/codec/commands.js'
 import { ZkAuthError, ZkConnectionError, ZkFramingError, ZkTimeoutError } from '../src/errors.js'
 import { USER_RECORD_SIZE } from '../src/codec/records/user.js'
 import { startEmulator, type Emulator } from './emulator/index.js'
@@ -72,6 +73,17 @@ for (const transport of ['tcp', 'udp'] as const) {
         host: '127.0.0.1', port: running.port, transport, commKey: 4321, timeoutMs: 2000,
       })
       await expect(wrong.connect()).rejects.toBeInstanceOf(ZkAuthError)
+    })
+
+    it('honours a disconnect() issued while connect() is still in flight', async () => {
+      running = await startEmulator({ transport, replyDelayMs: 100 })
+      const d = new ZkDevice({ host: '127.0.0.1', port: running.port, transport })
+      const connecting = d.connect()
+      await d.disconnect()
+      await connecting
+      // The session that finished opening was closed, not installed.
+      await expect(d.getInfo()).rejects.toThrow(/not connected/)
+      expect(running.received.map((p) => p.command)).toContain(CMD.EXIT)
     })
 
     // 2. All three record dialects.

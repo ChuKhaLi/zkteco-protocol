@@ -28,6 +28,7 @@ export interface ZkDeviceOptions {
 export class ZkDevice {
   private session: Session | null = null
   private stream: Subscription | null = null
+  private connecting: Promise<void> | null = null
   private readonly host: string
   private readonly port: number
   private readonly transportKind: 'tcp' | 'udp'
@@ -90,8 +91,13 @@ export class ZkDevice {
       timeoutMs: this.timeoutMs,
       commKey: this.commKey,
     })
-    await session.open()
-    this.session = session
+    const opening = session.open().then(() => { this.session = session })
+    this.connecting = opening
+    try {
+      await opening
+    } finally {
+      if (this.connecting === opening) this.connecting = null
+    }
   }
 
   async getInfo(): Promise<ZkDeviceInfo> {
@@ -210,8 +216,12 @@ export class ZkDevice {
     return subscription
   }
 
-  /** Closes the session. Safe to call twice, and safe before connect(). */
+  /** Closes the session. Safe to call twice, before connect(), and during it. */
   async disconnect(): Promise<void> {
+    // A connect() still opening finishes first, so the session it installs
+    // is the one closed here rather than one installed after this returns.
+    const connecting = this.connecting
+    if (connecting) await connecting.catch(() => {})
     const stream = this.stream
     this.stream = null
     if (stream) await stream.close()
