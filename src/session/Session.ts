@@ -387,6 +387,15 @@ export class Session {
    * so skipping it would leave the device holding the session slot. Nothing
    * here throws; the caller is already on its way to reporting a failure of
    * its own.
+   *
+   * Sent where a socket still exists, which is not everywhere this runs. A
+   * framing failure destroys the transport as it rejects the frame (§4.5), so
+   * the EXIT has nothing to write to and the swallowed rejection is the whole
+   * of it — `test/session/session.spec.ts`'s framing test records the
+   * emulator receiving CONNECT and GET_FREE_SIZES and no EXIT. The goodbye
+   * actually reaches the device on the timeout teardown, on a connection
+   * error where the socket outlived it (UDP), and on close() of a subscribed
+   * session.
    */
   private async abandon(): Promise<void> {
     if (!this.open_) return

@@ -232,7 +232,12 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       expect(socketOf(transport)).toBeNull()
     })
 
-    it.skipIf(transportKind !== 'tcp')('closes the session on a framing failure and sends the goodbye', async () => {
+    // Named for what it proves. It used to say "and sends the goodbye", which
+    // it never asserted and which cannot happen: rejecting the frame destroys
+    // the socket (§4.5) before abandon() gets to transmit, so the EXIT is
+    // swallowed. The wire assertion below is that absence, stated as evidence
+    // rather than left to the name.
+    it.skipIf(transportKind !== 'tcp')('closes the session on a framing failure; the next call is refused by the session', async () => {
       running = await startEmulator({ transport: 'tcp', handlers: { [CMD.GET_FREE_SIZES]: () => null } })
       session = new Session(makeTransport(running.port), { timeoutMs: 2000 })
       await session.open()
@@ -243,6 +248,7 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       const next = await session.execute(CMD.GET_TIME).then(() => null, (e: unknown) => e as Error)
       expect(next).toBeInstanceOf(ZkConnectionError)
       expect(next!.message).toMatch(/this session is not open/)
+      expect(running.received.map((p) => p.command)).toEqual([CMD.CONNECT, CMD.GET_FREE_SIZES])
       session = null
     })
 
