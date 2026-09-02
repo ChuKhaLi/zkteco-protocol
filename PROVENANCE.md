@@ -470,22 +470,29 @@ Experiments E2 and E3 put `pyzk` against both models
 E4, first needed one more thing served correctly: `pyzk`'s `get_users()`
 reads a user count out of the unrelated `CMD_GET_FREE_SIZES` reply before it
 will attempt any read at all, and gives up silently — `completed: true`, zero
-users printed, no `PREPARE_BUFFER` ever sent — if that count reads as zero.
-Experiment E0 (`test/fixtures/oracle/bulk/E0-free-sizes-default-tcp.json`)
-puts that negative result in a fixture rather than only in a comment: served
-the 68-byte reply this library's own encoder produces (`encodeFreeSizes`,
-capped at `FREE_SIZES_OFFSET.recordCapacity + 4`) with `userCount` correctly
-set to 3, `pyzk` still completed having sent nothing past `CONNECT`,
-`CMD_GET_FREE_SIZES`, `EXIT`. An 80-byte reply with the count as a
-little-endian uint32 at byte offset 16 was enough — every E1-E4 fixture was
-served that reply instead (`tools/oracle/experiments.ts`, recorded per
-fixture under `served.freeSizesReply`) and reached the actual read. Offset 16
-happens to match this library's own (hardware-unverified)
-`FREE_SIZES_OFFSET.userCount`; nothing here claims 80 bytes or offset 16 are
-minimal or exact — intermediate lengths and other offsets were never tried —
-only that this combination works and the 68-byte default does not, both
-reproducible from this tree. That is corroboration of one offset, not of the
-whole table — "Unverified field offsets" above is unchanged by it.
+users printed, no `PREPARE_BUFFER` ever sent — when that read does not yield a
+count. Two controls are recorded rather than one, because E0 and E1-E4 differ
+in reply length *and* in count, and on their own cannot say which mattered:
+
+| Control | What was served | What `pyzk` did |
+|---|---|---|
+| E0 (`E0-free-sizes-default-tcp.json`) | the 68-byte reply this library's own encoder produces (`encodeFreeSizes`, capped at `FREE_SIZES_OFFSET.recordCapacity + 4`), with `userCount` correctly 3 at offset 16 | completed having sent nothing past `CONNECT`, `CMD_GET_FREE_SIZES`, `EXIT` |
+| E0b (`E0b-free-sizes-80-count-zero-tcp.json`) | the same 80 bytes E1-E4 are served, with the count written as 0 | the same: completed, zero users printed, no `PREPARE_BUFFER` |
+| E1-E4 | 80 bytes, count 3 as a little-endian uint32 at byte offset 16 (`tools/oracle/experiments.ts`, recorded per fixture under `served.freeSizesReply`) | reached `PREPARE_BUFFER`/`READ_BUFFER` and printed the served users |
+
+E0b holds the length fixed and varies only the count, so the gate is a real
+observation and not an inference: zeroing those four bytes is enough to stop
+the read. `test/oracle/bulk.spec.ts` pins both halves per fixture — the users
+printed, and whether a `PREPARE_BUFFER` was sent at all.
+
+Offset 16 happens to match this library's own (hardware-unverified)
+`FREE_SIZES_OFFSET.userCount`. Nothing here claims 80 bytes or offset 16 are
+minimal or exact: intermediate lengths were never tried, no other offset was
+ever tried, and E0's 68-byte reply carries its count at offset 16 too, so what
+stopped E0 was the length. The whole of what these fixtures support is that a
+count of 3 at offset 16 in an 80-byte reply is read, and a count of 0 there is
+not. That is a fact about `pyzk`'s parser, not corroboration of the offset
+table — "Unverified field offsets" above is unchanged by it.
 
 | Question | Result | Read as |
 |---|---|---|

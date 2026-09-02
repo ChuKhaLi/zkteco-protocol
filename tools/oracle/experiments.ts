@@ -1,5 +1,8 @@
 /**
- * Four black-box experiments against pyzk (spec v0.5 §12). Each starts the
+ * Four black-box experiments against pyzk (spec v0.5 §12), plus the two E0
+ * controls that establish what has to be served before any of them run at
+ * all — neither is in the spec's table; both exist so that precondition is a
+ * fixture rather than a claim. Each starts the
  * emulator in one configuration, runs pyzk's public API against it, and
  * records three observables: what pyzk sent (the emulator's log), what pyzk
  * printed (the users it believes it read), and how it exited.
@@ -53,16 +56,26 @@ const USERS = [emUser(1, '100001', 'Ann'), emUser(2, '100002', 'Bo'), emUser(3, 
  * `FREE_SIZES_OFFSET.userCount`; nothing here claims 80 bytes or offset 16
  * are minimal or exact — intermediate lengths and other offsets were not
  * recorded — only that this combination works and the 68-byte default does
- * not, both reproducible from this tree. Without the override below, every
- * one of E1-E4 "completes" (exit 0) having sent only CONNECT,
+ * not, both reproducible from this tree. E0 alone cannot say WHICH of the two
+ * differences stopped it, since the 68-byte reply carries its count at offset
+ * 16 as well; the E0b control below holds the length at 80 and zeroes only the
+ * count, and records pyzk stopping in the same place. Without the override
+ * below, every one of E1-E4 "completes" (exit 0) having sent only CONNECT,
  * CMD_GET_FREE_SIZES, and EXIT — proving nothing about any of the questions
  * these experiments ask.
  */
 const FREE_SIZES_REPLY_LEN = 80
 const FREE_SIZES_USER_COUNT_OFFSET = 16
-const freeSizesHandler: Handler = (req, state) => {
+/**
+ * The 80-byte override, with the count as a parameter rather than always
+ * `USERS.length`. E0b serves the very same 80 bytes with the count as 0, which
+ * is the only way the fixtures separate "the reply was long enough" from "the
+ * count at offset 16 was read": E0 and E1-E4 differ in length as well as
+ * count, so on their own they cannot tell those apart.
+ */
+const freeSizesHandler = (userCount: number): Handler => (req, state) => {
   const body = Buffer.alloc(FREE_SIZES_REPLY_LEN)
-  body.writeUInt32LE(USERS.length, FREE_SIZES_USER_COUNT_OFFSET)
+  body.writeUInt32LE(userCount, FREE_SIZES_USER_COUNT_OFFSET)
   return [reply(state, req, CMD.ACK_OK, body)]
 }
 
@@ -92,26 +105,41 @@ function runPyzk(args: string[]): Promise<Run> {
   })
 }
 
-interface Variant { name: string; experiment: 'E0' | 'E1' | 'E2' | 'E3' | 'E4'; transport: 'tcp' | 'udp'; options: Partial<EmulatorOptions> }
+interface Variant {
+  name: string
+  experiment: 'E0' | 'E1' | 'E2' | 'E3' | 'E4'
+  transport: 'tcp' | 'udp'
+  options: Partial<EmulatorOptions>
+  /**
+   * The count to write into the 80-byte override, or `null` to leave the
+   * emulator's own 68-byte default handler in place.
+   */
+  freeSizesUserCount: number | null
+}
 
 const VARIANTS: Variant[] = [
   // Control: the emulator's own default CMD_GET_FREE_SIZES handler (68
   // bytes, no override below), with userCount served correctly. Exists so
   // the negative half of the finding above — that 68 bytes is NOT enough —
   // is itself a fixture, not just a claim in a comment.
-  { name: 'E0-free-sizes-default-tcp', experiment: 'E0', transport: 'tcp', options: {} },
-  { name: 'E1-no-reply-id-echo-tcp', experiment: 'E1', transport: 'tcp', options: { echoReplyId: false } },
-  { name: 'E1-wrong-session-id-tcp', experiment: 'E1', transport: 'tcp', options: { replySessionIdOverride: 0x2222 } },
-  { name: 'E2-size-at-1-tcp', experiment: 'E2', transport: 'tcp', options: { prepareBufferReply: 'size-at-1' } },
-  { name: 'E2-size-at-0-tcp', experiment: 'E2', transport: 'tcp', options: { prepareBufferReply: 'size-at-0' } },
-  { name: 'E3-chunk-transfer-tcp', experiment: 'E3', transport: 'tcp', options: { chunkReply: 'transfer' } },
-  { name: 'E3-chunk-single-packet-tcp', experiment: 'E3', transport: 'tcp', options: { chunkReply: 'single-packet' } },
-  { name: 'E4-users-72-udp', experiment: 'E4', transport: 'udp', options: { userRecordSize: 72 } },
-  { name: 'E4-users-28-udp', experiment: 'E4', transport: 'udp', options: { userRecordSize: 28 } },
+  { name: 'E0-free-sizes-default-tcp', experiment: 'E0', transport: 'tcp', options: {}, freeSizesUserCount: null },
+  // Second control, holding the reply length fixed at the 80 bytes E1-E4 are
+  // served and varying only the count. E0 vs E1-E4 changes two things at
+  // once, so neither shows on its own whether pyzk gates on the count or
+  // merely on the reply being long enough. This isolates the count.
+  { name: 'E0b-free-sizes-80-count-zero-tcp', experiment: 'E0', transport: 'tcp', options: {}, freeSizesUserCount: 0 },
+  { name: 'E1-no-reply-id-echo-tcp', experiment: 'E1', transport: 'tcp', options: { echoReplyId: false }, freeSizesUserCount: USERS.length },
+  { name: 'E1-wrong-session-id-tcp', experiment: 'E1', transport: 'tcp', options: { replySessionIdOverride: 0x2222 }, freeSizesUserCount: USERS.length },
+  { name: 'E2-size-at-1-tcp', experiment: 'E2', transport: 'tcp', options: { prepareBufferReply: 'size-at-1' }, freeSizesUserCount: USERS.length },
+  { name: 'E2-size-at-0-tcp', experiment: 'E2', transport: 'tcp', options: { prepareBufferReply: 'size-at-0' }, freeSizesUserCount: USERS.length },
+  { name: 'E3-chunk-transfer-tcp', experiment: 'E3', transport: 'tcp', options: { chunkReply: 'transfer' }, freeSizesUserCount: USERS.length },
+  { name: 'E3-chunk-single-packet-tcp', experiment: 'E3', transport: 'tcp', options: { chunkReply: 'single-packet' }, freeSizesUserCount: USERS.length },
+  { name: 'E4-users-72-udp', experiment: 'E4', transport: 'udp', options: { userRecordSize: 72 }, freeSizesUserCount: USERS.length },
+  { name: 'E4-users-28-udp', experiment: 'E4', transport: 'udp', options: { userRecordSize: 28 }, freeSizesUserCount: USERS.length },
 ]
 
 async function runVariant(v: Variant): Promise<void> {
-  const isControl = v.experiment === 'E0'
+  const count = v.freeSizesUserCount
   const emulator = await startEmulator({
     transport: v.transport,
     sessionId: SESSION_ID,
@@ -124,8 +152,8 @@ async function runVariant(v: Variant): Promise<void> {
     // able to drop this override by replacing the whole object — merge
     // instead of letting the spread above win outright. E0 is the one
     // variant that must NOT get it, so its fixture can show the emulator's
-    // unmodified default behaviour.
-    ...(isControl ? {} : { handlers: { ...v.options.handlers, [CMD.GET_FREE_SIZES]: freeSizesHandler } }),
+    // unmodified default behaviour; E0b gets it with a count of 0.
+    ...(count === null ? {} : { handlers: { ...v.options.handlers, [CMD.GET_FREE_SIZES]: freeSizesHandler(count) } }),
   })
   try {
     const run = await runPyzk([String(emulator.port), v.transport, '0', 'read-users'])
@@ -148,9 +176,9 @@ async function runVariant(v: Variant): Promise<void> {
         // pyzk never attempts the read this fixture exists to observe. E0
         // deliberately gets none, to put that negative result in a fixture
         // rather than only in this comment.
-        freeSizesReply: isControl
+        freeSizesReply: count === null
           ? 'default encodeFreeSizes: 68 bytes, userCount 3'
-          : { userCount: USERS.length, replyBytes: FREE_SIZES_REPLY_LEN, userCountOffset: FREE_SIZES_USER_COUNT_OFFSET },
+          : { userCount: count, replyBytes: FREE_SIZES_REPLY_LEN, userCountOffset: FREE_SIZES_USER_COUNT_OFFSET },
       },
       completed: run.spawned && run.exitCode === 0,
       exitCode: run.exitCode,
