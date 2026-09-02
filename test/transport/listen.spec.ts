@@ -220,9 +220,9 @@ for (const kind of ['tcp', 'udp'] as const) {
       await transport.connect(2_000)
       // 30 s: a receive() that ends through its own timer blows this test's
       // budget, so passing means close() is what ended it.
-      const pending = transport.receive(30_000)
+      const pending = transport.receive(30_000).then(() => null, (e: unknown) => e as Error)
       await transport.close()
-      const err = await pending.then(() => null, (e: unknown) => e as Error)
+      const err = await pending
       expect(err).toBeInstanceOf(ZkConnectionError)
       expect(err!.message).toMatch(/closed while a receive was pending/)
       transport = null
