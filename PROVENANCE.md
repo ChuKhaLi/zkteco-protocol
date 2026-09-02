@@ -400,9 +400,79 @@ is a property of the transport, of firmware age, or of the reference's own
 history is not recorded anywhere readable. This library reads 72 on both
 transports and refuses a body that is not a whole number of 72-byte records,
 so a 28-byte device is refused rather than misparsed. Experiment E4 (below,
-under *Black-box experiments against the buffered read*) asks `pyzk` which
-size it expects on each transport. No second decoder exists; adding one would
-be a new hypothesis.
+under *The buffered read — restated from a single readable source*) asks
+`pyzk` which size it expects on each transport. No second decoder exists;
+adding one would be a new hypothesis.
+
+## Reply binding: not implemented, and why
+
+`Session` (v0.5) closes on any timeout and refuses a concurrent request, so a
+late reply can never be collected by a later request (design spec v0.5 §5.2).
+It does **not** compare a reply's session id or reply id to the request, for
+three reasons that are recorded here so the decision is not re-litigated from
+memory:
+
+1. No readable reference validates either id on receive. `zkteco-js` reads
+   the session id out of the `CMD_CONNECT` reply (`ztcp.js:274-275`,
+   `zudp.js:231`) and never compares anything on any later packet; its chunk
+   handlers do not read the header at all (`ztcp.js:380-402`).
+2. No oracle fixture shows a device reply. Every capture under
+   `test/fixtures/oracle/` is what a client SENT.
+3. A wrong guess would be total: a device that does not echo would time out
+   every request, and under §5.2 every timeout closes the session.
+
+Experiment E1 asked the one question askable without hardware — does `pyzk`
+keep working when the emulator stops echoing? — with the results in
+`test/fixtures/oracle/bulk/E1-*.json`. Both variants served a three-user list
+and had `pyzk` call `get_users()`, which runs the full buffered-read exchange
+(`PREPARE_BUFFER`, `READ_BUFFER`, `FREE_DATA`) rather than only the handshake:
+
+| Variant | pyzk completed connect + read | Read as |
+|---|---|---|
+| reply id never echoed (every reply carries reply id 0) | yes — exit 0, printed all three served users | `pyzk` does not require a reply's reply id to match its request's |
+| session id wrong after the handshake (every post-handshake reply carries a session id `pyzk` never agreed to) | yes — exit 0, printed all three served users | `pyzk` does not require a reply's session id to match the one learned at `CONNECT` |
+
+Whatever E1 shows is a fact about `pyzk`, not about a device. Matching stays
+out until a device answers, or until a later cycle takes E1's result as its
+evidence.
+
+## The buffered read — restated from a single readable source
+
+`readBulkBuffered` (v0.5) follows `zkteco-js` at four points, at the
+"source reading" level (design spec v0.5 §6.1). Before v0.5 this library's
+model agreed with nothing but its own emulator.
+
+| Point | This library before v0.5 | The reference | Lines |
+|---|---|---|---|
+| PREPARE_BUFFER request `fct` | 0 for every command | 5 for the user list, 0 for attendance | `helper/command.js:109-110` |
+| PREPARE_BUFFER reply | size at data offset 0 | size at offset 1; a `CMD_DATA` reply is the whole body | `ztcp.js:344-352`, `zudp.js:311` |
+| READ_BUFFER reply | one packet carrying the chunk | PREPARE_DATA, DATA packets, ACK_OK | `zudp.js:335-350`, `ztcp.js:389-395` |
+| READ_BUFFER reply command | never checked | not checked on TCP; a fourth command is an error on UDP | same |
+
+Experiments E2 and E3 put `pyzk` against both models
+(`test/fixtures/oracle/bulk/E2-*.json`, `E3-*.json`). Both experiments needed
+one more thing served correctly first: `pyzk`'s `get_users()` reads a user
+count out of the unrelated `CMD_GET_FREE_SIZES` reply before it will attempt
+any read at all, and gives up silently — `completed: true`, zero users
+printed, no `PREPARE_BUFFER` ever sent — if that count reads as zero. Getting
+real evidence out of E1-E4 required serving a `CMD_GET_FREE_SIZES` reply
+`pyzk` accepts: bisecting black-box (reply length, then which offset carries
+the count) found `pyzk` needs at least 80 bytes with the count as a
+little-endian uint32 at byte offset 16 — the harness in
+`tools/oracle/experiments.ts` records this per fixture under
+`served.freeSizesReply`. Offset 16 happens to match this library's own
+(hardware-unverified) `FREE_SIZES_OFFSET.userCount`; the 80-byte minimum
+length does not match anything this library encodes and is not asserted
+anywhere else. That is corroboration of one offset, not of the whole table —
+"Unverified field offsets" above is unchanged by it.
+
+| Question | Result | Read as |
+|---|---|---|
+| E2: which offset does pyzk read the size at? | `size-at-1`: `pyzk` sent `READ_BUFFER` requesting offset 0, size 220 (`00000000dc000000`) — a sensible request. `size-at-0`: `pyzk` never sent a `READ_BUFFER` at all; it raised `unpack requires a buffer of 4 bytes` decoding the 4-byte `PREPARE_BUFFER` reply itself, before reaching the point of asking for a size. | agrees with the reference: two oracles agree |
+| E3: which chunk shape does pyzk complete a read under? | `transfer`: completed, printed all three served users. `single-packet`: sent three identical `READ_BUFFER` retries, then failed with `pyzk read failed: can't read chunk 0:[220]` — never completed. | agrees with the reference: two oracles agree |
+| E4: which user record size does pyzk expect over UDP? | Both: printed all three served users under a 72-byte-per-record body (`READ_BUFFER` requested 220 bytes) and under a 28-byte-per-record body (requested 88 bytes). | recorded under *User record width and size*; no code change — unlike `zkteco-js`'s fixed 28/72 split by transport, `pyzk` did not fail under either size on UDP |
+
+Neither oracle is a device. The first hardware run is the test either way.
 
 ## Inbound checksums are not validated
 

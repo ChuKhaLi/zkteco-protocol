@@ -1,0 +1,62 @@
+{
+  "experiment": "E4",
+  "variant": "E4-users-28-udp",
+  "transport": "udp",
+  "served": {
+    "users": [
+      "1|100001|Ann",
+      "2|100002|Bo",
+      "3|100003|Cy"
+    ],
+    "options": {
+      "userRecordSize": 28
+    },
+    "freeSizesReply": {
+      "userCount": 3,
+      "replyBytes": 80,
+      "userCountOffset": 16
+    }
+  },
+  "completed": true,
+  "exitCode": 0,
+  "printed": [
+    "1|100001|Ann",
+    "2|100002|Bo",
+    "3|100003|Cy"
+  ],
+  "stderr": "",
+  "sent": [
+    {
+      "command": 1000,
+      "sessionId": 0,
+      "replyId": 0
+    },
+    {
+      "command": 50,
+      "sessionId": 7982,
+      "replyId": 1
+    },
+    {
+      "command": 1503,
+      "sessionId": 7982,
+      "replyId": 2,
+      "data": "0109000500000000000000"
+    },
+    {
+      "command": 1504,
+      "sessionId": 7982,
+      "replyId": 3,
+      "data": "0000000058000000"
+    },
+    {
+      "command": 1502,
+      "sessionId": 7982,
+      "replyId": 4
+    },
+    {
+      "command": 1001,
+      "sessionId": 7982,
+      "replyId": 5
+    }
+  ]
+}

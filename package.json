@@ -26,7 +26,8 @@
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit",
     "release:drill": "node .claude/skills/release-drill/scripts/drill.mjs",
-    "oracle:capture": "tsx tools/oracle/capture.ts"
+    "oracle:capture": "tsx tools/oracle/capture.ts",
+    "oracle:experiments": "tsx tools/oracle/experiments.ts"
   },
   "dependencies": {},
   "devDependencies": {

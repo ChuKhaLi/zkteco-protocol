@@ -49,3 +49,19 @@ pnpm oracle:capture
 Review the diff before committing. A change in these fixtures means a change in
 what the library believes devices expect, and deserves a paragraph in the commit
 message explaining what moved and why.
+
+## Experiments
+
+```bash
+pnpm oracle:experiments
+```
+
+Runs the four black-box experiments (E1-E4, design spec v0.5 §12) that put
+`pyzk` against emulator configurations this project's own code cannot decide
+between on documentation alone — echo-dependence, the `PREPARE_BUFFER` size
+offset, the `READ_BUFFER` chunk shape, and the UDP user-record width. Fixtures
+land in `test/fixtures/oracle/bulk/`, their own directory for the same reason
+as `commkey/`, `realtime/`, and `params/` above. A `pyzk` run that could not be
+spawned, or that exited non-zero, is recorded as `completed: false` with the
+exit code — never folded into a result. See PROVENANCE.md for what each
+experiment showed.
