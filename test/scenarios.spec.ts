@@ -119,20 +119,21 @@ for (const transport of ['tcp', 'udp'] as const) {
       await pollUntil(() => r.received.filter((p) => p.command === CMD.EXIT).length >= 2)
     })
 
-    it('serialises two overlapping connect() calls and leaks nothing', async () => {
+    it('serialises three overlapping connect() calls and leaks nothing', async () => {
       running = await startEmulator({ transport, replyDelayMs: 50 })
       const d = new ZkDevice({ host: '127.0.0.1', port: running.port, transport })
       const a = d.connect()
       const b = d.connect()
-      await Promise.all([a, b])
-      // The two ran in order rather than racing, so exactly one session is
-      // left standing and it answers requests.
+      const c = d.connect()
+      await Promise.all([a, b, c])
+      // The three ran strictly in order rather than racing, so exactly one
+      // session is left standing and it answers requests.
       await d.getInfo()
       await d.disconnect()
-      // One EXIT for the session the second connect() closed on its way in,
-      // one for the session disconnect() closed on its way out.
+      // One EXIT per session that ever existed: the two connect() replaced
+      // on its way in, plus the one disconnect() closed on its way out.
       const r = running
-      await pollUntil(() => r.received.filter((p) => p.command === CMD.EXIT).length >= 2)
+      await pollUntil(() => r.received.filter((p) => p.command === CMD.EXIT).length >= 3)
       if (transport === 'tcp') {
         await new Promise((resolve) => setTimeout(resolve, 100))
         expect(running.sockets.size).toBe(0)

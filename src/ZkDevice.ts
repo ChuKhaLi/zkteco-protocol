@@ -78,21 +78,24 @@ export class ZkDevice {
    * subscription is ended and any existing session is closed first, so a
    * second connect() cannot leak the first socket, nor leave a caller's
    * earlier stream awaiting an event that will never arrive. Safe to call
-   * again while a previous call is still in flight, too: the two run in
-   * order rather than racing, so the second closes whatever the first
-   * opened rather than leaking it. A disconnect() issued at any point during
-   * a connect() — including during this cleanup — closes whatever that
-   * connect() opened rather than letting it install after disconnect() has
-   * already returned.
+   * again while a previous call — or any number of them — is still in
+   * flight, too: every connect() chains on the one before it, so
+   * overlapping calls run strictly in order and each closes what the
+   * previous one opened rather than racing it or leaking it. A
+   * disconnect() issued at any point during a connect() — including during
+   * this cleanup — closes whatever that connect() opened rather than
+   * letting it install after disconnect() has already returned.
    */
   async connect(): Promise<void> {
-    // A connect already in flight finishes first, so two overlapping calls
-    // run in order and the second closes what the first opened.
+    // Every connect() chains on the one before it, so any number of
+    // overlapping calls run strictly in order and each closes what the
+    // previous one opened. Tracked from the first statement, before any
+    // await: a disconnect() issued at any point sees the latest connect.
     const prior = this.connecting
-    if (prior) await prior.catch(() => {})
-    // Tracked from this first statement, before any await: a disconnect()
-    // issued during the cleanup below must still see this connect.
-    const opening = this.connectSequence()
+    const opening = (async () => {
+      if (prior) await prior.catch(() => {})
+      await this.connectSequence()
+    })()
     this.connecting = opening
     try {
       await opening
