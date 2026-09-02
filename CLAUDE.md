@@ -71,7 +71,8 @@ Four layers, each unaware of the one above it:
   sequencing, per-request deadlines. `execute()` throws on ACK_ERROR and ACK_UNAUTH; `tryExecute()`
   returns them for call sites where a refusal is a normal answer. `dataRead.ts` holds `readBulk`,
   which tries the buffered path (PREPARE_BUFFER / READ_BUFFER / FREE_DATA) and falls back to the
-  legacy exchange on exactly `ZkProtocolError`.
+  legacy exchange only when the device answers PREPARE_BUFFER with `ACK_ERROR`; every other failure
+  propagates.
 - **`src/commands/` + `src/ZkDevice.ts`** — the public facade. `src/index.ts` is the entire
   published surface; `test/smoke.spec.ts` pins it.
 

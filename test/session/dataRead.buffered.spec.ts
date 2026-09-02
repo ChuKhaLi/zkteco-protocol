@@ -4,6 +4,7 @@ import { Session } from '../../src/session/Session.js'
 import { TcpTransport } from '../../src/transport/tcp.js'
 import { UdpTransport } from '../../src/transport/udp.js'
 import { CMD, MAX_CHUNK } from '../../src/codec/commands.js'
+import { ZkFramingError } from '../../src/errors.js'
 import { reply, startEmulator, type Emulator } from '../emulator/index.js'
 
 let running: Emulator | null = null
@@ -166,6 +167,24 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       const stream = await readBulk(session, CMD.ATTLOG_RRQ, transportKind)
       expect(stream.readUInt32LE(0)).toBe(16)
       expect(running.received.map((p) => p.command)).toContain(CMD.FREE_DATA)
+    })
+
+    it.skipIf(transportKind !== 'tcp')('does not fall back when the buffered read fails for any reason but a refusal', async () => {
+      // A framing failure during the buffered read used to be caught as a
+      // ZkProtocolError and retried down the legacy path on a broken stream
+      // (review R2). Only an ACK_ERROR to PREPARE_BUFFER is a refusal.
+      running = await startEmulator({
+        transport: 'tcp',
+        records: { size: 8, rows: [rec8(1)] },
+        handlers: { [CMD.PREPARE_BUFFER]: () => null },
+      })
+      session = await openSession(running.port)
+      const pending = readBulk(session, CMD.ATTLOG_RRQ, 'tcp')
+      await new Promise((r) => setTimeout(r, 50))
+      for (const socket of running.sockets) socket.write(Buffer.from('deadbeefdeadbeef', 'hex'))
+      await expect(pending).rejects.toBeInstanceOf(ZkFramingError)
+      expect(running.received.map((p) => p.command)).not.toContain(CMD.ATTLOG_RRQ)
+      session = null
     })
   })
 }

@@ -222,67 +222,29 @@ export async function readBulkBuffered(
 
 /**
  * Reads a bulk payload, preferring the buffered commands and falling back to
- * the legacy exchange when the device refuses them. Older firmware does not
- * implement 1503/1504 at all.
+ * the legacy exchange when — and only when — the device answers
+ * PREPARE_BUFFER with ACK_ERROR. Older firmware does not implement 1503/1504
+ * at all, and that refusal is the one signal of it.
  *
- * Only `ZkProtocolError` triggers the fallback — that's what `Session.execute`
- * throws when the device answers CMD_ACK_ERROR, which is the signal that the
- * buffered commands were refused. `ZkConnectionError` and `ZkTimeoutError`
- * mean the socket dropped or the device went silent; retrying the whole read
- * down a different path would only double the wait before the caller learns
- * something went wrong, so those propagate unchanged.
+ * Everything else propagates: a framing failure (the stream is misaligned;
+ * the session has already ended), a malformed size reply, a chunk that stops
+ * short or overshoots, a timeout, a dropped connection, and ACK_UNAUTH (the
+ * device said this session is not authorized, and whatever the legacy path
+ * returned after that could not be trusted whether or not it looked
+ * complete). Until v0.5 the fallback fired on any ZkProtocolError from six
+ * throw sites plus the unframer, which is how a misaligned TCP stream was
+ * retried down the legacy path and reported as a firmware capability.
  *
- * `ZkAuthError` propagates for a sharper reason, and it is why `Session.execute`
- * raises CMD_ACK_UNAUTH as a sibling class rather than a ZkProtocolError
- * subtype. Before v0.3.1 an ACK_UNAUTH reply to PREPARE_BUFFER failed
- * readBulkBuffered's 4-byte size check AS a ZkProtocolError — which is
- * exactly the signal this catch reads as "1503 unimplemented" — so an
- * authentication failure was diagnosed as a firmware capability and retried
- * down the legacy path. Whatever that path returns was produced after the
- * device said the session was not authorized, so it cannot be trusted
- * whether or not it looks complete. That it can look entirely complete is
- * demonstrated, not supposed: deleting the guard in Session.execute makes the
- * ACK_UNAUTH case in test/commands/users.spec.ts resolve with a full user
- * list instead of throwing.
- *
- * (Authorization is a property of the session rather than of one command, so
- * a device refusing PREPARE_BUFFER on those grounds has no evident reason to
- * answer the legacy request differently — but no device has been observed,
- * and nothing above rests on that inference.)
+ * Firmware answering an unknown 1503 with silence never reaches the fallback
+ * — accepted, as before, and worth revisiting once a real device has been
+ * observed.
  */
 export async function readBulk(
   session: Session,
   command: number,
   transport: 'tcp' | 'udp',
 ): Promise<Buffer> {
-  try {
-    // TODO(Task 14): readBulkBuffered now returns null instead of throwing on
-    // ACK_ERROR; readBulk's dispatch logic still wants a thrown
-    // ZkProtocolError to trigger the catch below. This re-throws in the
-    // meantime so the file typechecks; Task 14 replaces this with real
-    // null-based dispatch.
-    const body = await readBulkBuffered(session, command, MAX_CHUNK[transport])
-    if (body === null) throw new ZkProtocolError('device rejected command 1503')
-    return body
-  } catch (err) {
-    if (!(err instanceof ZkProtocolError)) throw err
-    // A ZkProtocolError here can occur after PREPARE_BUFFER already
-    // succeeded (e.g. a later READ_BUFFER failing the total-bytes check),
-    // which leaves the device holding buffer state from the aborted
-    // attempt. Release it before falling back.
-    //
-    // freeBuffer swallows only ZkProtocolError — it deliberately rethrows a
-    // timeout or a dropped connection, because those leave a reply
-    // unconsumed and the session desynchronised. So this call CAN throw, and
-    // a FREE_DATA timeout during cleanup aborts the whole read rather than
-    // continuing to the legacy path. That is intended: falling back across a
-    // possible desync is worse than failing outright, since a one-packet
-    // shift still satisfies the record-size check and produces misaligned
-    // records no caller can distinguish from good ones. The cost is that
-    // firmware answering an unknown 1503 with silence rather than an error
-    // never reaches the legacy fallback — accepted, and worth revisiting
-    // once a real device has been observed.
-    await freeBuffer(session)
-    return readBulkLegacy(session, command)
-  }
+  const buffered = await readBulkBuffered(session, command, MAX_CHUNK[transport])
+  if (buffered !== null) return buffered
+  return readBulkLegacy(session, command)
 }
