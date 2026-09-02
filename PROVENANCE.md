@@ -487,9 +487,12 @@ printed, and whether a `PREPARE_BUFFER` was sent at all.
 
 Offset 16 happens to match this library's own (hardware-unverified)
 `FREE_SIZES_OFFSET.userCount`. Nothing here claims 80 bytes or offset 16 are
-minimal or exact: intermediate lengths were never tried, no other offset was
-ever tried, and E0's 68-byte reply carries its count at offset 16 too, so what
-stopped E0 was the length. The whole of what these fixtures support is that a
+minimal or exact: intermediate lengths were never tried and no other offset
+was. What stopped E0 was the length alone — `encodeFreeSizes` writes only
+`userCount` at 16, `recordCount` at 32 and `recordCapacity` at 64 into a
+zeroed 68-byte buffer, and the two latter are served as 0, so E0's bytes are
+identical to the first 68 of the 80-byte override and the twelve trailing
+zeros are the entire difference. The whole of what these fixtures support is that a
 count of 3 at offset 16 in an 80-byte reply is read, and a count of 0 there is
 not. That is a fact about `pyzk`'s parser, not corroboration of the offset
 table — "Unverified field offsets" above is unchanged by it.

@@ -269,6 +269,16 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       await expect(pending).rejects.toBeInstanceOf(ZkConnectionError)
       await expect(session.close()).resolves.toBeUndefined()
       expect(socketOf(transport)).toBeNull()
+
+      // UDP only. This is where the goodbye earns its keep — there is no
+      // connection close to tell the device the session is over, and the
+      // socket is still alive to carry it. The TCP half is not asserted
+      // because the emitted 'error' does not destroy the socket the way a
+      // real one does, so an EXIT here would be a fact about the simulation.
+      if (transportKind === 'udp') {
+        await new Promise((r) => setTimeout(r, 100))
+        expect(running.received.map((p) => p.command)).toContain(CMD.EXIT)
+      }
     })
 
     // Named for what it proves. It used to say "and sends the goodbye", which
