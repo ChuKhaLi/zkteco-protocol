@@ -106,6 +106,23 @@ describe('Subscription', () => {
     expect(closed()).toBe(1)
   })
 
+  it('stays failed after close(): next() still rejects with the original error', async () => {
+    const { session } = fakeSession()
+    const sub = new Subscription(session, opts)
+    sub.fail(new ZkConnectionError('peer went away'))
+    await sub.close()
+    await expect(sub[Symbol.asyncIterator]().next()).rejects.toThrow(ZkConnectionError)
+  })
+
+  it('closes the session exactly once even when closed after a failure', async () => {
+    const { session, closed } = fakeSession()
+    const sub = new Subscription(session, opts)
+    sub.fail(new ZkConnectionError('peer went away'))
+    await sub.close()
+    await sub.close()
+    expect(closed()).toBe(1)
+  })
+
   it('closes the session when a consumer leaves the loop early', async () => {
     // `for await` calls the iterator's return() when the body breaks. Without
     // one, the obvious consumer loop -- take a few events, break -- leaves the

@@ -59,7 +59,10 @@ type State =
   | { kind: 'registering' }
   | { kind: 'live' }
   | { kind: 'failed'; error: Error }
-  | { kind: 'closed' }
+  // `error` is carried over from `failed`, not dropped: a stream that died
+  // with an error must not turn into a clean end-of-stream just because the
+  // consumer calls close() (e.g. from a `finally`) after observing it.
+  | { kind: 'closed'; error?: Error }
 
 interface Pending {
   resolve: (result: IteratorResult<ZkRealtimeEvent>) => void
@@ -153,10 +156,18 @@ export class Subscription implements ZkEventStream {
           case 'failed':
             return Promise.reject(this.state.error)
           case 'closed':
-            return Promise.resolve({ value: undefined, done: true })
+            return this.state.error
+              ? Promise.reject(this.state.error)
+              : Promise.resolve({ value: undefined, done: true })
           case 'registering':
           case 'live':
             break
+          default: {
+            // Exhaustiveness guard: a fifth state must fail loudly here
+            // rather than silently falling through to the pending branch.
+            const exhaustive: never = this.state
+            throw new Error(`unreachable state ${String(exhaustive)}`)
+          }
         }
         if (this.pending) {
           // There is one waiter slot. A second concurrent next() would
@@ -202,12 +213,24 @@ export class Subscription implements ZkEventStream {
     }
   }
 
-  /** Ends the subscription and the connection it rides on. Idempotent. */
+  /**
+   * Ends the subscription and the connection it rides on. Idempotent.
+   *
+   * A stream that already failed stays failed: the error survives into the
+   * closed state (see `State`) rather than being dropped in favour of a
+   * clean `done: true`, and a pending waiter is rejected with it rather than
+   * resolved.
+   */
   async close(): Promise<void> {
     if (this.state.kind === 'closed') return
-    this.state = { kind: 'closed' }
+    const error = this.state.kind === 'failed' ? this.state.error : undefined
+    this.state = error ? { kind: 'closed', error } : { kind: 'closed' }
     this.clearIdleTimer()
-    this.takePending()?.resolve({ value: undefined, done: true })
+    const pending = this.takePending()
+    if (pending) {
+      if (error) pending.reject(error)
+      else pending.resolve({ value: undefined, done: true })
+    }
     await this.session.close()
   }
 
