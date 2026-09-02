@@ -90,4 +90,26 @@ describe('toolchain', () => {
       'decodeZkTime6',
     ])
   })
+
+  it('ships the CLI as ESM only, and the library with a declaration per format', async () => {
+    const { existsSync } = await import('node:fs')
+    expect(existsSync('dist/cli.js')).toBe(true)
+    // A CommonJS bundle of cli.ts shims import.meta to {}, so its main-module
+    // check was always false and it exited 0 having done nothing (review R15).
+    // It is not fixed; it is not built.
+    expect(existsSync('dist/cli.cjs')).toBe(false)
+    expect(existsSync('dist/index.d.ts')).toBe(true)
+    expect(existsSync('dist/index.d.cts')).toBe(true)
+  })
+
+  it('points each export condition at its own declaration file', async () => {
+    const { readFileSync } = await import('node:fs')
+    const pkg = JSON.parse(readFileSync('package.json', 'utf8')) as {
+      exports: { '.': { import: { types: string }; require: { types: string } } }
+    }
+    // One top-level `types` sent CommonJS TypeScript consumers to the ESM
+    // declaration and TS1479 (review R12).
+    expect(pkg.exports['.'].import.types).toBe('./dist/index.d.ts')
+    expect(pkg.exports['.'].require.types).toBe('./dist/index.d.cts')
+  })
 })
