@@ -231,6 +231,27 @@ export class Session {
    * queue for the next request (review R1, second half).
    */
   private async exchange<T>(fn: () => Promise<T>): Promise<T> {
+    // A subscribed session's socket is listening, so a request's reply would
+    // arrive at the listener rather than at a receive(), and the transport
+    // would refuse the receive() itself with its OWN ZkConnectionError --
+    // "this transport is listening for events; receive() is not available".
+    // That message is about a perfectly healthy socket, not a dead one, and
+    // the catch block below cannot tell it apart from a transport that
+    // really died -- it would clear open_ and leave abandon() unreached,
+    // skipping the goodbye and the transport close (review R2). Refusing
+    // here, before transmit(), keeps both of the transport's own refusals
+    // ("listening", "already pending") unreachable from Session, so the
+    // catch below only ever sees a transport that genuinely failed, and it
+    // stops a request being sent onto a listening socket in the first place.
+    // subscribe() sends CMD_REG_EVENT through this same path before
+    // `subscribed_` is set, so its own registration is unaffected; close()'s
+    // non-subscribed goodbye only runs when this guard would not fire; and
+    // abandon() transmits its EXIT directly, bypassing exchange() entirely.
+    if (this.subscribed_) {
+      throw new ZkConnectionError(
+        'this session is subscribed to realtime events and cannot make requests; close the stream and reconnect to read',
+      )
+    }
     if (this.inFlight) {
       throw new ZkConnectionError(
         'a request is already in flight on this session; issue one at a time',

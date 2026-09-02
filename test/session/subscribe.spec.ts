@@ -126,5 +126,41 @@ for (const kind of ['tcp', 'udp'] as const) {
       expect(refusal).toBeInstanceOf(ZkConnectionError)
       expect((refusal as Error).message).toMatch(/this session is not open/)
     })
+
+    // A subscribed session's socket is listening: a request's reply would
+    // land at the listener, not at a receive(), and the transport itself
+    // would refuse the receive() with its own "listening" message -- which
+    // is not the transport being dead, so exchange()'s ZkConnectionError
+    // branch must never see it. The guard belongs in Session, before
+    // anything reaches the transport.
+    it('refuses a request while subscribed before transmitting, and can still be closed', async () => {
+      running = await startEmulator({ transport: kind })
+      session = new Session(make(running.port), { timeoutMs: 2000 })
+      await session.open()
+      await session.subscribe(EVENT_FLAG.ATTENDANCE, () => {}, () => {})
+
+      const refusal = await session.execute(CMD.GET_FREE_SIZES).then(() => null, (e: unknown) => e as Error)
+      expect(refusal).toBeInstanceOf(ZkConnectionError)
+      expect(refusal!.message).toMatch(/subscribed to realtime events/)
+      // Nothing was transmitted: the guard fired before transmit().
+      expect(running.received.map((p) => p.command)).not.toContain(CMD.GET_FREE_SIZES)
+
+      await session.close()
+      // The write is flushed locally before the socket closes, but the
+      // emulator only sees it on its own event loop tick -- close() resolving
+      // does not mean the peer has processed EXIT yet (same reasoning as
+      // test/realtime/scenarios.spec.ts's pollUntil for CMD.EXIT), so this
+      // polls rather than racing a synchronous check.
+      const deadline = Date.now() + 2000
+      while (!running.received.some((p) => p.command === CMD.EXIT)) {
+        if (Date.now() >= deadline) throw new Error('CMD.EXIT was never received by the emulator')
+        await new Promise((r) => setTimeout(r, 5))
+      }
+      if (kind === 'tcp') {
+        await new Promise((r) => setTimeout(r, 100))
+        expect(running.sockets.size).toBe(0)
+      }
+      session = null
+    })
   })
 }
