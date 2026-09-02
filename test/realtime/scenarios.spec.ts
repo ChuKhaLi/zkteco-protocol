@@ -161,15 +161,24 @@ for (const transport of ['tcp', 'udp'] as const) {
       await expect(take(stream, 1)).rejects.toThrow(/payload shorter than the 8-byte header/)
     })
 
-    // Scenario 7
-    it('times out and stays in request mode when the registration is never acked', async () => {
+    // Scenario 7 — a registration that TIMES OUT, not one that is refused.
+    // A refused registration (ACK_ERROR) costs one call and leaves the session
+    // usable (design spec v0.2 §3.4). A timeout is different: the ack may
+    // still be coming, and the next request would collect it as its own —
+    // exactly the desync spec v0.5 §5.2 exists to prevent. So this now ends
+    // the session like every other timed-out exchange.
+    it('times out and closes the session when the registration is never acked', async () => {
       running = await startEmulator({
         transport,
         handlers: { [CMD.REG_EVENT]: () => null },
       })
       device = await connect(running)
       await expect(device.subscribe()).rejects.toThrow(ZkTimeoutError)
-      // Still in request mode: a read command works rather than being refused.
+      const refused = await device.getInfo().then(() => null, (e: unknown) => e as Error)
+      expect(refused).toBeInstanceOf(ZkConnectionError)
+      expect(refused!.message).toMatch(/this session is not open/)
+      // Reconnecting recovers: a fresh session answers normally again.
+      await device.connect()
       await expect(device.getInfo()).resolves.toBeDefined()
     })
 
