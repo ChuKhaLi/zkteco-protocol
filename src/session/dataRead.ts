@@ -1,4 +1,4 @@
-import { CMD, MAX_CHUNK } from '../codec/commands.js'
+import { BUFFER_FCT, CMD, MAX_CHUNK } from '../codec/commands.js'
 import type { DecodedPacket } from '../codec/packet.js'
 import { ZkAuthError, ZkProtocolError } from '../errors.js'
 import type { Session } from './Session.js'
@@ -159,57 +159,64 @@ async function freeBuffer(session: Session): Promise<void> {
 }
 
 /**
- * Reads a bulk payload through the buffered commands.
+ * Reads a bulk payload through the buffered commands, the way the readable
+ * reference does (spec v0.5 §6.1; zkteco-js ztcp.js:320-462, zudp.js:283-360).
  *
  * _CMD_PREPARE_BUFFER (1503) and _CMD_READ_BUFFER (1504) are undocumented by
- * the vendor. The request shapes here follow published protocol write-ups and
- * are unverified against hardware, which is exactly why `readBulk` keeps the
- * legacy path as a fallback rather than treating a refusal as fatal.
+ * the vendor. Until v0.5 this library's model of them agreed with nothing but
+ * its own emulator. Four points now follow the reference:
+ *   1. the request's fct is per command (BUFFER_FCT);
+ *   2. a CMD_DATA reply to PREPARE_BUFFER is the whole body; otherwise the
+ *      total is the uint32 at data offset 1 (byte 0 is not interpreted);
+ *   3. each READ_BUFFER is answered by a transfer — see readTransfer;
+ *   4. no command is required beyond what the reference's UDP handler checks.
+ *
+ * Returns null when the device answers PREPARE_BUFFER with ACK_ERROR — the
+ * one signal that this firmware does not implement 1503 — so readBulk can
+ * fall back on exactly that and on nothing else. ACK_UNAUTH throws
+ * ZkAuthError here for the reason Session.execute's docblock gives: this is
+ * the one tryExecute caller that must not inherit the fallback.
  */
 export async function readBulkBuffered(
   session: Session,
   command: number,
   maxChunk: number,
-): Promise<Buffer> {
+): Promise<Buffer | null> {
   // <int8 1><int16 command><int32 fct><int32 ext>
   const request = Buffer.alloc(11)
   request.writeUInt8(1, 0)
   request.writeUInt16LE(command, 1)
-  request.writeUInt32LE(0, 3)
+  request.writeUInt32LE(BUFFER_FCT[command] ?? 0, 3)
   request.writeUInt32LE(0, 7)
 
-  const prepared = await session.execute(CMD.PREPARE_BUFFER, request)
-  if (prepared.data.length < 4) {
+  const prepared = await session.tryExecute(CMD.PREPARE_BUFFER, request)
+  if (prepared.command === CMD.ACK_ERROR) return null
+  if (prepared.command === CMD.ACK_UNAUTH) {
+    throw new ZkAuthError(
+      `command ${CMD.PREPARE_BUFFER} answered ACK_UNAUTH: the device did not authorize this request`,
+      prepared.data,
+    )
+  }
+  if (prepared.command === CMD.DATA) {
+    await freeBuffer(session)
+    return prepared.data
+  }
+  if (prepared.data.length < 5) {
     throw new ZkProtocolError('PREPARE_BUFFER did not report a size', prepared.data)
   }
-  const total = prepared.data.readUInt32LE(0)
+  const total = prepared.data.readUInt32LE(1)
 
   const chunks: Buffer[] = []
   let offset = 0
-  // Strictly sequential, same reasoning as readBulkLegacy: the transport
-  // rejects a second receive() while one is already in flight.
   while (offset < total) {
     const want = Math.min(maxChunk, total - offset)
     const req = Buffer.alloc(8)
     req.writeUInt32LE(offset, 0)
     req.writeUInt32LE(want, 4)
-    const res = await session.execute(CMD.READ_BUFFER, req)
-    if (res.data.length === 0) {
-      // A chunk that comes back empty before `total` bytes have arrived is a
-      // transfer that ended early. Returning what arrived so far would hand
-      // the record parser a body that looks complete but isn't.
-      throw new ZkProtocolError(`READ_BUFFER returned nothing at offset ${offset}`)
-    }
-    chunks.push(res.data)
-    offset += res.data.length
-  }
-
-  // The loop above only guards against a reply that stops short. A reply
-  // that overshoots — more bytes than `want`, past `total` in aggregate — is
-  // the mirror image: it exits the loop just as cleanly, and without this
-  // check would hand back a silently oversized buffer instead of failing.
-  if (offset !== total) {
-    throw new ZkProtocolError(`READ_BUFFER delivered ${offset} bytes total, expected ${total}`)
+    const opening = await session.execute(CMD.READ_BUFFER, req)
+    const chunk = await readTransfer(session, want, opening)
+    chunks.push(chunk)
+    offset += chunk.length
   }
 
   await freeBuffer(session)
@@ -252,7 +259,14 @@ export async function readBulk(
   transport: 'tcp' | 'udp',
 ): Promise<Buffer> {
   try {
-    return await readBulkBuffered(session, command, MAX_CHUNK[transport])
+    // TODO(Task 14): readBulkBuffered now returns null instead of throwing on
+    // ACK_ERROR; readBulk's dispatch logic still wants a thrown
+    // ZkProtocolError to trigger the catch below. This re-throws in the
+    // meantime so the file typechecks; Task 14 replaces this with real
+    // null-based dispatch.
+    const body = await readBulkBuffered(session, command, MAX_CHUNK[transport])
+    if (body === null) throw new ZkProtocolError('device rejected command 1503')
+    return body
   } catch (err) {
     if (!(err instanceof ZkProtocolError)) throw err
     // A ZkProtocolError here can occur after PREPARE_BUFFER already

@@ -34,6 +34,23 @@ export interface EmulatorOptions {
    * exercise a device that overshoots past the declared total.
    */
   bufferChunkOverride?: { atCall: number; bytes: number }
+  /**
+   * Where the PREPARE_BUFFER reply carries its size. 'size-at-1' is the
+   * reference's layout (zkteco-js reads `readUIntLE(1, 4)`), five bytes with
+   * byte 0 written as 0x00 — its meaning is not recorded anywhere readable.
+   * 'size-at-0' is the four-byte layout this library believed before v0.5,
+   * kept for experiment E2 (spec v0.5 §12) and deletable after it.
+   */
+  prepareBufferReply?: 'size-at-1' | 'size-at-0'
+  /**
+   * How each READ_BUFFER request is answered. 'transfer' is the reference's
+   * shape: PREPARE_DATA, DATA packets, ACK_OK (spec v0.5 §6.1 point 3).
+   * 'single-packet' is one ACK_DATA carrying the chunk, the v0.4 model, kept
+   * for experiment E3 and deletable after it.
+   */
+  chunkReply?: 'transfer' | 'single-packet'
+  /** Answers PREPARE_BUFFER with the whole body inline as CMD_DATA (§6.1 point 2). */
+  prepareBufferInline?: boolean
   handlers?: Partial<HandlerTable>
   /**
    * Device parameters, keyed by keyword. A keyword NOT present here is
@@ -108,6 +125,8 @@ export interface EmulatorState {
   chunksSent: number
   /** The body a buffered read (PREPARE_BUFFER/READ_BUFFER) is currently serving. */
   pendingBuffer: Buffer | null
+  /** The fct field of the last PREPARE_BUFFER request, so a test can pin it. */
+  lastPrepareFct: number | null
   /** Set by the transport layer so a handler can end the connection. */
   dropConnection: boolean
   opts: EmulatorOptions
@@ -257,9 +276,12 @@ const bufferedHandlers: HandlerTable = {
     if (!state.supportsBuffer) return [reply(state, req, CMD.ACK_ERROR)]
     // Request body: <int8 1><int16 command><int32 fct><int32 ext>
     const command = req.data.readUInt16LE(1)
+    state.lastPrepareFct = req.data.readUInt32LE(3)
     state.pendingBuffer = bufferedStream(state, command)
-    const size = Buffer.alloc(4)
-    size.writeUInt32LE(state.pendingBuffer.length, 0)
+    if (state.opts.prepareBufferInline) return [reply(state, req, CMD.DATA, state.pendingBuffer)]
+    const layout = state.opts.prepareBufferReply ?? 'size-at-1'
+    const size = Buffer.alloc(layout === 'size-at-1' ? 5 : 4)
+    size.writeUInt32LE(state.pendingBuffer.length, layout === 'size-at-1' ? 1 : 0)
     return [reply(state, req, CMD.ACK_OK, size)]
   },
   [CMD.READ_BUFFER]: (req, state) => {
@@ -276,16 +298,27 @@ const bufferedHandlers: HandlerTable = {
       state.dropConnection = true
       return []
     }
+    // bufferChunkOverride overrides the DATA total of this chunk: fewer
+    // bytes than asked, or more, to exercise both refusals in readTransfer.
     const override = state.opts.bufferChunkOverride
     const take = override && state.chunksSent === override.atCall ? override.bytes : want
     let slice = state.pendingBuffer.subarray(offset, offset + take)
-    // subarray clamps to the buffer's own length, so an override asking for
-    // more bytes than remain there needs padding to actually simulate a
-    // device sending more bytes than were requested.
-    if (slice.length < take) {
-      slice = Buffer.concat([slice, Buffer.alloc(take - slice.length)])
+    if (slice.length < take) slice = Buffer.concat([slice, Buffer.alloc(take - slice.length)])
+    if ((state.opts.chunkReply ?? 'transfer') === 'single-packet') {
+      return [reply(state, req, CMD.ACK_DATA, slice)]
     }
-    return [reply(state, req, CMD.ACK_DATA, slice)]
+    // The reference's shape: an announcement (8 bytes, size at 0, rest
+    // zero), DATA pieces, ACK_OK. `chunkSize` sizes the pieces, as it does
+    // for the legacy transfer.
+    const announce = Buffer.alloc(8)
+    announce.writeUInt32LE(slice.length, 0)
+    const out = [reply(state, req, CMD.PREPARE_DATA, announce)]
+    const piece = state.opts.chunkSize ?? 1024
+    for (let off = 0; off < slice.length; off += piece) {
+      out.push(reply(state, req, CMD.DATA, slice.subarray(off, off + piece)))
+    }
+    out.push(reply(state, req, CMD.ACK_OK))
+    return out
   },
 }
 
@@ -389,6 +422,7 @@ function buildState(opts: EmulatorOptions): EmulatorState {
     supportsBuffer: opts.supportsBuffer ?? true,
     chunksSent: 0,
     pendingBuffer: null,
+    lastPrepareFct: null,
     dropConnection: false,
     opts,
     info: opts.info ?? { userCount: 0, recordCount: 0, recordCapacity: 0 },

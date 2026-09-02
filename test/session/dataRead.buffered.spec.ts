@@ -34,79 +34,79 @@ for (const transportKind of ['tcp', 'udp'] as const) {
 
   describe(`buffered bulk read over ${transportKind}`, () => {
     it('reads a body through PREPARE_BUFFER and READ_BUFFER', async () => {
-      running = await startEmulator({
-        transport: transportKind,
-        records: { size: 8, rows: [rec8(1), rec8(2), rec8(3)] },
-      })
+      running = await startEmulator({ transport: transportKind, records: { size: 8, rows: [rec8(1), rec8(2), rec8(3)] } })
       session = await openSession(running.port)
       const stream = await readBulkBuffered(session, CMD.ATTLOG_RRQ, MAX_CHUNK[transportKind])
-      expect(stream.readUInt32LE(0)).toBe(24)
-      expect(stream.length).toBe(28)
+      expect(stream).not.toBeNull()
+      expect(stream!.readUInt32LE(0)).toBe(24)
+      expect(stream!.length).toBe(28)
+    })
+
+    it('reads the total from offset 1 of the PREPARE_BUFFER reply, as the reference does', async () => {
+      // 'size-at-0' is the layout this library believed before v0.5. Under it
+      // the total read at offset 1 is garbage, so the read must fail loudly.
+      running = await startEmulator({ transport: transportKind, records: { size: 8, rows: [rec8(1)] }, prepareBufferReply: 'size-at-0' })
+      session = await openSession(running.port)
+      await expect(readBulkBuffered(session, CMD.ATTLOG_RRQ, MAX_CHUNK[transportKind])).rejects.toThrow(ZkProtocolError)
+    })
+
+    it('accepts an inline CMD_DATA answer to PREPARE_BUFFER as the whole body', async () => {
+      running = await startEmulator({ transport: transportKind, records: { size: 8, rows: [rec8(1), rec8(2)] }, prepareBufferInline: true })
+      session = await openSession(running.port)
+      const stream = await readBulkBuffered(session, CMD.ATTLOG_RRQ, MAX_CHUNK[transportKind])
+      expect(stream!.readUInt32LE(0)).toBe(16)
+      expect(running.received.map((p) => p.command)).not.toContain(CMD.READ_BUFFER)
     })
 
     it('requests successive offsets when the body exceeds one chunk', async () => {
       const rows = Array.from({ length: 100 }, (_, i) => rec8(i + 1))
-      running = await startEmulator({ transport: transportKind, records: { size: 8, rows } })
+      running = await startEmulator({ transport: transportKind, records: { size: 8, rows }, chunkSize: 16 })
       session = await openSession(running.port)
       const stream = await readBulkBuffered(session, CMD.ATTLOG_RRQ, 64)
-      expect(stream.length).toBe(804)
+      expect(stream!.length).toBe(804)
       const reads = running.received.filter((p) => p.command === CMD.READ_BUFFER)
-      expect(reads.length).toBeGreaterThan(1)
+      expect(reads.length).toBe(13) // ceil(804 / 64)
       expect(reads[1]!.data.readUInt32LE(0)).toBe(64)
     })
 
-    it('advances the next offset by what actually arrived, not by what was requested', async () => {
-      // The first READ_BUFFER call is answered with 32 bytes instead of the
-      // 64 requested — a valid short read that does not end the transfer.
-      // The next request must ask for offset 32, the true end of what
-      // arrived; a build that tracks progress as `offset += want` would ask
-      // for offset 64 instead and silently skip 32 bytes of the body.
+    it('refuses a chunk that ends before the requested size', async () => {
+      // 32 bytes served for 64 asked. The reference would wait for its timer;
+      // this library says so at once (spec v0.5 §6.1 point 3).
       const rows = Array.from({ length: 100 }, (_, i) => rec8(i + 1))
-      running = await startEmulator({
-        transport: transportKind,
-        records: { size: 8, rows },
-        bufferChunkOverride: { atCall: 1, bytes: 32 },
-      })
+      running = await startEmulator({ transport: transportKind, records: { size: 8, rows }, bufferChunkOverride: { atCall: 1, bytes: 32 } })
       session = await openSession(running.port)
-      const stream = await readBulkBuffered(session, CMD.ATTLOG_RRQ, 64)
-      expect(stream.length).toBe(804)
-      const reads = running.received.filter((p) => p.command === CMD.READ_BUFFER)
-      expect(reads[1]!.data.readUInt32LE(0)).toBe(32)
+      await expect(readBulkBuffered(session, CMD.ATTLOG_RRQ, 64)).rejects.toThrow(/ended after 32 of 64/)
     })
 
-    it('throws when a chunk delivers more bytes than the declared total', async () => {
-      // A single-chunk transfer whose only READ_BUFFER reply overshoots past
-      // the size PREPARE_BUFFER declared. This must fail loudly rather than
-      // hand back a silently oversized buffer.
-      running = await startEmulator({
-        transport: transportKind,
-        records: { size: 8, rows: [rec8(1)] },
-        bufferChunkOverride: { atCall: 1, bytes: 40 },
-      })
+    it('refuses a chunk that delivers more than the requested size', async () => {
+      running = await startEmulator({ transport: transportKind, records: { size: 8, rows: [rec8(1)] }, bufferChunkOverride: { atCall: 1, bytes: 40 } })
       session = await openSession(running.port)
-      await expect(
-        readBulkBuffered(session, CMD.ATTLOG_RRQ, MAX_CHUNK[transportKind]),
-      ).rejects.toThrow(ZkProtocolError)
+      await expect(readBulkBuffered(session, CMD.ATTLOG_RRQ, MAX_CHUNK[transportKind])).rejects.toThrow(/delivered 40 bytes, expected 12/)
     })
 
-    it('sends the documented PREPARE_BUFFER request shape', async () => {
-      running = await startEmulator({
-        transport: transportKind,
-        records: { size: 8, rows: [rec8(1)] },
-      })
+    it('sends the reference request shape: fct 0 for attendance, 5 for users', async () => {
+      running = await startEmulator({ transport: transportKind, records: { size: 8, rows: [rec8(1)] }, users: [] })
       session = await openSession(running.port)
       await readBulkBuffered(session, CMD.ATTLOG_RRQ, MAX_CHUNK[transportKind])
       const prepare = running.received.find((p) => p.command === CMD.PREPARE_BUFFER)!
       expect(prepare.data.length).toBe(11)
       expect(prepare.data.readUInt8(0)).toBe(1)
       expect(prepare.data.readUInt16LE(1)).toBe(CMD.ATTLOG_RRQ)
+      expect(running.state.lastPrepareFct).toBe(0)
+      await readBulkBuffered(session, CMD.USERTEMP_RRQ, MAX_CHUNK[transportKind])
+      expect(running.state.lastPrepareFct).toBe(5)
+      // And the buffered path was what served both: no legacy command went out.
+      expect(running.received.map((p) => p.command)).not.toContain(CMD.USERTEMP_RRQ)
+    })
+
+    it('returns null when the device refuses PREPARE_BUFFER', async () => {
+      running = await startEmulator({ transport: transportKind, records: { size: 8, rows: [rec8(1)] }, supportsBuffer: false })
+      session = await openSession(running.port)
+      expect(await readBulkBuffered(session, CMD.ATTLOG_RRQ, MAX_CHUNK[transportKind])).toBeNull()
     })
 
     it('releases the device buffer afterwards', async () => {
-      running = await startEmulator({
-        transport: transportKind,
-        records: { size: 8, rows: [rec8(1)] },
-      })
+      running = await startEmulator({ transport: transportKind, records: { size: 8, rows: [rec8(1)] } })
       session = await openSession(running.port)
       await readBulkBuffered(session, CMD.ATTLOG_RRQ, MAX_CHUNK[transportKind])
       expect(running.received.map((p) => p.command)).toContain(CMD.FREE_DATA)

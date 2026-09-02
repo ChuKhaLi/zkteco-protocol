@@ -24,3 +24,17 @@ export const CMD = {
 
 /** Maximum bytes requested per chunk, per transport. */
 export const MAX_CHUNK = { tcp: 0xffc0, udp: 16 * 1024 } as const
+
+/**
+ * The `fct` field of the 11-byte PREPARE_BUFFER request, per command.
+ *
+ * Restated from zkteco-js `helper/command.js:109-110` (MIT): GET_USERS sends
+ * `01 09 00 05 00 00 00 …` (command 9, fct 5) and GET_ATTENDANCE_LOGS sends
+ * `01 0d 00 00 00 00 00 …` (command 13, fct 0). Before v0.5 this library sent
+ * 0 for both. What fct means is not recorded anywhere readable; only the
+ * values are. A command absent here sends 0.
+ */
+export const BUFFER_FCT: Readonly<Record<number, number>> = {
+  [CMD.USERTEMP_RRQ]: 5,
+  [CMD.ATTLOG_RRQ]: 0,
+}
