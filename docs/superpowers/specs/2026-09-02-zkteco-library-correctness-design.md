@@ -652,9 +652,10 @@ exist.
   only. Nothing else there changes; the rules section is untouched.
 - **`PROVENANCE.md`**: new sections *The buffered read — restated from a single readable source*
   (§6.1), *Reply binding: not implemented, and why* (§5.5, with E1's result), *User record width and
-  size* (§7.1, §7.4, with E4's result); §Known divergences gains
-  one row per adopted point; §Unverified field offsets describes the count bracket (§7.2) instead
-  of the framing guard alone.
+  size* (§7.1, §7.4, with E4's result). The four buffered-read points are recorded in that section's
+  own table, not as §Known-divergences rows; §Known divergences instead gains one pointer paragraph
+  explaining why they are not numbered divergences there. §Unverified field offsets describes the
+  count bracket (§7.2) instead of the framing guard alone.
 - **v0.1 spec §12 item 22**: the sentence "This is v0.1 transport architecture … no code change is
   proposed here — record what a real device does before deciding whether one is warranted" is
   replaced by: "v0.5 (`2026-09-02-zkteco-library-correctness-design.md` §5.2) closes the session on
