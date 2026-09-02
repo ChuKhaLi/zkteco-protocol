@@ -1,6 +1,6 @@
 {
   "name": "zkteco-protocol",
-  "version": "0.4.3",
+  "version": "0.5.0",
   "description": "Dependency-free TypeScript client for the ZKTeco binary protocol on port 4370",
   "license": "MIT",
   "repository": { "type": "git", "url": "git+https://github.com/ChuKhaLi/zkteco-protocol.git" },
