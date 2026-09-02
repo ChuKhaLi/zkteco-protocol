@@ -58,7 +58,8 @@ interface Fixture {
 // different reasons — E0 and E0b never start the read, E2-size-at-0 and
 // E3-chunk-single-packet start it and fail partway — and PROVENANCE cites the
 // E0/E0b pair for the stronger claim that no PREPARE_BUFFER is ever sent under
-// a zero count. Without this column, that half of the claim rests on nothing.
+// a reply pyzk reads no count from (E0: too short; E0b: count 0). Without this
+// column, that half of the claim rests on nothing.
 describe('buffered-read experiments (spec v0.5 §12)', () => {
   it.each(EXPECTED)('$name is recorded', (expected) => {
     const file = path.join(DIR, `${expected.name}.json`)

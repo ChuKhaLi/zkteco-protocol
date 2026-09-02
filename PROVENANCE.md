@@ -472,13 +472,14 @@ reads a user count out of the unrelated `CMD_GET_FREE_SIZES` reply before it
 will attempt any read at all, and gives up silently — `completed: true`, zero
 users printed, no `PREPARE_BUFFER` ever sent — when that read does not yield a
 count. Two controls are recorded rather than one, because E0 and E1-E4 differ
-in reply length *and* in count, and on their own cannot say which mattered:
+only in reply length, so on their own they cannot say whether the count at
+offset 16 is read at all:
 
 | Control | What was served | What `pyzk` did |
 |---|---|---|
 | E0 (`E0-free-sizes-default-tcp.json`) | the 68-byte reply this library's own encoder produces (`encodeFreeSizes`, capped at `FREE_SIZES_OFFSET.recordCapacity + 4`), with `userCount` correctly 3 at offset 16 | completed having sent nothing past `CONNECT`, `CMD_GET_FREE_SIZES`, `EXIT` |
 | E0b (`E0b-free-sizes-80-count-zero-tcp.json`) | the same 80 bytes E1-E4 are served, with the count written as 0 | the same: completed, zero users printed, no `PREPARE_BUFFER` |
-| E1-E4 | 80 bytes, count 3 as a little-endian uint32 at byte offset 16 (`tools/oracle/experiments.ts`, recorded per fixture under `served.freeSizesReply`) | reached `PREPARE_BUFFER`/`READ_BUFFER` and printed the served users |
+| E1-E4 | 80 bytes, count 3 as a little-endian uint32 at byte offset 16 (`tools/oracle/experiments.ts`, recorded per fixture under `served.freeSizesReply`) | reached `PREPARE_BUFFER` in every variant, and printed the served users wherever the rest of the exchange was served correctly (`E2-size-at-0` and `E3-chunk-single-packet` did not, as their rows below record) |
 
 E0b holds the length fixed and varies only the count, so the gate is a real
 observation and not an inference: zeroing those four bytes is enough to stop
