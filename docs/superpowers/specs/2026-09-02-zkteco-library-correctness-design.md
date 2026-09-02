@@ -489,7 +489,8 @@ transport, of firmware age, or of the reference's own history is not recorded an
 This library reads 72 on both, and its parser refuses a body that is not a whole number of 72-byte
 records, so a 28-byte device is refused rather than misparsed unless its body length happens to
 divide both. This scope adds the divergence to `PROVENANCE.md` and E4 in §12 asks `pyzk` which
-size it expects on each transport. No decoder is added: a second record layout is a new hypothesis,
+size it expects over UDP, the transport the reference's 28-byte decode belongs to. No decoder is
+added: a second record layout is a new hypothesis,
 and the checklist's rule against adding items applies in spirit.
 
 ---
@@ -601,7 +602,7 @@ name the variants below, so a deleted fixture is noticed.
 | E1 | Does `pyzk` rely on the reply id, or the session id, being echoed? | `echoReplyId: false`; `replySessionIdOverride` wrong | whether `pyzk` completes connect and `get_users` | Recorded either way in `PROVENANCE.md` §Reply binding: not implemented, and why. If it fails: matching is a candidate for the next cycle with black-box provenance. No code change this cycle. |
 | E2 | Which offset does `pyzk` read the PREPARE_BUFFER size at? | `prepareBufferReply` both values, with a body long enough that the two readings differ | the `start`/`size` fields of the READ_BUFFER requests `pyzk` sends | Agrees with the reference: two oracles agree, recorded as the strongest level available without hardware. Disagrees: recorded as a divergence; the library keeps following the readable reference; the emulator keeps both. |
 | E3 | Which READ_BUFFER reply shape does `pyzk` complete a read under? | `chunkReply` both values | whether `get_users` completes and prints the served users | As E2. |
-| E4 | Which user record size does `pyzk` expect on each transport? | `userRecordSize` both values × TCP, UDP | whether the printed users match the served ones | Recorded under §7.4's divergence. No code change this cycle. |
+| E4 | Which user record size does `pyzk` expect over UDP? | `userRecordSize` both values × UDP | whether the printed users match the served ones | Recorded under §7.4's divergence. No code change this cycle. UDP only, and deliberately: the reference's 28-byte decode is reached from its UDP path alone (`zudp.js:382`, `helper/utils.js:114-126`), so UDP is where the question lives. A TCP pair would ask nothing the source has not already answered, and the row promised one until v0.5 without either variant ever being run. |
 
 An experiment whose `pyzk` run fails to spawn, or exits non-zero, is recorded as **not run**, never
 as a result — the sibling spec fixes the capture tool's habit of writing a crashed run as a fixture,
