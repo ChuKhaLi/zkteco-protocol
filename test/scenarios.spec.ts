@@ -13,6 +13,24 @@ afterEach(async () => {
   await running?.close(); running = null
 })
 
+/**
+ * Polls `check` until it is true, or throws once `timeoutMs` has elapsed.
+ *
+ * A bounded poll rather than a fixed sleep: the emulator only observes a
+ * write on its own event loop tick, so resolving a promise here does not
+ * mean the peer has processed it yet (same reasoning as
+ * test/realtime/scenarios.spec.ts's pollUntil).
+ */
+async function pollUntil(check: () => boolean, timeoutMs = 1000): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+  while (!check()) {
+    if (Date.now() >= deadline) {
+      throw new Error(`condition not met within ${timeoutMs}ms`)
+    }
+    await new Promise((r) => setTimeout(r, 5))
+  }
+}
+
 const DAY = 86_400
 
 function emUser(uid: number, userId: string): ZkUser {
@@ -84,6 +102,41 @@ for (const transport of ['tcp', 'udp'] as const) {
       // The session that finished opening was closed, not installed.
       await expect(d.getInfo()).rejects.toThrow(/not connected/)
       expect(running.received.map((p) => p.command)).toContain(CMD.EXIT)
+    })
+
+    it("honours a disconnect() issued during a reconnect's cleanup", async () => {
+      running = await startEmulator({ transport, replyDelayMs: 100 })
+      const d = new ZkDevice({ host: '127.0.0.1', port: running.port, transport })
+      await d.connect()
+      const reconnecting = d.connect()
+      await d.disconnect()
+      await reconnecting
+      // The session the reconnect opened was closed, not installed.
+      await expect(d.getInfo()).rejects.toThrow(/not connected/)
+      // One EXIT for the session connect() replaced, one for the session
+      // disconnect() caught after it finished opening.
+      const r = running
+      await pollUntil(() => r.received.filter((p) => p.command === CMD.EXIT).length >= 2)
+    })
+
+    it('serialises two overlapping connect() calls and leaks nothing', async () => {
+      running = await startEmulator({ transport, replyDelayMs: 50 })
+      const d = new ZkDevice({ host: '127.0.0.1', port: running.port, transport })
+      const a = d.connect()
+      const b = d.connect()
+      await Promise.all([a, b])
+      // The two ran in order rather than racing, so exactly one session is
+      // left standing and it answers requests.
+      await d.getInfo()
+      await d.disconnect()
+      // One EXIT for the session the second connect() closed on its way in,
+      // one for the session disconnect() closed on its way out.
+      const r = running
+      await pollUntil(() => r.received.filter((p) => p.command === CMD.EXIT).length >= 2)
+      if (transport === 'tcp') {
+        await new Promise((resolve) => setTimeout(resolve, 100))
+        expect(running.sockets.size).toBe(0)
+      }
     })
 
     // 2. All three record dialects.

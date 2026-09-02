@@ -77,9 +77,31 @@ export class ZkDevice {
    * Safe to call again on an already-connected instance: any existing
    * subscription is ended and any existing session is closed first, so a
    * second connect() cannot leak the first socket, nor leave a caller's
-   * earlier stream awaiting an event that will never arrive.
+   * earlier stream awaiting an event that will never arrive. Safe to call
+   * again while a previous call is still in flight, too: the two run in
+   * order rather than racing, so the second closes whatever the first
+   * opened rather than leaking it. A disconnect() issued at any point during
+   * a connect() — including during this cleanup — closes whatever that
+   * connect() opened rather than letting it install after disconnect() has
+   * already returned.
    */
   async connect(): Promise<void> {
+    // A connect already in flight finishes first, so two overlapping calls
+    // run in order and the second closes what the first opened.
+    const prior = this.connecting
+    if (prior) await prior.catch(() => {})
+    // Tracked from this first statement, before any await: a disconnect()
+    // issued during the cleanup below must still see this connect.
+    const opening = this.connectSequence()
+    this.connecting = opening
+    try {
+      await opening
+    } finally {
+      if (this.connecting === opening) this.connecting = null
+    }
+  }
+
+  private async connectSequence(): Promise<void> {
     const stream = this.stream
     this.stream = null
     if (stream) await stream.close()
@@ -91,13 +113,8 @@ export class ZkDevice {
       timeoutMs: this.timeoutMs,
       commKey: this.commKey,
     })
-    const opening = session.open().then(() => { this.session = session })
-    this.connecting = opening
-    try {
-      await opening
-    } finally {
-      if (this.connecting === opening) this.connecting = null
-    }
+    await session.open()
+    this.session = session
   }
 
   async getInfo(): Promise<ZkDeviceInfo> {
