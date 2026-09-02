@@ -641,7 +641,7 @@ below names them so the plan cannot drop one.
 | §7.3 lookup | users `'1'` and `'01'`, a 16-byte record with numeric id 1: `userId: null`; a user with a blank id matched by uid: `userId: null` | last-writer, blank passthrough | `'01'`; `''` |
 | §8 idle timer | `idleTimeoutMs: 1` with a slow registration; the first event is delivered | arm in constructor | the stream is already ended when returned |
 | §9 disconnect | `disconnect()` during `connect()`; afterwards `getInfo()` throws not-connected and the emulator saw EXIT | ignore in-flight connect | the session is installed and `getInfo()` succeeds |
-| §10.1 exports | a CommonJS TypeScript consumer typechecks under `module: node16` — **in the release drill (sibling spec)**, since it needs the packed tarball | single `types` | TS1479 |
+| §10.1 exports | in this plan, source-level only — `test/smoke.spec.ts` asserts the exports map's per-condition types and that `dist/index.d.cts` exists; a CommonJS consumer typecheck under `module: node16` is the sibling plan's drill step and does not yet exist (`docs/RELEASING.md` §5 records the gap) | single `types` | TS1479, in the drill step that does not exist yet; nothing here would catch it |
 | §10.2 CLI | `dist/cli.cjs` does not exist after `pnpm build`; asserted in `test/smoke.spec.ts` beside the existing bundle checks | two formats | the file exists |
 
 The oracle experiments of §12 are evidence, not tests; their spec asserts only that the fixtures
