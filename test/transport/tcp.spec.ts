@@ -148,4 +148,17 @@ describe('TcpTransport', () => {
     await expect(pending).rejects.toThrow(ZkProtocolError)
     expect((transport as unknown as { buffered: Buffer }).buffered.length).toBe(0)
   })
+
+  // A socket 'error' is followed by a 'close'. The first is the informative
+  // one; the second is generic. Last-wins overwrote the reason with
+  // "connection closed by peer" on every socket error.
+  it('keeps the first failure it saw, not the last', async () => {
+    running = await startEmulator({ transport: 'tcp' })
+    transport = new TcpTransport({ host: '127.0.0.1', port: running.port })
+    await transport.connect()
+    const sock = (transport as unknown as { socket: net.Socket }).socket
+    sock.emit('error', new Error('simulated ECONNRESET'))
+    sock.emit('close')
+    await expect(transport.receive(200)).rejects.toThrow(/simulated ECONNRESET/)
+  })
 })
