@@ -5,10 +5,21 @@ import type { Session } from './Session.js'
 
 /**
  * Reads one transfer: an optional CMD_PREPARE_DATA announcement, a run of
- * CMD_DATA packets, then ACK_OK. Every CMD_DATA packet is consumed — the run
- * ends only at the first non-DATA packet — and the accumulated total is then
- * compared against `expected`, so a device that keeps sending CMD_DATA past
- * the point a shorter run would have looked complete is still caught.
+ * CMD_DATA packets, then a closing command.
+ *
+ * Stopping rule: CMD_DATA packets are consumed unconditionally, one at a
+ * time, until a non-DATA packet arrives — the running total is judged
+ * against `expected` only once that terminator is in hand, never the instant
+ * the total first reaches `expected`. A device with more to send is still
+ * sending CMD_DATA, whether the excess lands inside one oversized packet or
+ * as a further packet arriving right after a transfer that already looked
+ * complete on its own; stopping early would let that later packet — or the
+ * transfer's real terminator behind it — go unread, sitting in the transport
+ * queue for the next request's receive() to collect instead of its own reply
+ * (the same class of desync `freeBuffer`'s docblock below describes for
+ * FREE_DATA). Every path through this function, success or refusal, reads
+ * exactly one terminator and no further, so a refusal never leaves the
+ * exchange mid-flight.
  *
  * Shared by the legacy exchange (one transfer per read) and, since v0.5, by
  * the buffered exchange (one transfer per READ_BUFFER chunk), because that is
@@ -23,10 +34,13 @@ import type { Session } from './Session.js'
  * `first` is a packet the caller already consumed (an execute() reply); it is
  * treated as the first packet of the transfer.
  *
- * Refuses, as ZkProtocolError: an ACK_OK before `expected` bytes (where the
- * reference would sit until its timer fired, this says so at once), a total
- * past `expected` (the record parsers only reject a body that is too SHORT,
- * so an oversized one would lose its tail silently), and any other command.
+ * Refuses, as ZkProtocolError: a total short of `expected` when the run ends,
+ * whether by an early ACK_OK or any other command (`"transfer ended after X
+ * of Y bytes with command N"`); a total past `expected` (`"transfer delivered
+ * X bytes, expected Y"` — the record parsers only reject a body that is too
+ * SHORT, so an oversized one would lose its tail silently); and a total that
+ * exactly matches `expected` but is closed by anything other than ACK_OK
+ * (`"expected ACK_OK to close the transfer, got N"`).
  */
 export async function readTransfer(
   session: Session,
@@ -49,12 +63,9 @@ export async function readTransfer(
   // No announcement: the packet belongs to the loop below.
   if (opening.command !== CMD.PREPARE_DATA) pending = opening
 
-  // Strictly sequential: the session allows one exchange at a time. Consumes
-  // every CMD_DATA packet in a row rather than stopping the instant the
-  // running total reaches `expected` — a device with more to send is still
-  // sending CMD_DATA, whether the excess lands within one oversized packet or
-  // as a separate packet arriving right after a transfer that already looked
-  // complete. Both must be caught here rather than mistaken for the close.
+  // Strictly sequential: the session allows one exchange at a time. See the
+  // stopping rule above — every CMD_DATA packet is read before anything is
+  // decided, so `tail` below is always the transfer's actual terminator.
   let tail: DecodedPacket
   for (;;) {
     const packet = await next()
