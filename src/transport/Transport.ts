@@ -16,7 +16,12 @@ export interface TransportOptions {
  * than risk a reply being routed to the wrong caller.
  */
 export interface Transport {
-  connect(): Promise<void>
+  /**
+   * Opens the socket. Rejects with ZkConnectionError if that has not
+   * completed within `timeoutMs` — the same deadline that bounds every
+   * request, because ZkDeviceOptions.timeoutMs promises exactly that.
+   */
+  connect(timeoutMs: number): Promise<void>
   send(payload: Buffer): Promise<void>
   receive(timeoutMs: number): Promise<Buffer>
   /**

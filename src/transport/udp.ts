@@ -19,10 +19,17 @@ export class UdpTransport implements Transport {
 
   constructor(private readonly opts: TransportOptions) {}
 
-  connect(): Promise<void> {
+  connect(timeoutMs: number): Promise<void> {
     return new Promise((resolve, reject) => {
       const sock = dgram.createSocket('udp4')
       let connectSettled = false
+      const where = `${this.opts.host}:${this.opts.port}`
+      const timer = setTimeout(() => {
+        if (connectSettled) return
+        connectSettled = true
+        sock.close()
+        reject(new ZkConnectionError(`cannot connect to ${where} within ${timeoutMs}ms`))
+      }, timeoutMs)
       // Durable, not `once`, and it branches on which half of the socket's
       // life it fired in. The first error before bind IS the connect failure;
       // anything after connect has settled is a live socket dying, and used
@@ -38,11 +45,18 @@ export class UdpTransport implements Transport {
           return
         }
         connectSettled = true
+        clearTimeout(timer)
         sock.close()
         reject(failure)
       })
       sock.on('message', (msg) => this.inbox.deliver(Buffer.from(msg)))
-      sock.bind(0, () => { this.socket = sock; connectSettled = true; resolve() })
+      sock.bind(0, () => {
+        if (connectSettled) return
+        connectSettled = true
+        clearTimeout(timer)
+        this.socket = sock
+        resolve()
+      })
     })
   }
 

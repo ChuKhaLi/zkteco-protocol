@@ -104,7 +104,7 @@ describe('emulator', () => {
   it('acknowledges a subscription and records the mask it was given', async () => {
     running = await startEmulator({ transport: 'tcp' })
     const transport = new TcpTransport({ host: '127.0.0.1', port: running.port })
-    await transport.connect()
+    await transport.connect(2_000)
     await transport.send(
       encodePayload({
         command: CMD.REG_EVENT,
@@ -129,7 +129,7 @@ describe('emulator', () => {
       pushWithAck: [{ eventType: 1, data: Buffer.from([0x01]) }],
     })
     const transport = new TcpTransport({ host: '127.0.0.1', port: running.port })
-    await transport.connect()
+    await transport.connect(2_000)
     await transport.send(
       encodePayload({ command: CMD.REG_EVENT, sessionId: 1, replyId: 0, data: Buffer.alloc(4) }),
     )

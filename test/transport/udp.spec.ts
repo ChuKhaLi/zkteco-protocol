@@ -18,7 +18,7 @@ describe('UdpTransport', () => {
   it('round-trips a payload', async () => {
     running = await startEmulator({ transport: 'udp', sessionId: 0x99 })
     transport = new UdpTransport({ host: '127.0.0.1', port: running.port })
-    await transport.connect()
+    await transport.connect(2_000)
     await transport.send(connectPayload())
     expect(decodePayload(await transport.receive(2000)).sessionId).toBe(0x99)
   })
@@ -26,7 +26,7 @@ describe('UdpTransport', () => {
   it('sends the bare payload with no TCP start marker', async () => {
     running = await startEmulator({ transport: 'udp' })
     transport = new UdpTransport({ host: '127.0.0.1', port: running.port })
-    await transport.connect()
+    await transport.connect(2_000)
     await transport.send(connectPayload())
     await transport.receive(2000)
     const raw = running.receivedRaw[0]!
@@ -37,7 +37,7 @@ describe('UdpTransport', () => {
   it('times out rather than hanging when the device stays silent', async () => {
     running = await startEmulator({ transport: 'udp', behavior: 'silent' })
     transport = new UdpTransport({ host: '127.0.0.1', port: running.port })
-    await transport.connect()
+    await transport.connect(2_000)
     await transport.send(connectPayload())
     await expect(transport.receive(200)).rejects.toBeInstanceOf(ZkTimeoutError)
   })
@@ -45,7 +45,7 @@ describe('UdpTransport', () => {
   it('queues a datagram that arrived before receive was called', async () => {
     running = await startEmulator({ transport: 'udp' })
     transport = new UdpTransport({ host: '127.0.0.1', port: running.port })
-    await transport.connect()
+    await transport.connect(2_000)
     await transport.send(connectPayload())
     await new Promise((r) => setTimeout(r, 100))
     expect(decodePayload(await transport.receive(2000)).command).toBe(CMD.ACK_OK)
@@ -54,7 +54,7 @@ describe('UdpTransport', () => {
   it('is safe to close twice', async () => {
     running = await startEmulator({ transport: 'udp' })
     transport = new UdpTransport({ host: '127.0.0.1', port: running.port })
-    await transport.connect()
+    await transport.connect(2_000)
     await transport.close()
     await expect(transport.close()).resolves.toBeUndefined()
     transport = null
@@ -63,7 +63,7 @@ describe('UdpTransport', () => {
   it('rejects a second concurrent receive without disturbing the first', async () => {
     running = await startEmulator({ transport: 'udp', sessionId: 0x66 })
     transport = new UdpTransport({ host: '127.0.0.1', port: running.port })
-    await transport.connect()
+    await transport.connect(2_000)
     const first = transport.receive(2000)
     await expect(transport.receive(2000)).rejects.toBeInstanceOf(ZkConnectionError)
     await transport.send(connectPayload())

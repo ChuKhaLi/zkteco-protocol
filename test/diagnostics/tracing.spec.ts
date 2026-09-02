@@ -63,7 +63,7 @@ describe('TracingTransport', () => {
       new TcpTransport({ host: '127.0.0.1', port: running.port }),
       fakeClock(),
     )
-    await traced.connect()
+    await traced.connect(2_000)
     await traced.send(encodePayload({ command: CMD.CONNECT, sessionId: 0, replyId: 0 }))
     await expect(traced.receive(60)).rejects.toBeInstanceOf(ZkTimeoutError)
     await traced.close()
@@ -79,7 +79,7 @@ describe('TracingTransport', () => {
       new TcpTransport({ host: '127.0.0.1', port: running.port }),
       fakeClock(),
     )
-    await traced.connect()
+    await traced.connect(2_000)
     const seen: Buffer[] = []
     traced.listen((p) => seen.push(p), () => {})
     running.pushRaw(encodePayload({ command: CMD.REG_EVENT, sessionId: 1, replyId: 0 }))
@@ -96,7 +96,7 @@ describe('TracingTransport', () => {
       new TcpTransport({ host: '127.0.0.1', port: running.port }),
       fakeClock(),
     )
-    await traced.connect()
+    await traced.connect(2_000)
     traced.listen(() => {}, () => {})
     // A second listen() on the same socket synchronously throws per spec
     expect(() => traced.listen(() => {}, () => {})).toThrow()

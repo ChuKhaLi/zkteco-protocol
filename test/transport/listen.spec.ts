@@ -44,7 +44,7 @@ for (const kind of ['tcp', 'udp'] as const) {
     it('delivers packets that arrive after listen()', async () => {
       running = await startEmulator({ transport: kind })
       transport = make(running.port)
-      await transport.connect()
+      await transport.connect(2_000)
       // The emulator only knows where to push once it has heard from us.
       await transport.send(encodePayload({ command: CMD.CONNECT, sessionId: 0, replyId: 0 }))
       await transport.receive(2000)
@@ -64,7 +64,7 @@ for (const kind of ['tcp', 'udp'] as const) {
     it('drains packets that were queued before listen()', async () => {
       running = await startEmulator({ transport: kind })
       transport = make(running.port)
-      await transport.connect()
+      await transport.connect(2_000)
       await transport.send(encodePayload({ command: CMD.CONNECT, sessionId: 0, replyId: 0 }))
       await transport.receive(2000)
 
@@ -80,7 +80,7 @@ for (const kind of ['tcp', 'udp'] as const) {
     it('refuses a receive() once listening', async () => {
       running = await startEmulator({ transport: kind })
       transport = make(running.port)
-      await transport.connect()
+      await transport.connect(2_000)
       transport.listen(() => {}, () => {})
       await expect(transport.receive(500)).rejects.toThrow(ZkConnectionError)
     })
@@ -88,7 +88,7 @@ for (const kind of ['tcp', 'udp'] as const) {
     it('refuses a second listen()', async () => {
       running = await startEmulator({ transport: kind })
       transport = make(running.port)
-      await transport.connect()
+      await transport.connect(2_000)
       transport.listen(() => {}, () => {})
       expect(() => transport!.listen(() => {}, () => {})).toThrow(ZkConnectionError)
     })
@@ -103,7 +103,7 @@ describe('Transport.listen over tcp, failure paths', () => {
   it('reports a socket failure to the listener', async () => {
     running = await startEmulator({ transport: 'tcp' })
     transport = new TcpTransport({ host: '127.0.0.1', port: running.port })
-    await transport.connect()
+    await transport.connect(2_000)
     const sink = collector(1)
     transport.listen(sink.onPacket, sink.onError)
     for (const socket of running.sockets) socket.destroy()
@@ -114,7 +114,7 @@ describe('Transport.listen over tcp, failure paths', () => {
   it('reports a failure that was already recorded before listen()', async () => {
     running = await startEmulator({ transport: 'tcp' })
     transport = new TcpTransport({ host: '127.0.0.1', port: running.port })
-    await transport.connect()
+    await transport.connect(2_000)
     for (const socket of running.sockets) socket.destroy()
     await new Promise((r) => setTimeout(r, 100))
 
@@ -146,7 +146,7 @@ describe('Transport.listen over udp, failure paths', () => {
   it('reports a socket error to the listener', async () => {
     running = await startEmulator({ transport: 'udp' })
     transport = new UdpTransport({ host: '127.0.0.1', port: running.port })
-    await transport.connect()
+    await transport.connect(2_000)
     const sink = collector(1)
     transport.listen(sink.onPacket, sink.onError)
 
@@ -159,7 +159,7 @@ describe('Transport.listen over udp, failure paths', () => {
   it('reports a failure that was already recorded before listen()', async () => {
     running = await startEmulator({ transport: 'udp' })
     transport = new UdpTransport({ host: '127.0.0.1', port: running.port })
-    await transport.connect()
+    await transport.connect(2_000)
     socketOf(transport).emit('error', new Error('simulated socket failure'))
 
     const sink = collector(1)
@@ -170,7 +170,7 @@ describe('Transport.listen over udp, failure paths', () => {
   it('fails a pending receive() rather than leaving it to time out', async () => {
     running = await startEmulator({ transport: 'udp' })
     transport = new UdpTransport({ host: '127.0.0.1', port: running.port })
-    await transport.connect()
+    await transport.connect(2_000)
     // A 30s deadline: a receive() that resolves through the timeout instead of
     // the failure would blow this test's own budget, so passing means the
     // failure path is what ended it.
@@ -188,7 +188,7 @@ describe('Transport.listen over udp, failure paths', () => {
     // FRESH error on the next operation, so nothing is masked.
     running = await startEmulator({ transport: 'udp' })
     transport = new UdpTransport({ host: '127.0.0.1', port: running.port })
-    await transport.connect()
+    await transport.connect(2_000)
     socketOf(transport).emit('error', new Error('simulated socket failure'))
 
     await expect(transport.receive(50)).rejects.toThrow(/simulated socket failure/)
@@ -201,7 +201,7 @@ describe('Transport.listen over udp, failure paths', () => {
   it('does not record a failure that was delivered straight to a pending receive()', async () => {
     running = await startEmulator({ transport: 'udp' })
     transport = new UdpTransport({ host: '127.0.0.1', port: running.port })
-    await transport.connect()
+    await transport.connect(2_000)
     const pending = transport.receive(30_000)
     socketOf(transport).emit('error', new Error('simulated socket failure'))
     await expect(pending).rejects.toThrow(ZkConnectionError)

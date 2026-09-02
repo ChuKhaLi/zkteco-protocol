@@ -63,9 +63,9 @@ export class TracingTransport implements Transport {
     this.log.push(event)
   }
 
-  async connect(): Promise<void> {
+  async connect(timeoutMs: number): Promise<void> {
     try {
-      await this.inner.connect()
+      await this.inner.connect(timeoutMs)
     } catch (err) {
       this.record('error', undefined, err as Error)
       throw err

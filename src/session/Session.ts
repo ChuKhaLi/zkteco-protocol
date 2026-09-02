@@ -49,7 +49,7 @@ export class Session {
    * finished opening, so leaving that to the caller would leak the socket.
    */
   async open(): Promise<void> {
-    await this.transport.connect()
+    await this.transport.connect(this.opts.timeoutMs)
     this.open_ = true
     try {
       const res = await this.send(CMD.CONNECT, undefined, { sessionId: 0 })

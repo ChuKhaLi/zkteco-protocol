@@ -16,16 +16,29 @@ export class TcpTransport implements Transport {
 
   constructor(private readonly opts: TransportOptions) {}
 
-  connect(): Promise<void> {
+  connect(timeoutMs: number): Promise<void> {
     return new Promise((resolve, reject) => {
       const sock = net.createConnection({ host: this.opts.host, port: this.opts.port })
-      const onError = (err: Error): void => {
+      const where = `${this.opts.host}:${this.opts.port}`
+      const settle = (err: Error): void => {
         sock.destroy()
-        reject(new ZkConnectionError(`cannot connect to ${this.opts.host}:${this.opts.port}: ${err.message}`))
+        reject(err)
       }
+      const onError = (err: Error): void =>
+        settle(new ZkConnectionError(`cannot connect to ${where}: ${err.message}`))
+      const onTimeout = (): void =>
+        settle(new ZkConnectionError(`cannot connect to ${where} within ${timeoutMs}ms`))
+      // A socket timeout fires after `timeoutMs` of inactivity, and a connect
+      // that has not completed is inactivity. Cleared on connect: after that,
+      // silence is normal (a listening socket at 03:00) and the per-request
+      // deadline lives in receive().
+      sock.setTimeout(timeoutMs)
       sock.once('error', onError)
+      sock.once('timeout', onTimeout)
       sock.once('connect', () => {
+        sock.setTimeout(0)
         sock.off('error', onError)
+        sock.off('timeout', onTimeout)
         this.socket = sock
         sock.on('data', (chunk) => this.absorb(chunk))
         sock.on('error', (err) => this.fail(new ZkConnectionError(err.message)))

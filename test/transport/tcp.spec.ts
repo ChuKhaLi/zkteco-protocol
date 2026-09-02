@@ -20,7 +20,7 @@ describe('TcpTransport', () => {
   it('sends a framed payload and receives a bare one back', async () => {
     running = await startEmulator({ transport: 'tcp', sessionId: 0x77 })
     transport = new TcpTransport({ host: '127.0.0.1', port: running.port })
-    await transport.connect()
+    await transport.connect(2_000)
     await transport.send(connectPayload())
     const reply = decodePayload(await transport.receive(2000))
     expect(reply.command).toBe(CMD.ACK_OK)
@@ -47,7 +47,7 @@ describe('TcpTransport', () => {
     const port = (server.address() as net.AddressInfo).port
     try {
       transport = new TcpTransport({ host: '127.0.0.1', port })
-      await transport.connect()
+      await transport.connect(2_000)
       await transport.send(connectPayload())
       expect(decodePayload(await transport.receive(2000)).sessionId).toBe(5)
     } finally {
@@ -69,7 +69,7 @@ describe('TcpTransport', () => {
     const port = (server.address() as net.AddressInfo).port
     try {
       transport = new TcpTransport({ host: '127.0.0.1', port })
-      await transport.connect()
+      await transport.connect(2_000)
       await transport.send(connectPayload())
       expect(decodePayload(await transport.receive(2000)).command).toBe(CMD.ACK_OK)
       expect(decodePayload(await transport.receive(2000)).command).toBe(CMD.ACK_DATA)
@@ -82,7 +82,7 @@ describe('TcpTransport', () => {
   it('times out rather than hanging when the device stays silent', async () => {
     running = await startEmulator({ transport: 'tcp', behavior: 'silent' })
     transport = new TcpTransport({ host: '127.0.0.1', port: running.port })
-    await transport.connect()
+    await transport.connect(2_000)
     await transport.send(connectPayload())
     await expect(transport.receive(200)).rejects.toBeInstanceOf(ZkTimeoutError)
   })
@@ -90,7 +90,7 @@ describe('TcpTransport', () => {
   it('reports a refused connection as ZkConnectionError', async () => {
     // Port 1 on loopback is not listening.
     transport = new TcpTransport({ host: '127.0.0.1', port: 1 })
-    await expect(transport.connect()).rejects.toBeInstanceOf(ZkConnectionError)
+    await expect(transport.connect(2_000)).rejects.toBeInstanceOf(ZkConnectionError)
     transport = null
   })
 
@@ -100,7 +100,7 @@ describe('TcpTransport', () => {
     const port = (server.address() as net.AddressInfo).port
     try {
       transport = new TcpTransport({ host: '127.0.0.1', port })
-      await transport.connect()
+      await transport.connect(2_000)
       await transport.send(connectPayload())
       await expect(transport.receive(2000)).rejects.toBeInstanceOf(ZkConnectionError)
     } finally {
@@ -111,7 +111,7 @@ describe('TcpTransport', () => {
   it('is safe to close twice', async () => {
     running = await startEmulator({ transport: 'tcp' })
     transport = new TcpTransport({ host: '127.0.0.1', port: running.port })
-    await transport.connect()
+    await transport.connect(2_000)
     await transport.close()
     await expect(transport.close()).resolves.toBeUndefined()
     transport = null
@@ -120,7 +120,7 @@ describe('TcpTransport', () => {
   it('rejects a second concurrent receive without disturbing the first', async () => {
     running = await startEmulator({ transport: 'tcp', sessionId: 0x55 })
     transport = new TcpTransport({ host: '127.0.0.1', port: running.port })
-    await transport.connect()
+    await transport.connect(2_000)
     const first = transport.receive(2000)
     await expect(transport.receive(2000)).rejects.toBeInstanceOf(ZkConnectionError)
     await transport.send(connectPayload())
@@ -137,7 +137,7 @@ describe('TcpTransport', () => {
   it('releases the accumulator when a declared length is rejected', async () => {
     running = await startEmulator({ transport: 'tcp' })
     transport = new TcpTransport({ host: '127.0.0.1', port: running.port })
-    await transport.connect()
+    await transport.connect(2_000)
     const pending = transport.receive(2000)
 
     const bogus = Buffer.alloc(8 + 64)
@@ -155,10 +155,34 @@ describe('TcpTransport', () => {
   it('keeps the first failure it saw, not the last', async () => {
     running = await startEmulator({ transport: 'tcp' })
     transport = new TcpTransport({ host: '127.0.0.1', port: running.port })
-    await transport.connect()
+    await transport.connect(2_000)
     const sock = (transport as unknown as { socket: net.Socket }).socket
     sock.emit('error', new Error('simulated ECONNRESET'))
     sock.emit('close')
     await expect(transport.receive(200)).rejects.toThrow(/simulated ECONNRESET/)
   })
+
+  // 192.0.2.1 is TEST-NET-1 (RFC 5737): not routable, so the SYN goes out and
+  // nothing answers. Without a deadline this hangs ~21 s on Windows and ~127 s
+  // on Linux. On a host with no default route the connect fails fast with
+  // ENETUNREACH instead — still a ZkConnectionError, so the assertion below
+  // holds either way, but only the hanging case exercises the timer, which is
+  // why the elapsed time is asserted too.
+  it('rejects a connect that does not complete within the deadline', async () => {
+    transport = new TcpTransport({ host: '192.0.2.1', port: 4370 })
+    const started = Date.now()
+    await expect(transport.connect(200)).rejects.toBeInstanceOf(ZkConnectionError)
+    expect(Date.now() - started).toBeLessThan(1_500)
+    transport = null
+  }, 5_000)
+
+  it('names the deadline in the message when the deadline is what ended it', async () => {
+    transport = new TcpTransport({ host: '192.0.2.1', port: 4370 })
+    const err = await transport.connect(200).then(() => null, (e: unknown) => e as Error)
+    expect(err).toBeInstanceOf(ZkConnectionError)
+    // Either the timer fired (the message names it) or the network refused
+    // outright (the message names the errno). Never a bare hang.
+    expect(err!.message).toMatch(/within 200ms|E[A-Z]+/)
+    transport = null
+  }, 5_000)
 })
