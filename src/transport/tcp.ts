@@ -1,6 +1,7 @@
 import net from 'node:net'
 import { frameTcp, tryUnframeTcp } from '../codec/framing.js'
-import { ZkConnectionError, ZkTimeoutError } from '../errors.js'
+import { ZkConnectionError } from '../errors.js'
+import { PacketInbox } from './inbox.js'
 import type { Transport, TransportOptions } from './Transport.js'
 
 /** Idle milliseconds before the OS probes a listening connection. */
@@ -10,13 +11,8 @@ export class TcpTransport implements Transport {
   private socket: net.Socket | null = null
   /** Bytes arrived but not yet consumed as complete packets. */
   private buffered = Buffer.alloc(0)
-  /** Complete payloads ready to hand to `receive`. */
-  private queue: Buffer[] = []
-  private waiter: ((payload: Buffer) => void) | null = null
+  private readonly inbox = new PacketInbox()
   private failure: Error | null = null
-  private failWaiter: ((err: Error) => void) | null = null
-  private listener: ((payload: Buffer) => void) | null = null
-  private listenerError: ((err: Error) => void) | null = null
 
   constructor(private readonly opts: TransportOptions) {}
 
@@ -61,19 +57,7 @@ export class TcpTransport implements Transport {
       }
       if (!framed) return
       this.buffered = this.buffered.subarray(framed.consumed)
-      const listener = this.listener
-      if (listener) {
-        listener(framed.payload)
-        continue
-      }
-      const waiter = this.waiter
-      if (waiter) {
-        this.waiter = null
-        this.failWaiter = null
-        waiter(framed.payload)
-      } else {
-        this.queue.push(framed.payload)
-      }
+      this.inbox.deliver(framed.payload)
     }
   }
 
@@ -93,14 +77,7 @@ export class TcpTransport implements Transport {
    */
   private fail(err: Error): void {
     this.failure = err
-    const failWaiter = this.failWaiter
-    if (failWaiter) {
-      this.waiter = null
-      this.failWaiter = null
-      failWaiter(err)
-    }
-    const listenerError = this.listenerError
-    if (listenerError) listenerError(err)
+    this.inbox.notify(err)
   }
 
   send(payload: Buffer): Promise<void> {
@@ -114,48 +91,14 @@ export class TcpTransport implements Transport {
   }
 
   receive(timeoutMs: number): Promise<Buffer> {
-    if (this.listener) {
-      return Promise.reject(
-        new ZkConnectionError('this transport is listening for events; receive() is not available'),
-      )
-    }
-    if (this.waiter) {
-      return Promise.reject(
-        new ZkConnectionError(
-          'a receive() is already pending; this transport does not support concurrent receives',
-        ),
-      )
-    }
-    const queued = this.queue.shift()
-    if (queued) return Promise.resolve(queued)
-    if (this.failure) return Promise.reject(this.failure)
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.waiter = null
-        this.failWaiter = null
-        reject(new ZkTimeoutError(`no reply within ${timeoutMs}ms`))
-      }, timeoutMs)
-      this.waiter = (payload) => { clearTimeout(timer); resolve(payload) }
-      this.failWaiter = (err) => { clearTimeout(timer); reject(err) }
-    })
+    return this.inbox.receive(timeoutMs, () => this.failure)
   }
 
   listen(onPacket: (payload: Buffer) => void, onError: (err: Error) => void): void {
-    if (this.listener) {
-      throw new ZkConnectionError('this transport is already listening')
-    }
-    if (this.waiter) {
-      throw new ZkConnectionError('cannot listen while a receive() is pending')
-    }
-    this.listener = onPacket
-    this.listenerError = onError
+    this.inbox.listen(onPacket, onError, () => this.failure)
     // A dead peer on a listening connection is otherwise indistinguishable
     // from a quiet one, and a quiet one is normal at 03:00.
     this.socket?.setKeepAlive(true, KEEPALIVE_DELAY_MS)
-    const queued = this.queue
-    this.queue = []
-    for (const payload of queued) onPacket(payload)
-    if (this.failure) onError(this.failure)
   }
 
   close(): Promise<void> {

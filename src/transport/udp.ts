@@ -1,5 +1,6 @@
 import dgram from 'node:dgram'
-import { ZkConnectionError, ZkTimeoutError } from '../errors.js'
+import { ZkConnectionError } from '../errors.js'
+import { PacketInbox } from './inbox.js'
 import type { Transport, TransportOptions } from './Transport.js'
 
 /**
@@ -13,12 +14,8 @@ import type { Transport, TransportOptions } from './Transport.js'
  */
 export class UdpTransport implements Transport {
   private socket: dgram.Socket | null = null
-  private queue: Buffer[] = []
-  private waiter: ((payload: Buffer) => void) | null = null
-  private failWaiter: ((err: Error) => void) | null = null
+  private readonly inbox = new PacketInbox()
   private failure: Error | null = null
-  private listener: ((payload: Buffer) => void) | null = null
-  private listenerError: ((err: Error) => void) | null = null
 
   constructor(private readonly opts: TransportOptions) {}
 
@@ -44,14 +41,7 @@ export class UdpTransport implements Transport {
         sock.close()
         reject(failure)
       })
-      sock.on('message', (msg) => {
-        const payload = Buffer.from(msg)
-        const listener = this.listener
-        if (listener) { listener(payload); return }
-        const waiter = this.waiter
-        if (waiter) { this.waiter = null; this.failWaiter = null; waiter(payload) }
-        else { this.queue.push(payload) }
-      })
+      sock.on('message', (msg) => this.inbox.deliver(Buffer.from(msg)))
       sock.bind(0, () => { this.socket = sock; connectSettled = true; resolve() })
     })
   }
@@ -90,18 +80,7 @@ export class UdpTransport implements Transport {
    * failure back into a silent one for anything that looked afterwards.
    */
   private fail(err: Error): void {
-    const failWaiter = this.failWaiter
-    if (failWaiter) {
-      this.waiter = null
-      this.failWaiter = null
-      failWaiter(err)
-      return
-    }
-    const listenerError = this.listenerError
-    if (listenerError) {
-      listenerError(err)
-      return
-    }
+    if (this.inbox.notify(err)) return
     // Nobody to tell yet, so hold it for whoever arrives next: a consumer
     // that attaches to a dead socket and then waits forever is a hang, not a
     // failure.
@@ -132,55 +111,16 @@ export class UdpTransport implements Transport {
   }
 
   receive(timeoutMs: number): Promise<Buffer> {
-    if (this.listener) {
-      return Promise.reject(
-        new ZkConnectionError('this transport is listening for events; receive() is not available'),
-      )
-    }
-    if (this.waiter) {
-      return Promise.reject(
-        new ZkConnectionError(
-          'a receive() is already pending; this transport does not support concurrent receives',
-        ),
-      )
-    }
-    const queued = this.queue.shift()
-    if (queued) return Promise.resolve(queued)
-    const held = this.takeFailure()
-    if (held) return Promise.reject(held)
-    return new Promise((resolve, reject) => {
-      const timer = setTimeout(() => {
-        this.waiter = null
-        this.failWaiter = null
-        reject(new ZkTimeoutError(`no reply within ${timeoutMs}ms`))
-      }, timeoutMs)
-      this.waiter = (payload) => { clearTimeout(timer); resolve(payload) }
-      this.failWaiter = (err) => { clearTimeout(timer); reject(err) }
-    })
+    return this.inbox.receive(timeoutMs, () => this.takeFailure())
   }
 
   listen(onPacket: (payload: Buffer) => void, onError: (err: Error) => void): void {
-    if (this.listener) {
-      throw new ZkConnectionError('this transport is already listening')
-    }
-    if (this.waiter) {
-      throw new ZkConnectionError('cannot listen while a receive() is pending')
-    }
-    this.listener = onPacket
     // Called on a socket-level failure — a send that the OS refuses, the
     // socket erroring after bind. UDP still has no connection to lose, so a
     // dead DEVICE remains indistinguishable from a quiet one and is what
     // SubscribeOptions.idleTimeoutMs exists for; a dead SOCKET is not the
     // same thing and must not be silence.
-    this.listenerError = onError
-    const queued = this.queue
-    this.queue = []
-    for (const payload of queued) onPacket(payload)
-    // A failure recorded before listen() would otherwise never be reported:
-    // a listener attached over a dead socket that then waits forever is a
-    // hang, not a failure. Taken rather than read, per the rule on fail().
-    const held = this.takeFailure()
-    if (held) onError(held)
+    this.inbox.listen(onPacket, onError, () => this.takeFailure())
   }
 
   close(): Promise<void> {
