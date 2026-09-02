@@ -364,10 +364,13 @@ export class Session {
    *
    * No reply is awaited for the goodbye: the next packet to arrive belongs to
    * some earlier exchange, so reading one would only deepen the confusion.
-   * The goodbye is still sent — on UDP there is no connection close to tell
-   * the device the session is over, so skipping it would leave the device
-   * holding the session slot. Nothing here throws; the caller is already on
-   * its way to reporting a failure of its own.
+   * The same is true of a subscribed session — the socket is listening, so a
+   * reply could never be read there either — which is why close() defers to
+   * this method rather than duplicating it. The goodbye is still sent — on
+   * UDP there is no connection close to tell the device the session is over,
+   * so skipping it would leave the device holding the session slot. Nothing
+   * here throws; the caller is already on its way to reporting a failure of
+   * its own.
    */
   private async abandon(): Promise<void> {
     if (!this.open_) return
@@ -377,24 +380,26 @@ export class Session {
     await this.transport.close().catch(() => {})
   }
 
+  /**
+   * Ends the session. Never throws: a goodbye is best effort, and a device
+   * that has already gone away needs none.
+   *
+   * A subscribed session cannot read a reply — the socket is listening — so
+   * it goes through abandon(), which sends EXIT without awaiting one. On UDP
+   * that goodbye is the only thing telling the device to release the session
+   * slot, which is why it is sent at all. A goodbye that times out runs the
+   * §5.2 teardown from inside send(); abandon() and the transport close that
+   * follows are both idempotent, so the sequence ends the same way.
+   */
   async close(): Promise<void> {
     if (!this.open_) return
+    if (this.subscribed_) return this.abandon()
     this.open_ = false
-    if (this.subscribed_) {
-      // The socket is listening, so a reply could never be read — the goodbye
-      // is sent without awaiting one. It is still sent: on UDP there is no
-      // connection close to tell the device the session is over, so skipping
-      // it would leave the device holding the session slot.
-      await this.transmit(CMD.EXIT).catch(() => {})
-      this.subscribed_ = false
-      await this.transport.close()
-      return
-    }
     try {
       await this.send(CMD.EXIT)
     } catch {
       // A device that has already gone away needs no goodbye.
     }
-    await this.transport.close()
+    await this.transport.close().catch(() => {})
   }
 }
