@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { CMD } from '../../src/codec/commands.js'
 import { EVENT_FLAG } from '../../src/codec/events.js'
-import { ZkConnectionError, ZkProtocolError } from '../../src/errors.js'
+import { ZkAuthError, ZkConnectionError, ZkProtocolError } from '../../src/errors.js'
 import { Session } from '../../src/session/Session.js'
 import { TcpTransport } from '../../src/transport/tcp.js'
 import { UdpTransport } from '../../src/transport/udp.js'
@@ -160,6 +160,37 @@ for (const kind of ['tcp', 'udp'] as const) {
         await new Promise((r) => setTimeout(r, 100))
         expect(running.sockets.size).toBe(0)
       }
+      session = null
+    })
+
+    it('refuses a second subscribe() before sending a second registration', async () => {
+      running = await startEmulator({ transport: kind })
+      session = new Session(make(running.port), { timeoutMs: 2000 })
+      await session.open()
+      await session.subscribe(EVENT_FLAG.ATTENDANCE, () => {}, () => {})
+      const err = await session.subscribe(EVENT_FLAG.ATTENDANCE, () => {}, () => {}).then(() => null, (e: unknown) => e as Error)
+      expect(err).toBeInstanceOf(ZkConnectionError)
+      expect(err!.message).toMatch(/already subscribed/)
+      expect(running.received.filter((p) => p.command === CMD.REG_EVENT)).toHaveLength(1)
+    })
+
+    it('throws ZkAuthError when the registration answers ACK_UNAUTH', async () => {
+      running = await startEmulator({
+        transport: kind,
+        handlers: { [CMD.REG_EVENT]: (req, state) => [reply(state, req, CMD.ACK_UNAUTH)] },
+      })
+      session = new Session(make(running.port), { timeoutMs: 2000 })
+      await session.open()
+      await expect(session.subscribe(EVENT_FLAG.ATTENDANCE, () => {}, () => {})).rejects.toBeInstanceOf(ZkAuthError)
+      expect(session.subscribed).toBe(false)
+    })
+
+    it('refuses subscribe() on a session that is not open', async () => {
+      running = await startEmulator({ transport: kind })
+      session = new Session(make(running.port), { timeoutMs: 2000 })
+      await session.open()
+      await session.close()
+      await expect(session.subscribe(EVENT_FLAG.ATTENDANCE, () => {}, () => {})).rejects.toThrow(/this session is not open/)
       session = null
     })
   })

@@ -176,12 +176,23 @@ export class Session {
    * discrimination rule no device has ever confirmed. Spec §1.1 already
    * answers a lost event: polling is the source of truth, and the next poll
    * recovers it.
+   *
+   * Guarded before anything is sent: a second subscribe() used to transmit a
+   * second REG_EVENT whose acknowledgment then arrived on the listening
+   * socket and ended the live stream as "a non-event packet", blaming the
+   * device.
    */
   async subscribe(
     mask: number,
     onPacket: (pkt: DecodedPacket) => void,
     onError: (err: Error) => void,
   ): Promise<void> {
+    this.assertOpen()
+    if (this.subscribed_) {
+      throw new ZkConnectionError(
+        'this session is already subscribed to realtime events; close it and reconnect to subscribe again',
+      )
+    }
     const res = await this.send(CMD.REG_EVENT, encodeEventMask(mask))
     if (isEventPacket(res)) {
       await this.abandon()
@@ -189,6 +200,12 @@ export class Session {
         'a realtime event arrived where the CMD_REG_EVENT reply was expected: the device pushed ' +
           'an event before acknowledging the registration, so the reply stream is out of step. ' +
           'This session has been torn down; reconnect before using it again',
+      )
+    }
+    if (res.command === CMD.ACK_UNAUTH) {
+      throw new ZkAuthError(
+        'CMD_REG_EVENT answered ACK_UNAUTH: the device did not authorize a realtime subscription',
+        res.data,
       )
     }
     if (res.command !== CMD.ACK_OK) {
