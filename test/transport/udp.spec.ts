@@ -35,6 +35,20 @@ describe('UdpTransport', () => {
     expect(raw.readUInt16LE(0)).toBe(CMD.CONNECT)
   })
 
+  // `sock.connect(port, host, cb)` hands its callback an error on a lookup or
+  // connect failure and emits no 'error'. The callback ignored that argument,
+  // so connect() resolved on a host that does not exist and the failure only
+  // surfaced from the first send(), as a RangeError about the port — not a
+  // ZkError, so Session.open() rethrew it raw (spec §4.3 wants a
+  // ZkConnectionError). `.invalid` is reserved by RFC 2606 and never resolves,
+  // so this is a deterministic lookup failure rather than a hang.
+  it('rejects a connect whose lookup fails, naming the host', async () => {
+    transport = new UdpTransport({ host: 'nonexistent.invalid', port: 4370 })
+    const err = await transport.connect(2_000).then(() => null, (e: unknown) => e as Error)
+    expect(err).toBeInstanceOf(ZkConnectionError)
+    expect(err!.message).toMatch(/nonexistent\.invalid/)
+  })
+
   it('times out rather than hanging when the device stays silent', async () => {
     running = await startEmulator({ transport: 'udp', behavior: 'silent' })
     transport = new UdpTransport({ host: '127.0.0.1', port: running.port })

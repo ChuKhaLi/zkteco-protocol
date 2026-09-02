@@ -56,10 +56,22 @@ export class UdpTransport implements Transport {
         // datagrams from this peer and drops the rest, and send() needs no
         // address. This is the whole of the network-level defence against a
         // forged reply (spec v0.5 §4.4). The name is resolved once, here.
-        sock.connect(this.opts.port, this.opts.host, () => {
+        // The callback's error argument is the ONLY report of a failed
+        // lookup or connect: when a callback is passed, node calls it with
+        // the error instead of emitting 'error', so the handler above never
+        // runs. Ignoring it made connect() resolve against a host that does
+        // not exist, and the failure first surfaced from send() as a
+        // RangeError about the port — not a ZkError, so Session.open()
+        // rethrew it raw.
+        sock.connect(this.opts.port, this.opts.host, (err?: Error) => {
           if (connectSettled) return
           connectSettled = true
           clearTimeout(timer)
+          if (err) {
+            sock.close()
+            reject(new ZkConnectionError(`cannot connect to ${where}: ${err.message}`))
+            return
+          }
           this.socket = sock
           resolve()
         })
