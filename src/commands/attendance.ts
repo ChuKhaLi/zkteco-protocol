@@ -22,8 +22,9 @@ export interface GetAttendanceOptions {
 
   /**
    * Resolve the printed user id for the 8- and 16-byte dialects by also
-   * reading the user list. Defaults to true. Turning it off saves one device
-   * round-trip and leaves `userId` null for those dialects.
+   * reading the user list. Defaults to true. Turning it off skips a full
+   * download of the user list on every call — not one round-trip — and leaves
+   * `userId` null for those dialects.
    */
   resolveUserIds?: boolean
 }
@@ -36,7 +37,7 @@ function isAtOrAfter(a: ZkNaiveTime, boundary: ZkNaiveTime): boolean {
 function resolve(
   record: DecodedAttendanceRecord,
   byUid: Map<number, ZkUser>,
-  byNumericUserId: Map<number, ZkUser>,
+  byNumericUserId: Map<number, ZkUser | null>,
 ): Pick<ZkAttendanceLog, 'userId' | 'userIdSource'> {
   if (record.userIdFromRecord !== null) {
     return { userId: record.userIdFromRecord, userIdSource: 'device' }
@@ -47,9 +48,11 @@ function resolve(
       : record.numericUserId !== null
         ? byNumericUserId.get(record.numericUserId)
         : undefined
-  // No match means no identity. Never fabricate one — a null beats a name that
-  // belongs to somebody else.
-  return match ? { userId: match.userId, userIdSource: 'lookup' } : { userId: null, userIdSource: null }
+  // No match means no identity, and so does an ambiguous one (null in
+  // byNumericUserId marks a numeric key two users share) or a blank printed
+  // id. Never fabricate — a null beats a name that belongs to somebody else.
+  if (!match || match.userId === '') return { userId: null, userIdSource: null }
+  return { userId: match.userId, userIdSource: 'lookup' }
 }
 
 /** Reads the attendance log. */
@@ -87,10 +90,15 @@ export async function getAttendanceLogs(
   const byUid = new Map(users.map((u) => [u.uid, u]))
   // The 16-byte dialect carries a numeric user id, so match on the numeric
   // value of the printed one. Leading zeros survive because the string from
-  // the user list is what gets returned.
-  const byNumericUserId = new Map(
-    users.filter((u) => /^\d+$/.test(u.userId)).map((u) => [Number(u.userId), u]),
-  )
+  // the user list is what gets returned — which is also why '1' and '01' are
+  // two users sharing one numeric key: that key is marked ambiguous (null)
+  // and resolves to no identity rather than to whichever was listed last.
+  const byNumericUserId = new Map<number, ZkUser | null>()
+  for (const u of users) {
+    if (!/^\d+$/.test(u.userId)) continue
+    const n = Number(u.userId)
+    byNumericUserId.set(n, byNumericUserId.has(n) ? null : u)
+  }
 
   const logs: ZkAttendanceLog[] = records.map((r) => ({
     ...resolve(r, byUid, byNumericUserId),

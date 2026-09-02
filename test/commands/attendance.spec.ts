@@ -112,6 +112,34 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       expect(log).toMatchObject({ userId: '007', userIdSource: 'lookup' })
     })
 
+    it('returns null when two enrolled ids collide numerically', async () => {
+      // '1' and '01' both become 1. Last-writer-wins picked one and labelled
+      // it 'lookup' (review R13).
+      running = await startEmulator({
+        transport: transportKind,
+        info: { userCount: 2, recordCount: 1, recordCapacity: 1000 },
+        users: [emUser(1, '1', 'One'), emUser(2, '01', 'Zero-one')],
+        records: { size: 16, rows: [rec16(1, DAY)] },
+      })
+      session = await openSession(running.port)
+      const [log] = await getAttendanceLogs(session, transportKind)
+      expect(log).toMatchObject({ userId: null, userIdSource: null })
+    })
+
+    it('returns null when the matched user has a blank printed id', async () => {
+      // The 40-byte path maps '' to null (records/attendance.ts). The lookup
+      // path handed '' back with source 'lookup'.
+      running = await startEmulator({
+        transport: transportKind,
+        info: { userCount: 1, recordCount: 1, recordCapacity: 1000 },
+        users: [emUser(9, '', 'Blank')],
+        records: { size: 8, rows: [rec8(9, DAY)] },
+      })
+      session = await openSession(running.port)
+      const [log] = await getAttendanceLogs(session, transportKind)
+      expect(log).toMatchObject({ userId: null, userIdSource: null, uid: 9 })
+    })
+
     it('returns null rather than inventing an identity it cannot resolve', async () => {
       running = await startEmulator({
         transport: transportKind,
