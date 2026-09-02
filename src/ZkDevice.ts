@@ -6,8 +6,7 @@ import { EVENT_FLAG } from './codec/events.js'
 import { ZkConnectionError } from './errors.js'
 import { DEFAULT_BUFFER_LIMIT, Subscription, type SubscribeOptions, type ZkEventStream } from './realtime/Subscription.js'
 import { Session } from './session/Session.js'
-import { TcpTransport } from './transport/tcp.js'
-import { UdpTransport } from './transport/udp.js'
+import { createTransport } from './transport/createTransport.js'
 import type { Transport } from './transport/Transport.js'
 import type { ZkAttendanceLog, ZkDeviceInfo, ZkDeviceIdentity, ZkNaiveTime, ZkUser } from './types.js'
 
@@ -44,8 +43,7 @@ export class ZkDevice {
   }
 
   private makeTransport(): Transport {
-    const opts = { host: this.host, port: this.port }
-    return this.transportKind === 'tcp' ? new TcpTransport(opts) : new UdpTransport(opts)
+    return createTransport(this.transportKind, { host: this.host, port: this.port })
   }
 
   private requireSession(): Session {
