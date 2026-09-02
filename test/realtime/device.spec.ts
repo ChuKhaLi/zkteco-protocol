@@ -138,5 +138,19 @@ for (const transport of ['tcp', 'udp'] as const) {
       expect(running.state.eventMask).toBeNull()
       await expect(device.getInfo()).resolves.toMatchObject({ userCount: 3 })
     })
+
+    it('delivers the first event when the idle timeout is shorter than the registration round trip', async () => {
+      running = await startEmulator({ transport, replyDelayMs: 120 })
+      device = new ZkDevice({ host: '127.0.0.1', port: running.port, transport })
+      await device.connect()
+      stream = await device.subscribe({ idleTimeoutMs: 60 })
+      const data = Buffer.alloc(32)
+      data.write('G7', 0, 9, 'ascii')
+      data.set([26, 8, 27, 8, 1, 30], 26)
+      running.pushEvent(EVENT_FLAG.ATTENDANCE, data)
+      const first = await stream[Symbol.asyncIterator]().next()
+      expect(first.done).toBe(false)
+      expect(first.value).toMatchObject({ kind: 'attendance', userId: 'G7' })
+    })
   })
 }

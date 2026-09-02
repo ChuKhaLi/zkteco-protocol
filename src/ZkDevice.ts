@@ -205,6 +205,7 @@ export class ZkDevice {
       (pkt) => subscription.push(pkt),
       (err) => subscription.fail(err),
     )
+    subscription.start()
     this.stream = subscription
     return subscription
   }

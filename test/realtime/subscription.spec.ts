@@ -98,12 +98,6 @@ describe('Subscription', () => {
     await expect(drain(sub, 1)).rejects.toThrow(ZkProtocolError)
   })
 
-  it('ends the stream when nothing arrives within the idle timeout', async () => {
-    const { session } = fakeSession()
-    const sub = new Subscription(session, { ...opts, idleTimeoutMs: 60 })
-    await expect(drain(sub, 1)).rejects.toThrow(ZkTimeoutError)
-  })
-
   it('closes the session exactly once, however often close() is called', async () => {
     const { session, closed } = fakeSession()
     const sub = new Subscription(session, opts)
@@ -150,5 +144,32 @@ describe('Subscription', () => {
     const sub = new Subscription(session, opts)
     await sub.close()
     expect(await sub[Symbol.asyncIterator]().next()).toEqual({ value: undefined, done: true })
+  })
+
+  it('does not arm the idle timer until start()', async () => {
+    const { session } = fakeSession()
+    const sub = new Subscription(session, { ...opts, idleTimeoutMs: 30 })
+    await new Promise((r) => setTimeout(r, 80))
+    // Still live: the timer is armed by start(), after registration.
+    sub.push(pushed(EVENT_FLAG.ATTENDANCE, attendancePayload('E5')))
+    const got = await drain(sub, 1)
+    expect(got[0]).toMatchObject({ userId: 'E5' })
+    await sub.close()
+  })
+
+  it('ends the stream with ZkTimeoutError once started and idle', async () => {
+    const { session } = fakeSession()
+    const sub = new Subscription(session, { ...opts, idleTimeoutMs: 30 })
+    sub.start()
+    await expect(drain(sub, 1)).rejects.toThrow(ZkTimeoutError)
+  })
+
+  it('queues an event pushed before start() and delivers it after', async () => {
+    const { session } = fakeSession()
+    const sub = new Subscription(session, opts)
+    sub.push(pushed(EVENT_FLAG.ATTENDANCE, attendancePayload('F6')))
+    sub.start()
+    expect((await drain(sub, 1))[0]).toMatchObject({ userId: 'F6' })
+    await sub.close()
   })
 })

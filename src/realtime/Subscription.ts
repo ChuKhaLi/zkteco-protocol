@@ -55,25 +55,50 @@ export interface ResolvedOptions {
   idleTimeoutMs: number
 }
 
+type State =
+  | { kind: 'registering' }
+  | { kind: 'live' }
+  | { kind: 'failed'; error: Error }
+  | { kind: 'closed' }
+
+interface Pending {
+  resolve: (result: IteratorResult<ZkRealtimeEvent>) => void
+  reject: (err: Error) => void
+}
+
 export class Subscription implements ZkEventStream {
   private readonly queue: ZkRealtimeEvent[] = []
-  private waiter: ((result: IteratorResult<ZkRealtimeEvent>) => void) | null = null
-  private rejectWaiter: ((err: Error) => void) | null = null
-  private failure: Error | null = null
-  private ended = false
-  private closed = false
+  /**
+   * One state, not five flags. Before v0.5 `waiter`, `rejectWaiter`,
+   * `failure`, `ended` and `closed` had to be kept in step by hand at four
+   * sites, and the type let them disagree (spec v0.5 §8).
+   */
+  private state: State = { kind: 'registering' }
+  private pending: Pending | null = null
   private idleTimer: NodeJS.Timeout | null = null
 
   constructor(
     private readonly session: Session,
     private readonly opts: ResolvedOptions,
-  ) {
+  ) {}
+
+  /**
+   * Registration completed: the stream is live and the idle timer starts.
+   *
+   * Called by ZkDevice.subscribe after Session.subscribe resolves. Arming
+   * the timer in the constructor, as before v0.5, started it before
+   * CMD_REG_EVENT was even sent, so an idleTimeoutMs shorter than the
+   * registration round trip returned a stream that had already ended.
+   */
+  start(): void {
+    if (this.state.kind !== 'registering') return
+    this.state = { kind: 'live' }
     this.armIdleTimer()
   }
 
   /** Accepts one packet the transport pushed. Never throws. */
   push(pkt: DecodedPacket): void {
-    if (this.ended) return
+    if (this.state.kind === 'failed' || this.state.kind === 'closed') return
     if (!isEventPacket(pkt)) {
       // Deliberately strict: while listening, nothing else should arrive. If
       // something does, this library's model of the connection is wrong, and
@@ -85,13 +110,11 @@ export class Subscription implements ZkEventStream {
       )
       return
     }
-    this.armIdleTimer()
+    if (this.state.kind === 'live') this.armIdleTimer()
     const event = decodeRealtimeEvent(pkt)
-    const waiter = this.waiter
-    if (waiter) {
-      this.waiter = null
-      this.rejectWaiter = null
-      waiter({ value: event, done: false })
+    const pending = this.takePending()
+    if (pending) {
+      pending.resolve({ value: event, done: false })
       return
     }
     this.queue.push(event)
@@ -112,17 +135,12 @@ export class Subscription implements ZkEventStream {
    * than reporting the failure a few iterations later.
    */
   fail(err: Error): void {
-    if (this.ended) return
-    this.ended = true
+    if (this.state.kind === 'failed' || this.state.kind === 'closed') return
+    this.state = { kind: 'failed', error: err }
     this.clearIdleTimer()
-    this.failure = err
-    const waiter = this.waiter
-    const reject = this.rejectWaiter
-    if (waiter && this.queue.length === 0) {
+    if (this.queue.length === 0) {
       // A waiting consumer has nothing queued to drain, so it fails now.
-      this.waiter = null
-      this.rejectWaiter = null
-      reject?.(err)
+      this.takePending()?.reject(err)
     }
   }
 
@@ -131,11 +149,16 @@ export class Subscription implements ZkEventStream {
       next: (): Promise<IteratorResult<ZkRealtimeEvent>> => {
         const queued = this.queue.shift()
         if (queued) return Promise.resolve({ value: queued, done: false })
-        if (this.failure) return Promise.reject(this.failure)
-        if (this.ended || this.closed) {
-          return Promise.resolve({ value: undefined, done: true })
+        switch (this.state.kind) {
+          case 'failed':
+            return Promise.reject(this.state.error)
+          case 'closed':
+            return Promise.resolve({ value: undefined, done: true })
+          case 'registering':
+          case 'live':
+            break
         }
-        if (this.waiter) {
+        if (this.pending) {
           // There is one waiter slot. A second concurrent next() would
           // overwrite the first and orphan its promise forever, so it is
           // refused instead — the same choice, and the same error, the
@@ -147,8 +170,7 @@ export class Subscription implements ZkEventStream {
           )
         }
         return new Promise<IteratorResult<ZkRealtimeEvent>>((resolve, reject) => {
-          this.waiter = resolve
-          this.rejectWaiter = reject
+          this.pending = { resolve, reject }
         })
       },
 
@@ -182,17 +204,17 @@ export class Subscription implements ZkEventStream {
 
   /** Ends the subscription and the connection it rides on. Idempotent. */
   async close(): Promise<void> {
-    if (this.closed) return
-    this.closed = true
-    this.ended = true
+    if (this.state.kind === 'closed') return
+    this.state = { kind: 'closed' }
     this.clearIdleTimer()
-    const waiter = this.waiter
-    if (waiter) {
-      this.waiter = null
-      this.rejectWaiter = null
-      waiter({ value: undefined, done: true })
-    }
+    this.takePending()?.resolve({ value: undefined, done: true })
     await this.session.close()
+  }
+
+  private takePending(): Pending | null {
+    const pending = this.pending
+    this.pending = null
+    return pending
   }
 
   private armIdleTimer(): void {
