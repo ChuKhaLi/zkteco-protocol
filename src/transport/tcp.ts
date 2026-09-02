@@ -60,12 +60,19 @@ export class TcpTransport implements Transport {
       try {
         framed = tryUnframeTcp(this.buffered)
       } catch (err) {
-        // Release the accumulator along with failing the connection. The
-        // bytes cannot be re-parsed — the frame they belong to was rejected —
-        // and holding them keeps a rejected oversized length costing memory
-        // for the life of the object.
+        // The frame was rejected, so the stream is misaligned and nothing
+        // after it can be trusted: release the accumulator, drop the queue
+        // (those packets belong to an exchange the session is about to tear
+        // down), keep the failure as the reason, and end the socket.
         this.buffered = Buffer.alloc(0)
+        this.inbox.clear()
         this.fail(err as Error)
+        const sock = this.socket
+        this.socket = null
+        if (sock) {
+          sock.removeAllListeners('close')
+          sock.destroy()
+        }
         return
       }
       if (!framed) return
@@ -101,7 +108,9 @@ export class TcpTransport implements Transport {
 
   send(payload: Buffer): Promise<void> {
     const sock = this.socket
-    if (!sock) return Promise.reject(new ZkConnectionError('transport is not connected'))
+    if (!sock) {
+      return Promise.reject(this.failure ?? new ZkConnectionError('transport is not connected'))
+    }
     return new Promise((resolve, reject) => {
       sock.write(frameTcp(payload), (err) =>
         err ? reject(new ZkConnectionError(err.message)) : resolve(),

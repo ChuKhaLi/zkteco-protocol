@@ -4,7 +4,7 @@ import { TcpTransport } from '../../src/transport/tcp.js'
 import { CMD } from '../../src/codec/commands.js'
 import { decodePayload, encodePayload } from '../../src/codec/packet.js'
 import { frameTcp, START_MARKER } from '../../src/codec/framing.js'
-import { ZkConnectionError, ZkProtocolError, ZkTimeoutError } from '../../src/errors.js'
+import { ZkConnectionError, ZkFramingError, ZkTimeoutError } from '../../src/errors.js'
 import { startEmulator, type Emulator } from '../emulator/index.js'
 
 let running: Emulator | null = null
@@ -145,8 +145,27 @@ describe('TcpTransport', () => {
     bogus.writeUInt32LE(0xffffff, 4) // far past MAX_DECLARED_SIZE
     for (const socket of running.sockets) socket.write(bogus)
 
-    await expect(pending).rejects.toThrow(ZkProtocolError)
+    await expect(pending).rejects.toThrow(ZkFramingError)
     expect((transport as unknown as { buffered: Buffer }).buffered.length).toBe(0)
+  })
+
+  // After a framing failure the stream is misaligned. A good packet that was
+  // queued before the junk is individually valid but belongs to an exchange
+  // the session is about to tear down; serving it first is what let seventeen
+  // further probe steps run on a broken stream (review R2).
+  it('ends the transport on a framing failure: queue dropped, socket gone, send refused', async () => {
+    running = await startEmulator({ transport: 'tcp', sessionId: 0x11 })
+    transport = new TcpTransport({ host: '127.0.0.1', port: running.port })
+    await transport.connect(2_000)
+    await transport.send(connectPayload())
+    await new Promise((r) => setTimeout(r, 100)) // the ACK_OK lands in the queue, unclaimed
+
+    for (const socket of running.sockets) socket.write(Buffer.from('deadbeefdeadbeef', 'hex'))
+    await new Promise((r) => setTimeout(r, 100))
+
+    await expect(transport.receive(200)).rejects.toBeInstanceOf(ZkFramingError)
+    await expect(transport.send(connectPayload())).rejects.toBeInstanceOf(ZkFramingError)
+    expect((transport as unknown as { socket: net.Socket | null }).socket).toBeNull()
   })
 
   // A socket 'error' is followed by a 'close'. The first is the informative

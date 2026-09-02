@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { START_MARKER, frameTcp, tryUnframeTcp } from '../../src/codec/framing.js'
 import { MAX_CHUNK } from '../../src/codec/commands.js'
-import { ZkProtocolError } from '../../src/errors.js'
+import { ZkFramingError } from '../../src/errors.js'
 
 const payload = Buffer.from([0xe8, 0x03, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00])
 
@@ -45,7 +45,7 @@ describe('tryUnframeTcp', () => {
   it('throws when the start marker does not match', () => {
     const bad = frameTcp(payload)
     bad.writeUInt8(0x51, 0)
-    expect(() => tryUnframeTcp(bad)).toThrow(ZkProtocolError)
+    expect(() => tryUnframeTcp(bad)).toThrow(ZkFramingError)
   })
 
   it('throws rather than waiting forever when the declared size is absurd', () => {
@@ -57,7 +57,7 @@ describe('tryUnframeTcp', () => {
     const head = Buffer.alloc(8)
     START_MARKER.copy(head, 0)
     head.writeUInt32LE(MAX_CHUNK.tcp + 9, 4)
-    expect(() => tryUnframeTcp(head)).toThrow(ZkProtocolError)
+    expect(() => tryUnframeTcp(head)).toThrow(ZkFramingError)
   })
 
   it('accepts a declared size right at the maximum', () => {

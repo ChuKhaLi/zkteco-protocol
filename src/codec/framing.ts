@@ -1,4 +1,4 @@
-import { ZkProtocolError } from '../errors.js'
+import { ZkFramingError } from '../errors.js'
 import { MAX_CHUNK } from './commands.js'
 
 /**
@@ -32,11 +32,14 @@ export function frameTcp(payload: Buffer): Buffer {
  * Attempts to read one framed packet from the front of an accumulating buffer.
  * Returns null when more bytes are still needed — TCP splits and coalesces
  * freely, so a caller must be able to wait rather than fail.
+ *
+ * Throws ZkFramingError: the bytes may be misaligned, and nothing parsed
+ * from this stream afterwards can be trusted — the transport ends on it.
  */
 export function tryUnframeTcp(buf: Buffer): { payload: Buffer; consumed: number } | null {
   if (buf.length < TCP_PREFIX_SIZE) return null
   if (!buf.subarray(0, 4).equals(START_MARKER)) {
-    throw new ZkProtocolError('TCP start marker mismatch', buf.subarray(0, 8))
+    throw new ZkFramingError('TCP start marker mismatch', buf.subarray(0, 8))
   }
   const size = buf.readUInt32LE(4)
   // An unbounded declared size means a single corrupt length prefix wedges
@@ -46,7 +49,7 @@ export function tryUnframeTcp(buf: Buffer): { payload: Buffer; consumed: number 
   // Reject before that accumulation starts (spec §5.3: "declared payload
   // size matches actual length").
   if (size > MAX_DECLARED_SIZE) {
-    throw new ZkProtocolError(
+    throw new ZkFramingError(
       `TCP declared payload size ${size} exceeds the ${MAX_DECLARED_SIZE}-byte maximum`,
       buf.subarray(0, 8),
     )

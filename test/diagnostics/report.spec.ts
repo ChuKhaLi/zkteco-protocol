@@ -232,8 +232,8 @@ describe('item 5 — the TCP declared-size cap (C-1)', () => {
     const steps = await stepsFrom('firmware', () => tryUnframeTcp(oversized))
 
     // The premise, asserted rather than assumed: the cap throws
-    // ZkProtocolError, and TcpTransport propagates it unwrapped.
-    expect(steps[0]).toMatchObject({ outcome: 'malformed', errorClass: 'ZkProtocolError' })
+    // ZkFramingError (v0.5), and TcpTransport propagates it unwrapped.
+    expect(steps[0]).toMatchObject({ outcome: 'malformed', errorClass: 'ZkFramingError' })
 
     const md = renderMarkdown({ ...sample(), steps })
     expect(checklistState(md, 5)).toBe('answered')

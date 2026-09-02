@@ -171,16 +171,11 @@ const DECLARED_SIZE_CAP_MESSAGE = /declared payload size \d+ exceeds/
  * Did this step carry the TCP declared-size cap firing?
  *
  * Item 5 names exactly one constant: `MAX_DECLARED_SIZE` in
- * `src/codec/framing.ts`. That cap throws `ZkProtocolError` (framing.ts:49).
- * It does NOT throw `ZkFramingError` — that class is thrown only by the two
- * record parsers (`codec/records/user.ts`, `codec/records/attendance.ts`),
- * which have nothing to do with framing.ts, and the two classes are siblings
- * under `ZkError` so no subtype relation blurs them.
- *
- * The class alone is not enough either: `ZkProtocolError` covers most of the
- * protocol surface (a start-marker mismatch, a short decode, an ACK_ERROR),
- * and any of those would otherwise answer item 5 with an unrelated event.
- * Hence class AND the cap's own message.
+ * `src/codec/framing.ts`. Since v0.5 that cap throws `ZkFramingError`
+ * (framing.ts:49), the same class the two RECORD parsers throw — so the class
+ * alone cannot identify the cap, and the message is matched as well. Both
+ * halves are load-bearing: the class keeps a ZkProtocolError whose message
+ * happens to mention a size out, and the message keeps a record parser out.
  *
  * Matching on prose is a real coupling and it is deliberate. The alternative —
  * exporting a predicate from framing.ts — would change the library this
@@ -190,7 +185,7 @@ const DECLARED_SIZE_CAP_MESSAGE = /declared payload size \d+ exceeds/
  * silently switching this row off.
  */
 function isDeclaredSizeCap(step: StepResult): boolean {
-  return step.errorClass === 'ZkProtocolError' && DECLARED_SIZE_CAP_MESSAGE.test(step.errorMessage ?? '')
+  return step.errorClass === 'ZkFramingError' && DECLARED_SIZE_CAP_MESSAGE.test(step.errorMessage ?? '')
 }
 
 /**
