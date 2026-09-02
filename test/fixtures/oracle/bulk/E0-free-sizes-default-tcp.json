@@ -1,0 +1,35 @@
+{
+  "experiment": "E0",
+  "variant": "E0-free-sizes-default-tcp",
+  "transport": "tcp",
+  "served": {
+    "users": [
+      "1|100001|Ann",
+      "2|100002|Bo",
+      "3|100003|Cy"
+    ],
+    "options": {},
+    "freeSizesReply": "default encodeFreeSizes: 68 bytes, userCount 3"
+  },
+  "completed": true,
+  "exitCode": 0,
+  "printed": [],
+  "stderr": "",
+  "sent": [
+    {
+      "command": 1000,
+      "sessionId": 0,
+      "replyId": 0
+    },
+    {
+      "command": 50,
+      "sessionId": 7982,
+      "replyId": 1
+    },
+    {
+      "command": 1001,
+      "sessionId": 7982,
+      "replyId": 2
+    }
+  ]
+}

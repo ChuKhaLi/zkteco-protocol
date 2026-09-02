@@ -399,10 +399,13 @@ TCP** (`ztcp.js:471`, `zudp.js:382`, `helper/utils.js:114-126`). Whether that
 is a property of the transport, of firmware age, or of the reference's own
 history is not recorded anywhere readable. This library reads 72 on both
 transports and refuses a body that is not a whole number of 72-byte records,
-so a 28-byte device is refused rather than misparsed. Experiment E4 (below,
-under *The buffered read — restated from a single readable source*) asks
-`pyzk` which size it expects on each transport. No second decoder exists;
-adding one would be a new hypothesis.
+so a 28-byte device is refused rather than misparsed. Experiment E4
+(`test/fixtures/oracle/bulk/E4-*.json`, recorded under *The buffered read —
+restated from a single readable source*) served `pyzk` three users as
+72-byte and as 28-byte records over UDP; it decoded both correctly. So
+`pyzk` does not fix the width by transport the way `zkteco-js` does, and
+neither oracle says what a device sends. No second decoder exists; adding
+one would be a new hypothesis.
 
 ## Reply binding: not implemented, and why
 
@@ -450,27 +453,32 @@ model agreed with nothing but its own emulator.
 | READ_BUFFER reply command | never checked | not checked on TCP; a fourth command is an error on UDP | same |
 
 Experiments E2 and E3 put `pyzk` against both models
-(`test/fixtures/oracle/bulk/E2-*.json`, `E3-*.json`). Both experiments needed
-one more thing served correctly first: `pyzk`'s `get_users()` reads a user
-count out of the unrelated `CMD_GET_FREE_SIZES` reply before it will attempt
-any read at all, and gives up silently — `completed: true`, zero users
-printed, no `PREPARE_BUFFER` ever sent — if that count reads as zero. Getting
-real evidence out of E1-E4 required serving a `CMD_GET_FREE_SIZES` reply
-`pyzk` accepts: bisecting black-box (reply length, then which offset carries
-the count) found `pyzk` needs at least 80 bytes with the count as a
-little-endian uint32 at byte offset 16 — the harness in
-`tools/oracle/experiments.ts` records this per fixture under
-`served.freeSizesReply`. Offset 16 happens to match this library's own
-(hardware-unverified) `FREE_SIZES_OFFSET.userCount`; the 80-byte minimum
-length does not match anything this library encodes and is not asserted
-anywhere else. That is corroboration of one offset, not of the whole table —
-"Unverified field offsets" above is unchanged by it.
+(`test/fixtures/oracle/bulk/E2-*.json`, `E3-*.json`) — and, along with E1 and
+E4, first needed one more thing served correctly: `pyzk`'s `get_users()`
+reads a user count out of the unrelated `CMD_GET_FREE_SIZES` reply before it
+will attempt any read at all, and gives up silently — `completed: true`, zero
+users printed, no `PREPARE_BUFFER` ever sent — if that count reads as zero.
+Experiment E0 (`test/fixtures/oracle/bulk/E0-free-sizes-default-tcp.json`)
+puts that negative result in a fixture rather than only in a comment: served
+the 68-byte reply this library's own encoder produces (`encodeFreeSizes`,
+capped at `FREE_SIZES_OFFSET.recordCapacity + 4`) with `userCount` correctly
+set to 3, `pyzk` still completed having sent nothing past `CONNECT`,
+`CMD_GET_FREE_SIZES`, `EXIT`. An 80-byte reply with the count as a
+little-endian uint32 at byte offset 16 was enough — every E1-E4 fixture was
+served that reply instead (`tools/oracle/experiments.ts`, recorded per
+fixture under `served.freeSizesReply`) and reached the actual read. Offset 16
+happens to match this library's own (hardware-unverified)
+`FREE_SIZES_OFFSET.userCount`; nothing here claims 80 bytes or offset 16 are
+minimal or exact — intermediate lengths and other offsets were never tried —
+only that this combination works and the 68-byte default does not, both
+reproducible from this tree. That is corroboration of one offset, not of the
+whole table — "Unverified field offsets" above is unchanged by it.
 
 | Question | Result | Read as |
 |---|---|---|
 | E2: which offset does pyzk read the size at? | `size-at-1`: `pyzk` sent `READ_BUFFER` requesting offset 0, size 220 (`00000000dc000000`) — a sensible request. `size-at-0`: `pyzk` never sent a `READ_BUFFER` at all; it raised `unpack requires a buffer of 4 bytes` decoding the 4-byte `PREPARE_BUFFER` reply itself, before reaching the point of asking for a size. | agrees with the reference: two oracles agree |
 | E3: which chunk shape does pyzk complete a read under? | `transfer`: completed, printed all three served users. `single-packet`: sent three identical `READ_BUFFER` retries, then failed with `pyzk read failed: can't read chunk 0:[220]` — never completed. | agrees with the reference: two oracles agree |
-| E4: which user record size does pyzk expect over UDP? | Both: printed all three served users under a 72-byte-per-record body (`READ_BUFFER` requested 220 bytes) and under a 28-byte-per-record body (requested 88 bytes). | recorded under *User record width and size*; no code change — unlike `zkteco-js`'s fixed 28/72 split by transport, `pyzk` did not fail under either size on UDP |
+| E4: which user record size does pyzk expect over UDP? | Both: printed all three served users under a 72-byte-per-record body (`READ_BUFFER` requested 220 bytes) and under a 28-byte-per-record body (requested 88 bytes). | `pyzk` decoded both sizes on UDP — it does not fix the width by transport the way `zkteco-js` does; recorded under *User record width and size*, no code change |
 
 Neither oracle is a device. The first hardware run is the test either way.
 
