@@ -149,6 +149,41 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       session = null
     })
 
+    // "close() never throws on a dead transport" was a spec claim whose only
+    // exercise was an afterEach hook wrapped in .catch(() => {}) — which is
+    // to say, no exercise at all: a rejection there is swallowed and the run
+    // stays green. Both halves are asserted here, the resolution and the
+    // released socket.
+    //
+    // What actually carries the guarantee is the try/catch around close()'s
+    // goodbye, not the .catch on transport.close(): dropping that catch turns
+    // this red on both transports (tcp `ZkConnectionError: This socket has
+    // been ended by the other party`, udp `ZkTimeoutError: no reply within
+    // 300ms`), while dropping the .catch on transport.close() leaves it
+    // green, because neither transport's close() rejects over a socket that
+    // is still ours to close.
+    it('closes without throwing when the transport underneath it is already dead', async () => {
+      running = await startEmulator({ transport: transportKind })
+      const transport = makeTransport(running.port)
+      session = new Session(transport, { timeoutMs: 300 })
+      await session.open()
+
+      if (transportKind === 'tcp') {
+        // The peer's sockets go away, which ours sees as a close.
+        for (const socket of running.sockets) socket.destroy()
+        await new Promise((r) => setTimeout(r, 100))
+      } else {
+        // The port goes away, which a UDP socket does not see at all: the
+        // goodbye is sent into nothing and its reply never arrives.
+        await running.close()
+        running = null
+      }
+
+      await expect(session.close()).resolves.toBeUndefined()
+      expect(socketOf(transport)).toBeNull()
+      session = null
+    })
+
     it('refuses a second request while one is in flight, before it is transmitted', async () => {
       // Answer GET_FREE_SIZES slowly so the first request is still waiting
       // when the second is issued.
