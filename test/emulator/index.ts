@@ -89,6 +89,11 @@ export interface EmulatorOptions {
   pushBeforeAck?: Array<{ eventType: number; data: Buffer }>
   /** When true, CMD_REG_EVENT is refused with ACK_ERROR instead of accepted. */
   refuseRegEvent?: boolean
+  /**
+   * Delays every reply by this many milliseconds. For the in-flight guard
+   * (spec v0.5 §5.1) and for a reply that lands after the deadline (§5.2).
+   */
+  replyDelayMs?: number
 }
 
 export interface EmulatorState {
@@ -425,7 +430,11 @@ export async function startEmulator(opts: EmulatorOptions): Promise<Emulator> {
           const raw = acc.subarray(0, framed.consumed)
           acc = acc.subarray(framed.consumed)
           const out = respond(Buffer.from(raw), framed.payload)
-          if (out) for (const p of out) sock.write(frameTcp(p))
+          if (out) {
+            const write = (): void => { if (!sock.destroyed) for (const p of out) sock.write(frameTcp(p)) }
+            if (opts.replyDelayMs) setTimeout(write, opts.replyDelayMs)
+            else write()
+          }
           if (state.dropConnection) {
             state.dropConnection = false
             sock.destroy()
@@ -466,7 +475,16 @@ export async function startEmulator(opts: EmulatorOptions): Promise<Emulator> {
   sock.on('message', (msg, rinfo) => {
     lastClient = { port: rinfo.port, address: rinfo.address }
     const out = respond(Buffer.from(msg), Buffer.from(msg))
-    if (out) for (const p of out) sock.send(p, rinfo.port, rinfo.address)
+    if (out) {
+      const write = (): void => { for (const p of out) sock.send(p, rinfo.port, rinfo.address) }
+      if (opts.replyDelayMs) {
+        setTimeout(() => {
+          try { write() } catch { /* emulator closed first */ }
+        }, opts.replyDelayMs)
+      } else {
+        write()
+      }
+    }
   })
   await new Promise<void>((resolve) => sock.bind(0, '127.0.0.1', resolve))
   const port = sock.address().port

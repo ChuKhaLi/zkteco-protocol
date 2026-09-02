@@ -138,6 +138,25 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       session = null
     })
 
+    it('refuses a second request while one is in flight, before it is transmitted', async () => {
+      // Answer GET_FREE_SIZES slowly so the first request is still waiting
+      // when the second is issued.
+      running = await startEmulator({
+        transport: transportKind,
+        replyDelayMs: 150,
+        handlers: { [CMD.GET_FREE_SIZES]: (req, state) => [reply(state, req, CMD.ACK_OK)] },
+      })
+      session = new Session(makeTransport(running.port), { timeoutMs: 2000 })
+      await session.open()
+      const first = session.execute(CMD.GET_FREE_SIZES)
+      const second = await session.execute(CMD.GET_FREE_SIZES).then(() => null, (e: unknown) => e as Error)
+      expect(second).toBeInstanceOf(ZkConnectionError)
+      expect(second!.message).toMatch(/already in flight/)
+      await expect(first).resolves.toMatchObject({ command: CMD.ACK_OK })
+      // Nothing beyond CONNECT and the first request reached the wire.
+      expect(running.received.map((p) => p.command)).toEqual([CMD.CONNECT, CMD.GET_FREE_SIZES])
+    })
+
     describe('tryExecute', () => {
       it('returns an ACK_ERROR reply instead of throwing, while execute still throws', async () => {
         running = await startEmulator({

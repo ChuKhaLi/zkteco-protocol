@@ -220,6 +220,30 @@ export class Session {
     await this.transport.send(payload)
   }
 
+  private inFlight = false
+
+  /**
+   * Runs one transmit-and-receive with at most one in flight per session.
+   *
+   * Refused BEFORE anything is transmitted. Until v0.5 both requests went on
+   * the wire and only the second receive() was refused, so the first caller
+   * collected whichever reply came first and the other reply sat in the
+   * queue for the next request (review R1, second half).
+   */
+  private async exchange<T>(fn: () => Promise<T>): Promise<T> {
+    if (this.inFlight) {
+      throw new ZkConnectionError(
+        'a request is already in flight on this session; issue one at a time',
+      )
+    }
+    this.inFlight = true
+    try {
+      return await fn()
+    } finally {
+      this.inFlight = false
+    }
+  }
+
   /**
    * Encodes and transmits one request, then awaits its reply.
    *
@@ -233,13 +257,11 @@ export class Session {
    * exported and tested in src/codec/packet.ts, one call site away, in case
    * a real device turns out to need it.
    */
-  private async send(
-    command: number,
-    data?: Buffer,
-    override?: { sessionId: number },
-  ): Promise<DecodedPacket> {
-    await this.transmit(command, data, override)
-    return decodePayload(await this.transport.receive(this.opts.timeoutMs))
+  private send(command: number, data?: Buffer, override?: { sessionId: number }): Promise<DecodedPacket> {
+    return this.exchange(async () => {
+      await this.transmit(command, data, override)
+      return decodePayload(await this.transport.receive(this.opts.timeoutMs))
+    })
   }
 
   /**
@@ -251,7 +273,7 @@ export class Session {
    */
   async receiveMore(): Promise<DecodedPacket> {
     this.assertOpen()
-    return decodePayload(await this.transport.receive(this.opts.timeoutMs))
+    return this.exchange(async () => decodePayload(await this.transport.receive(this.opts.timeoutMs)))
   }
 
   /**
