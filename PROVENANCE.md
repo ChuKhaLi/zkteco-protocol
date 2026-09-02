@@ -404,7 +404,15 @@ TCP** (`ztcp.js:471`, `zudp.js:382`, `helper/utils.js:114-126`). Whether that
 is a property of the transport, of firmware age, or of the reference's own
 history is not recorded anywhere readable. This library reads 72 on both
 transports and refuses a body that is not a whole number of 72-byte records,
-so a 28-byte device is refused rather than misparsed. Experiment E4
+so a 28-byte device is refused rather than misparsed **unless its body length
+happens to divide both widths**. That case is reachable, not theoretical: 28
+and 72 share a factor of 4, so a device sending a multiple of eighteen records
+— 18, 36, 54 and so on — sends a whole number of 72-byte records, since
+18 × 28 = 504 = 7 × 72. The guard passes on a body it should refuse and the
+caller receives seven fabricated users. Nothing detects that today, and nothing
+here proposes a heuristic that would: telling the two widths apart from the
+bytes is a new wire hypothesis, and the first hardware run is where the
+question is settled. Experiment E4
 (`test/fixtures/oracle/bulk/E4-*.json`, recorded under *The buffered read —
 restated from a single readable source*) served `pyzk` three users as
 72-byte and as 28-byte records over UDP; it decoded both correctly. So

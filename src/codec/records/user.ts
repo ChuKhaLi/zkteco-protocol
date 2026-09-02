@@ -34,6 +34,14 @@ function decodeOne(rec: Buffer): ZkUser {
  * fixed-width 72-byte records. Applies the same fail-loud policy as the
  * attendance parser — a body that is not a whole number of records is refused
  * rather than parsed into misaligned garbage.
+ *
+ * That refusal does not cover the 28-byte record dialect `zkteco-js` decodes
+ * over UDP (PROVENANCE.md §User record width and size). 28 and 72 share a
+ * factor of 4, so a 28-byte device sending a multiple of eighteen records
+ * sends a body length this check accepts — 18 × 28 = 504 = 7 × 72 — and it is
+ * parsed into seven users that were never enrolled. No heuristic is added
+ * here: discriminating the widths from the bytes is a new wire hypothesis, and
+ * no device has answered the question yet.
  */
 export function parseUserData(data: Buffer): ZkUser[] {
   if (data.length < 4) {
