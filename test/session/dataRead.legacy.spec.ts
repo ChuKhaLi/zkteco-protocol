@@ -102,7 +102,7 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       await expect(readBulkLegacy(session, CMD.ATTLOG_RRQ)).rejects.toBeInstanceOf(ZkProtocolError)
     })
 
-    it('rejects rather than returning when FREE_DATA never answers, and leaves the session usable afterwards', async () => {
+    it('rejects rather than returning when FREE_DATA never answers, and closes the session', async () => {
       // Regression test for a real desync: freeBuffer() used to catch every
       // error indiscriminately, including ZkTimeoutError. That let a FREE_DATA
       // which never answers still resolve the read with the data already in
@@ -119,11 +119,13 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       session = new Session(makeTransport(running.port), { timeoutMs: 150 })
       await session.open()
       await expect(readBulkLegacy(session, CMD.ATTLOG_RRQ)).rejects.toBeInstanceOf(ZkTimeoutError)
-      // The rejection must not leave the session or its transport wedged: an
-      // unrelated command sent right after still gets its own correct reply,
-      // not some leftover state from the failed FREE_DATA call.
-      const res = await session.execute(CMD.GET_FREE_SIZES)
-      expect(res.command).toBe(CMD.ACK_OK)
+      // v0.5: a timeout ends the session (spec §5.2), because FREE_DATA's late
+      // reply would otherwise be collected by the next request. The next call
+      // is refused by the session, not answered off a stale queue.
+      const next = await session.execute(CMD.GET_FREE_SIZES).then(() => null, (e: unknown) => e as Error)
+      expect(next).toBeInstanceOf(ZkConnectionError)
+      expect(next!.message).toMatch(/this session is not open/)
+      session = null
     })
 
     it('throws when PREPARE_DATA does not carry a size', async () => {

@@ -5,7 +5,7 @@ import { UdpTransport } from '../../src/transport/udp.js'
 import { CMD } from '../../src/codec/commands.js'
 import { checksum16 } from '../../src/codec/checksum.js'
 import { encodePayload } from '../../src/codec/packet.js'
-import { ZkAuthError, ZkConnectionError, ZkProtocolError, ZkTimeoutError } from '../../src/errors.js'
+import { ZkAuthError, ZkConnectionError, ZkFramingError, ZkProtocolError, ZkTimeoutError } from '../../src/errors.js'
 import { reply, startEmulator, type Emulator } from '../emulator/index.js'
 import { EVENT_FLAG } from '../../src/codec/events.js'
 import type { Transport } from '../../src/transport/Transport.js'
@@ -155,6 +155,60 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       await expect(first).resolves.toMatchObject({ command: CMD.ACK_OK })
       // Nothing beyond CONNECT and the first request reached the wire.
       expect(running.received.map((p) => p.command)).toEqual([CMD.CONNECT, CMD.GET_FREE_SIZES])
+    })
+
+    it('closes the session on a timeout so a late reply is never collected by the next request', async () => {
+      running = await startEmulator({
+        transport: transportKind,
+        replyDelayMs: 400,
+        handlers: {
+          [CMD.GET_FREE_SIZES]: (req, state) => [reply(state, req, CMD.ACK_OK, Buffer.from('late'))],
+        },
+      })
+      // CONNECT is delayed too, so the open() deadline must clear it.
+      session = new Session(makeTransport(running.port), { timeoutMs: 1000 })
+      await session.open()
+      ;(session as unknown as { opts: { timeoutMs: number } }).opts.timeoutMs = 150
+      await expect(session.execute(CMD.GET_FREE_SIZES)).rejects.toBeInstanceOf(ZkTimeoutError)
+
+      // The late reply lands here. Before v0.5 the next call returned it.
+      await new Promise((r) => setTimeout(r, 500))
+      const next = await session.execute(CMD.GET_TIME).then(() => null, (e: unknown) => e as Error)
+      expect(next).toBeInstanceOf(ZkConnectionError)
+      expect(next!.message).toMatch(/this session is not open/)
+      // The goodbye was sent on the way out.
+      expect(running.received.map((p) => p.command)).toContain(CMD.EXIT)
+      session = null
+    })
+
+    it('closes the session when the connection drops, and says so rather than the socket', async () => {
+      running = await startEmulator({ transport: transportKind, handlers: { [CMD.GET_FREE_SIZES]: () => null } })
+      session = new Session(makeTransport(running.port), { timeoutMs: 2000 })
+      await session.open()
+      const pending = session.execute(CMD.GET_FREE_SIZES)
+      await new Promise((r) => setTimeout(r, 50))
+      await running.close() // the peer goes away mid-request
+      running = null
+      // TCP sees the close; UDP sees nothing and times out. Both end the session.
+      await expect(pending).rejects.toBeInstanceOf(transportKind === 'tcp' ? ZkConnectionError : ZkTimeoutError)
+      const next = await session.execute(CMD.GET_TIME).then(() => null, (e: unknown) => e as Error)
+      expect(next).toBeInstanceOf(ZkConnectionError)
+      expect(next!.message).toMatch(/this session is not open/)
+      session = null
+    })
+
+    it.skipIf(transportKind !== 'tcp')('closes the session on a framing failure and sends the goodbye', async () => {
+      running = await startEmulator({ transport: 'tcp', handlers: { [CMD.GET_FREE_SIZES]: () => null } })
+      session = new Session(makeTransport(running.port), { timeoutMs: 2000 })
+      await session.open()
+      const pending = session.execute(CMD.GET_FREE_SIZES)
+      await new Promise((r) => setTimeout(r, 50))
+      for (const socket of running.sockets) socket.write(Buffer.from('deadbeefdeadbeef', 'hex'))
+      await expect(pending).rejects.toBeInstanceOf(ZkFramingError)
+      const next = await session.execute(CMD.GET_TIME).then(() => null, (e: unknown) => e as Error)
+      expect(next).toBeInstanceOf(ZkConnectionError)
+      expect(next!.message).toMatch(/this session is not open/)
+      session = null
     })
 
     describe('tryExecute', () => {

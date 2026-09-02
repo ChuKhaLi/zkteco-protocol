@@ -2,7 +2,7 @@ import { CMD } from '../codec/commands.js'
 import { decodePayload, encodePayload, type DecodedPacket } from '../codec/packet.js'
 import { mixCommKey } from '../codec/commkey.js'
 import { encodeEventMask, isEventPacket } from '../codec/events.js'
-import { ZkAuthError, ZkConnectionError, ZkProtocolError } from '../errors.js'
+import { ZkAuthError, ZkConnectionError, ZkFramingError, ZkProtocolError, ZkTimeoutError } from '../errors.js'
 import type { Transport } from '../transport/Transport.js'
 
 export interface SessionOptions {
@@ -239,6 +239,22 @@ export class Session {
     this.inFlight = true
     try {
       return await fn()
+    } catch (err) {
+      // A timeout means a reply may still be coming, and the next request
+      // would collect it as its own (checklist item 22). A framing failure
+      // means the stream is misaligned. Neither can be recovered from without
+      // guessing what the device put in its replies, so the session ends —
+      // the same rule open() and subscribe() apply to their own failures
+      // (spec v0.5 §5.2). The caller still receives the original error.
+      if (err instanceof ZkTimeoutError || err instanceof ZkFramingError) {
+        await this.abandon()
+      } else if (err instanceof ZkConnectionError) {
+        // The transport is already gone; no goodbye can reach anyone. Clear
+        // open_ so the next call is refused by assertOpen, naming this
+        // session, rather than by whatever the dead socket says.
+        this.open_ = false
+      }
+      throw err
     } finally {
       this.inFlight = false
     }
@@ -316,6 +332,7 @@ export class Session {
    * its way to reporting a failure of its own.
    */
   private async abandon(): Promise<void> {
+    if (!this.open_) return
     this.open_ = false
     this.subscribed_ = false
     await this.transmit(CMD.EXIT).catch(() => {})
