@@ -124,7 +124,7 @@ export class Session {
    * is no call site to guard, and because a rule kept in six places drifts.
    * readBulkBuffered()'s own PREPARE_BUFFER call is the one exception: it
    * calls tryExecute() and raises ACK_UNAUTH itself, through the
-   * `unauthorizedReply` helper below (same wording, one definition), because
+   * `unauthorizedReply` helper above (same wording, one definition), because
    * it is the one tryExecute caller that must not inherit readBulk()'s
    * catch-based fallback to the legacy path (spec v0.5 §6.2).
    *
@@ -415,6 +415,19 @@ export class Session {
    * slot, which is why it is sent at all. A goodbye that times out runs the
    * §5.2 teardown from inside send(); abandon() and the transport close that
    * follows are both idempotent, so the sequence ends the same way.
+   *
+   * Closing while a request is in flight sends no goodbye at all: the EXIT
+   * goes through send(), whose exchange() refuses a second concurrent request
+   * before transmitting, and the refusal lands in the catch below. The
+   * session still ends and the transport is still closed. No behaviour is
+   * being described here that could be otherwise — awaiting the in-flight
+   * request first would mean close() blocking on the very deadline the caller
+   * may be closing to escape.
+   *
+   * Never throwing rests on that catch, not on the `.catch` after it: neither
+   * transport's close() rejects over a socket that is still ours to close.
+   * `test/session/session.spec.ts` "closes without throwing when the
+   * transport underneath it is already dead" pins both transports.
    */
   async close(): Promise<void> {
     if (!this.open_) return

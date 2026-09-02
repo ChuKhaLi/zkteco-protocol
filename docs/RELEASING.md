@@ -173,6 +173,11 @@ Stated because this project's signature defect is a check that reports more than
   published tarball has shasum `fd2920178c1059d013ec5ae96dd7987c0707f37e`, which a fresh local
   `npm pack` of the same commit reproduces exactly. That is one sample on one machine, not a
   determinism guarantee — but the gap is narrower than this bullet used to imply.
+- **No CommonJS TypeScript consumer is ever typechecked against `dist/index.d.cts`.** Nothing in
+  the drill or the suite compiles a `require()`-style consumer under `module: node16`. What is
+  actually asserted is narrower: `test/smoke.spec.ts` checks that the file exists and that the
+  `exports` map points `require.types` at it. A `.d.cts` that exists and is wrong — or right for a
+  shape no consumer uses — passes every check here.
 - **The release job runs one OS and one Node version** (ubuntu-latest, Node 24). The 2×3 platform
   matrix stays CI's job on `main`, which is why step 2 of §3 says to look at it.
 - **A dry run cannot exercise OIDC.** The first tagged release is the first evidence the

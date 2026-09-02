@@ -89,9 +89,9 @@ export class UdpTransport implements Transport {
    * The asymmetry with TcpTransport, which keeps its failure for the life of
    * the object, is the point. A TCP failure means the connection is gone, so
    * every later receive() really is doomed and repeating the reason is the
-   * most useful thing the transport can do. UDP has no connection to lose:
-   * the socket stays bound and usable, and a post-bind error can be about one
-   * datagram rather than about the socket. On Windows an ICMP
+   * most useful thing the transport can do. UDP has no connection to lose: a
+   * post-bind error can be about one datagram rather than about the socket,
+   * and nothing here can tell those apart. On Windows an ICMP
    * port-unreachable is delivered as ECONNRESET even on an UNCONNECTED
    * socket, so a single datagram sent to a powered-down terminal used to end
    * this transport for the rest of its life. With the socket connected
@@ -105,6 +105,13 @@ export class UdpTransport implements Transport {
    * the next real error waits out its timeout instead of failing fast —
    * accepted, because at that moment this transport genuinely does not know
    * whether the socket is dead.
+   *
+   * That cost is now mostly hypothetical from a Session's point of view: a
+   * ZkConnectionError reaching Session ends the session and closes this
+   * transport (spec v0.5 §5.2), so nothing polls on after one. The rule is
+   * kept because it is the transport's own contract, and its remaining
+   * consumers are a direct transport user and the listen() path, which stays
+   * attached after an error.
    *
    * At most one of the two consumers below can exist at a time: receive()
    * refuses while a listener is attached, and listen() refuses while a

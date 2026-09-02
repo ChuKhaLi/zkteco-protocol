@@ -460,7 +460,7 @@ model agreed with nothing but its own emulator.
 
 | Point | This library before v0.5 | The reference | Lines |
 |---|---|---|---|
-| PREPARE_BUFFER request `fct` | 0 for every command | 5 for the user list, 0 for attendance | `helper/command.js:109-110` |
+| PREPARE_BUFFER request `fct` | 0 for every command | 5 for the user list, 0 for attendance | `helper/command.js:109-110` — **and two oracles agree on the user half**: every E1-E4 fixture records `pyzk`'s own PREPARE_BUFFER request as `0109000500000000000000`, which is fct 5 at the `<int8 1><int16 command><int32 fct><int32 ext>` layout's fct field. The attendance value rests on source reading alone; these runs only ever called `get_users()` |
 | PREPARE_BUFFER reply | size at data offset 0 | size at offset 1; a `CMD_DATA` reply is the whole body | `ztcp.js:344-352`, `zudp.js:311` |
 | READ_BUFFER reply | one packet carrying the chunk | PREPARE_DATA, DATA packets, ACK_OK | `zudp.js:335-350`, `ztcp.js:389-395` |
 | READ_BUFFER reply command | never checked | not checked on TCP; a fourth command is an error on UDP | same |

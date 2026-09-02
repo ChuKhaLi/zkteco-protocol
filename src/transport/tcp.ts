@@ -90,13 +90,10 @@ export class TcpTransport implements Transport {
    * receive() on this transport really is doomed, and answering each one with
    * the reason is the most useful thing it can do.
    *
-   * The failure kept is the FIRST one: a socket 'error' is followed by a 'close',
-   * and the close message says nothing the error did not.
-   *
    * UdpTransport forgets a failure once it has been delivered, because a UDP
-   * socket has no connection to lose and stays usable after an error about a
-   * single datagram. See the decision rule on UdpTransport.fail; the
-   * difference is a considered one, not drift.
+   * socket has no connection to lose and cannot tell an error about one
+   * datagram from an error about itself. See the decision rule on
+   * UdpTransport.fail; the difference is a considered one, not drift.
    */
   private fail(err: Error): void {
     // First failure wins. A socket 'error' is followed by 'close', and a

@@ -197,10 +197,14 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       const first = session.execute(CMD.GET_FREE_SIZES)
       const second = await session.execute(CMD.GET_FREE_SIZES).then(() => null, (e: unknown) => e as Error)
       expect(second).toBeInstanceOf(ZkConnectionError)
-      expect(second!.message).toMatch(/already in flight/)
       await expect(first).resolves.toMatchObject({ command: CMD.ACK_OK })
-      // Nothing beyond CONNECT and the first request reached the wire.
+      // Nothing beyond CONNECT and the first request reached the wire, and
+      // this is asserted BEFORE the message: a version that transmitted and
+      // then refused would still produce a ZkConnectionError, so the count is
+      // the assertion that catches it. Placed after `first` resolves, which
+      // gives a second packet 150 ms of emulator time to show up.
       expect(running.received.map((p) => p.command)).toEqual([CMD.CONNECT, CMD.GET_FREE_SIZES])
+      expect(second!.message).toMatch(/already in flight/)
     })
 
     it('closes the session on a timeout so a late reply is never collected by the next request', async () => {
