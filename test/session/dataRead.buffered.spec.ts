@@ -4,7 +4,6 @@ import { Session } from '../../src/session/Session.js'
 import { TcpTransport } from '../../src/transport/tcp.js'
 import { UdpTransport } from '../../src/transport/udp.js'
 import { CMD, MAX_CHUNK } from '../../src/codec/commands.js'
-import { ZkProtocolError } from '../../src/errors.js'
 import { reply, startEmulator, type Emulator } from '../emulator/index.js'
 
 let running: Emulator | null = null
@@ -34,6 +33,12 @@ for (const transportKind of ['tcp', 'udp'] as const) {
 
   describe(`buffered bulk read over ${transportKind}`, () => {
     it('reads a body through PREPARE_BUFFER and READ_BUFFER', async () => {
+      // This is the test that actually pins offset 1: the 5-byte reply here
+      // is `00 1C 00 00 00` (total 28 at offset 1). An offset-0 reader gets
+      // 0x1C00 = 7168 instead, and would go on to request and receive that
+      // many (zero-padded) bytes — passing the readUInt32LE(0) assertion
+      // below on the real header it copied through, but only this stream
+      // length assertion catches the wrong total.
       running = await startEmulator({ transport: transportKind, records: { size: 8, rows: [rec8(1), rec8(2), rec8(3)] } })
       session = await openSession(running.port)
       const stream = await readBulkBuffered(session, CMD.ATTLOG_RRQ, MAX_CHUNK[transportKind])
@@ -42,12 +47,15 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       expect(stream!.length).toBe(28)
     })
 
-    it('reads the total from offset 1 of the PREPARE_BUFFER reply, as the reference does', async () => {
-      // 'size-at-0' is the layout this library believed before v0.5. Under it
-      // the total read at offset 1 is garbage, so the read must fail loudly.
+    it('refuses a four-byte PREPARE_BUFFER reply', async () => {
+      // 'size-at-0' is the four-byte layout this library believed before
+      // v0.5. The reference's reply is five bytes; this only proves the
+      // length guard rejects a too-short one, not that offset 1 is what gets
+      // read on a five-byte reply — the "reads a body" test above is the one
+      // that pins that.
       running = await startEmulator({ transport: transportKind, records: { size: 8, rows: [rec8(1)] }, prepareBufferReply: 'size-at-0' })
       session = await openSession(running.port)
-      await expect(readBulkBuffered(session, CMD.ATTLOG_RRQ, MAX_CHUNK[transportKind])).rejects.toThrow(ZkProtocolError)
+      await expect(readBulkBuffered(session, CMD.ATTLOG_RRQ, MAX_CHUNK[transportKind])).rejects.toThrow(/did not report a size/)
     })
 
     it('accepts an inline CMD_DATA answer to PREPARE_BUFFER as the whole body', async () => {
@@ -55,6 +63,7 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       session = await openSession(running.port)
       const stream = await readBulkBuffered(session, CMD.ATTLOG_RRQ, MAX_CHUNK[transportKind])
       expect(stream!.readUInt32LE(0)).toBe(16)
+      expect(stream!.length).toBe(20) // 4-byte header + two 8-byte records
       expect(running.received.map((p) => p.command)).not.toContain(CMD.READ_BUFFER)
     })
 

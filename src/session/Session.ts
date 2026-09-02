@@ -11,6 +11,14 @@ export interface SessionOptions {
   commKey?: number
 }
 
+/** The error every request path raises for an ACK_UNAUTH reply, in one place so the wording cannot drift. */
+export function unauthorizedReply(command: number, data: Buffer): ZkAuthError {
+  return new ZkAuthError(
+    `command ${command} answered ACK_UNAUTH: the device did not authorize this request`,
+    data,
+  )
+}
+
 /**
  * One request-response conversation with a device: session id acquisition,
  * reply-id sequencing, and per-request deadlines.
@@ -109,11 +117,16 @@ export class Session {
    * ACK_UNAUTH acknowledges NOTHING, and every read in this library would
    * otherwise decode its body as an answer: getInfo() reads storage counters
    * out of any body of 68 bytes or more, decodeZkTime() turns any four bytes
-   * into a plausible date, and readBulkBuffered() takes the first four bytes
-   * as a transfer size. The guard lives here rather than at each call site
-   * because the bulk reads reach the device through readBulk()'s internals --
-   * PREPARE_BUFFER, READ_BUFFER, FREE_DATA -- where there is no call site to
-   * guard, and because a rule kept in six places drifts.
+   * into a plausible date, and readBulkBuffered() takes bytes 1-4 of a
+   * five-byte PREPARE_BUFFER reply as a transfer size. The guard lives here
+   * rather than at each call site because the bulk reads reach the device
+   * through readBulk()'s internals -- READ_BUFFER, FREE_DATA -- where there
+   * is no call site to guard, and because a rule kept in six places drifts.
+   * readBulkBuffered()'s own PREPARE_BUFFER call is the one exception: it
+   * calls tryExecute() and raises ACK_UNAUTH itself, through the
+   * `unauthorizedReply` helper below (same wording, one definition), because
+   * it is the one tryExecute caller that must not inherit readBulk()'s
+   * catch-based fallback to the legacy path (spec v0.5 §6.2).
    *
    * open() and subscribe() use the private send() directly and are
    * deliberately unaffected: the comm-key handshake must keep reading
@@ -141,10 +154,7 @@ export class Session {
       throw new ZkProtocolError(`device rejected command ${command}`)
     }
     if (res.command === CMD.ACK_UNAUTH) {
-      throw new ZkAuthError(
-        `command ${command} answered ACK_UNAUTH: the device did not authorize this request`,
-        res.data,
-      )
+      throw unauthorizedReply(command, res.data)
     }
     return res
   }

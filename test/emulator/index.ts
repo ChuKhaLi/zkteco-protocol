@@ -28,10 +28,12 @@ export interface EmulatorOptions {
    *  fall back to the legacy path. */
   supportsBuffer?: boolean
   /**
-   * Makes the READ_BUFFER reply at the given 1-based call count return
-   * exactly `bytes`, ignoring what was actually requested — fewer to
-   * exercise a valid short read that doesn't end the transfer, or more to
-   * exercise a device that overshoots past the declared total.
+   * Makes the READ_BUFFER reply at the given 1-based call count carry
+   * exactly `bytes` of DATA for that chunk's transfer, ignoring what was
+   * actually requested — fewer than requested is a short chunk, which
+   * `readTransfer` refuses as ended early; more is an overshoot, judged
+   * against the requested chunk size rather than against the overall total.
+   * Exists to exercise both of `readTransfer`'s refusals.
    */
   bufferChunkOverride?: { atCall: number; bytes: number }
   /**

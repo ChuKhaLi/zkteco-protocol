@@ -1,7 +1,7 @@
 import { BUFFER_FCT, CMD, MAX_CHUNK } from '../codec/commands.js'
 import type { DecodedPacket } from '../codec/packet.js'
 import { ZkAuthError, ZkProtocolError } from '../errors.js'
-import type { Session } from './Session.js'
+import { type Session, unauthorizedReply } from './Session.js'
 
 /**
  * Reads one transfer: an optional CMD_PREPARE_DATA announcement, a run of
@@ -192,10 +192,7 @@ export async function readBulkBuffered(
   const prepared = await session.tryExecute(CMD.PREPARE_BUFFER, request)
   if (prepared.command === CMD.ACK_ERROR) return null
   if (prepared.command === CMD.ACK_UNAUTH) {
-    throw new ZkAuthError(
-      `command ${CMD.PREPARE_BUFFER} answered ACK_UNAUTH: the device did not authorize this request`,
-      prepared.data,
-    )
+    throw unauthorizedReply(CMD.PREPARE_BUFFER, prepared.data)
   }
   if (prepared.command === CMD.DATA) {
     await freeBuffer(session)
