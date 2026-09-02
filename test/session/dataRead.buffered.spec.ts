@@ -94,19 +94,29 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       await expect(readBulkBuffered(session, CMD.ATTLOG_RRQ, MAX_CHUNK[transportKind])).rejects.toThrow(/delivered 40 bytes, expected 12/)
     })
 
-    it('sends the reference request shape: fct 0 for attendance, 5 for users', async () => {
+    // Both reads go through readBulk, not readBulkBuffered, and that is the
+    // point of the last two assertions. readBulkBuffered has no legacy path
+    // at all, so "no legacy command went out" was unfalsifiable against it —
+    // no mutation could have reddened it. readBulk is where the dispatch
+    // lives, so the absence now means the buffered path was CHOSEN, which is
+    // what spec §13's fct row claims.
+    it('sends the reference request shape through readBulk: fct 0 for attendance, 5 for users', async () => {
       running = await startEmulator({ transport: transportKind, records: { size: 8, rows: [rec8(1)] }, users: [] })
       session = await openSession(running.port)
-      await readBulkBuffered(session, CMD.ATTLOG_RRQ, MAX_CHUNK[transportKind])
+      await readBulk(session, CMD.ATTLOG_RRQ, transportKind)
       const prepare = running.received.find((p) => p.command === CMD.PREPARE_BUFFER)!
       expect(prepare.data.length).toBe(11)
       expect(prepare.data.readUInt8(0)).toBe(1)
       expect(prepare.data.readUInt16LE(1)).toBe(CMD.ATTLOG_RRQ)
       expect(running.state.lastPrepareFct).toBe(0)
-      await readBulkBuffered(session, CMD.USERTEMP_RRQ, MAX_CHUNK[transportKind])
+      await readBulk(session, CMD.USERTEMP_RRQ, transportKind)
       expect(running.state.lastPrepareFct).toBe(5)
-      // And the buffered path was what served both: no legacy command went out.
-      expect(running.received.map((p) => p.command)).not.toContain(CMD.USERTEMP_RRQ)
+      // And the buffered path was what served both: neither legacy command
+      // went out. Reddens when readBulk is made to fall back after a
+      // buffered read that succeeded.
+      const sent = running.received.map((p) => p.command)
+      expect(sent).not.toContain(CMD.ATTLOG_RRQ)
+      expect(sent).not.toContain(CMD.USERTEMP_RRQ)
     })
 
     it('returns null when the device refuses PREPARE_BUFFER', async () => {

@@ -1,12 +1,14 @@
 import net from 'node:net'
 import dgram from 'node:dgram'
 import { afterEach, describe, expect, it } from 'vitest'
-import { encodeUser28, startEmulator, type Emulator } from './index.js'
+import { encodeUser28, startEmulator, withSizeHeader, type Emulator } from './index.js'
 import { CMD } from '../../src/codec/commands.js'
-import { decodePayload, encodePayload } from '../../src/codec/packet.js'
+import { decodePayload, encodePayload, type DecodedPacket } from '../../src/codec/packet.js'
 import { frameTcp, tryUnframeTcp } from '../../src/codec/framing.js'
+import { ZkTimeoutError } from '../../src/errors.js'
 import { TcpTransport } from '../../src/transport/tcp.js'
 import { Session } from '../../src/session/Session.js'
+import { USER_RECORD_SIZE } from '../../src/codec/records/user.js'
 import type { ZkUser } from '../../src/types.js'
 
 let running: Emulator | null = null
@@ -289,6 +291,67 @@ describe('experiment knobs', () => {
     expect(decodePayload(await transport.receive(2_000)).sessionId).toBe(0x1111)
     await transport.send(encodePayload({ command: CMD.GET_FREE_SIZES, sessionId: 0x1111, replyId: 1 }))
     expect(decodePayload(await transport.receive(2_000)).sessionId).toBe(0x2222)
+  })
+
+  // `chunkReply: 'single-packet'` is what experiment E3's second fixture was
+  // served, and until now nothing exercised it: readBulkBuffered refuses that
+  // shape, so the buffered-read suites only ever see it fail. Driven here over
+  // a raw transport, so E3's result rests on a served shape that is itself
+  // tested rather than on the emulator being assumed correct.
+  it('answers READ_BUFFER with one ACK_DATA packet under chunkReply single-packet', async () => {
+    const raw = Buffer.alloc(USER_RECORD_SIZE)
+    raw.writeUInt16LE(1, 0)
+    raw.write('Ann', 11, 24, 'latin1')
+    raw.write('100001', 48, 9, 'latin1')
+    const user: ZkUser = {
+      uid: 1, userId: '100001', name: 'Ann', privilege: 0,
+      hasPassword: false, cardNumber: 0, raw: raw.toString('hex'),
+    }
+    const body = withSizeHeader(raw)
+
+    /** CONNECT, PREPARE_BUFFER for the user list at fct 5, then one READ_BUFFER. */
+    const driveReadBuffer = async (
+      chunkReply: 'single-packet' | 'transfer',
+    ): Promise<{ first: DecodedPacket; second: Error | null }> => {
+      running = await startEmulator({ transport: 'tcp', users: [user], chunkReply })
+      transport = new TcpTransport({ host: '127.0.0.1', port: running.port })
+      await transport.connect(2_000)
+      await transport.send(encodePayload({ command: CMD.CONNECT, sessionId: 0, replyId: 0 }))
+      const sessionId = decodePayload(await transport.receive(2_000)).sessionId
+
+      // <int8 1><int16 command><int32 fct><int32 ext>
+      const prepare = Buffer.alloc(11)
+      prepare.writeUInt8(1, 0)
+      prepare.writeUInt16LE(CMD.USERTEMP_RRQ, 1)
+      prepare.writeUInt32LE(5, 3)
+      await transport.send(encodePayload({ command: CMD.PREPARE_BUFFER, sessionId, replyId: 1, data: prepare }))
+      const total = decodePayload(await transport.receive(2_000)).data.readUInt32LE(1)
+      expect(total).toBe(body.length)
+
+      const read = Buffer.alloc(8)
+      read.writeUInt32LE(0, 0)
+      read.writeUInt32LE(total, 4)
+      await transport.send(encodePayload({ command: CMD.READ_BUFFER, sessionId, replyId: 2, data: read }))
+      const first = decodePayload(await transport.receive(2_000))
+      const second = await transport.receive(300).then(() => null, (e: unknown) => e as Error)
+      await transport.close(); transport = null
+      await running.close(); running = null
+      return { first, second }
+    }
+
+    const single = await driveReadBuffer('single-packet')
+    expect(single.first.command).toBe(CMD.ACK_DATA)
+    expect(single.first.data).toEqual(body)
+    // "One packet" is half the claim, so the silence after it is asserted too.
+    expect(single.second).toBeInstanceOf(ZkTimeoutError)
+
+    // Contrast, so the assertion above is about this knob and not about the
+    // emulator answering READ_BUFFER that way regardless: the default
+    // announces first, and a reader that took packet one as the chunk would
+    // take the 8-byte announcement instead of the body.
+    const transfer = await driveReadBuffer('transfer')
+    expect(transfer.first.command).toBe(CMD.PREPARE_DATA)
+    expect(transfer.first.data.readUInt32LE(0)).toBe(body.length)
   })
 
   it('serves 28-byte user records when asked to', () => {

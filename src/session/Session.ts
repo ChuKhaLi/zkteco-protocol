@@ -414,9 +414,11 @@ export class Session {
    * A subscribed session cannot read a reply — the socket is listening — so
    * it goes through abandon(), which sends EXIT without awaiting one. On UDP
    * that goodbye is the only thing telling the device to release the session
-   * slot, which is why it is sent at all. A goodbye that times out runs the
-   * §5.2 teardown from inside send(); abandon() and the transport close that
-   * follows are both idempotent, so the sequence ends the same way.
+   * slot, which is why it is sent at all. A goodbye that times out does NOT
+   * run the §5.2 teardown, despite reaching its catch: `open_` was cleared on
+   * the line above, so `abandon()` returns immediately and tears nothing
+   * down. The timeout is swallowed by the catch below and the transport is
+   * closed on the next line — the same ending, by a shorter route.
    *
    * Closing while a request is in flight sends no goodbye at all: the EXIT
    * goes through send(), whose exchange() refuses a second concurrent request
