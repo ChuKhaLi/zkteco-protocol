@@ -169,9 +169,15 @@ Every body that decodes correctly today still decodes. The change is not over-br
 
 ### 4.4 Two edge cases
 
-**A zero-length body returns `[]` before detection runs.** Zero is a multiple of 504 and would
-otherwise trip the ambiguity rule, but zero records is zero users under either width —
-arithmetically ambiguous, semantically not.
+**A zero-length body yields `[]`, but the check lives inside detection, not before it.** Zero is a
+multiple of 504 and would otherwise trip the ambiguity rule, yet zero records is zero users under
+either width — arithmetically ambiguous, semantically not. So `detectUserRecordSize` returns 72 for
+an empty body when the count is `null` or `0`, and the decode loop yields `[]` naturally.
+
+It must **not** be short-circuited ahead of detection, which an earlier draft of this section said.
+An empty body against a count of 5 is a contradiction, and an early return would answer it with
+`[]` — the same fabricated absence this edge case exists to prevent, arrived at from the other
+direction. Detection refuses it instead.
 
 **`getUsers` does not early-return on a zero count, and a zero count with a non-empty body is
 refused.** This deliberately breaks symmetry with `getAttendanceLogs`, which does
@@ -215,6 +221,7 @@ the suites do.
 | 504 bytes | `18` | refuses, names 28 | The dialect is reported, not decoded. |
 | 576 bytes (8×72) | `null` | decodes 8 | The change is not over-broad. |
 | 0 bytes | `null` and `0` | `[]` | §4.4's semantic case. |
+| 0 bytes | `5` | refuses | An empty body against a count that claims users. |
 | 504 bytes | `0` | refuses | The wrong-offset-table signal. |
 | 500 bytes | `7` | refuses | The count does not divide the body. |
 | 360 bytes (5×72) | `7` | refuses | Count and body disagree; not silently re-derived. |
