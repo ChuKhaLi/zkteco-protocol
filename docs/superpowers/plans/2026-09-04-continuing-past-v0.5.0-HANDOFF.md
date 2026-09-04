@@ -3,8 +3,12 @@
 **Date:** 2026-09-04
 **For:** a session picking this repository up cold
 **Repository:** https://github.com/ChuKhaLi/zkteco-protocol — public, MIT, `main`
-**State:** v0.5.0, 46 test files, 722 tests passed, 3 skipped, zero runtime dependencies.
-**Tag:** `v0.5.0`, pushed after both sub-projects below landed on `main`.
+**State:** the v0.5 work — 46 test files, 724 tests passed, 3 skipped, zero runtime dependencies.
+`package.json` and `src/index.ts` both read `0.5.0`; that is a bump, not a release.
+**Tag:** `v0.5.0` is **not applied yet**. It goes on `main` once both sub-projects below have landed
+there, and pushing it is what starts the publish pipeline. When this was written the
+diagnostics-evidence branch was still unmerged and `git tag -l 'v0.5*'` was empty, so nothing has
+been published: read §1's remaining steps as the work, not as history.
 
 This continues `2026-09-01-continuing-past-v0.4.3-HANDOFF.md`, which continues five before it.
 Everything in them remains accurate. Read `CLAUDE.md` first, then `docs/RELEASING.md` if you intend
@@ -23,7 +27,9 @@ One multi-agent code review of the v0.4.3 tree produced two sub-projects, run on
   the release drill, and the oracle fixtures claim only what the wire actually showed. It built on
   top of the library-correctness merge rather than beside it.
 
-`v0.5.0` is the tag applied once both were on `main`.
+`v0.5.0` is the tag to apply once both are on `main`. Sub-project A is there; sub-project B was not
+when this was written, so the merge, the push and `git push origin v0.5.0` are the steps that
+remain, in that order and by `docs/RELEASING.md`.
 
 ## 2. What the kit now claims, and what it still cannot
 
@@ -58,8 +64,11 @@ implementations run as black boxes, never against hardware.
 from source. On this tree, foreground, all fourteen passed. What it establishes and what it stops
 short of, from `docs/RELEASING.md` §5:
 
-- It runs **on both operating systems, on every push**, not only on a tag — a packaging regression
-  is caught on the commit that introduces it, not by burning a version number on a release.
+- It runs **on both operating systems, on every push to `main` and on every pull request**
+  (`.github/workflows/ci.yml`), not only on a tag — a packaging regression is caught on the commit
+  that introduces it, not by burning a version number on a release. A push to a feature branch with
+  no open pull request runs nothing; `ci.yml`'s triggers are `push: branches: [main]` and
+  `pull_request`.
 - The consumer's CommonJS TypeScript check runs on **one TypeScript version** — this repository's
   own, under `module: node16`, on both CI operating systems as of 2026-09-04. Other TypeScript
   versions, `nodenext`, and bundler resolution are untested.

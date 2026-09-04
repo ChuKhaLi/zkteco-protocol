@@ -48,8 +48,11 @@ absence is meaningful, not vacuous), and item 1 names `--raw-capture` as the rem
 asserts they agree.
 
 That drill is scripted: `pnpm release:drill` runs all fourteen checks and exits 1 with a named temp
-directory on failure. It runs in CI on every push, on Linux and on Windows, and on every tag —
-which is the only reason a CLI that had never worked on Linux was found before a consumer met it.
+directory on failure. `.github/workflows/ci.yml` runs it on every push to `main` and on every pull
+request, on Linux and on Windows — a push to a feature branch with no open pull request runs
+nothing — and `.github/workflows/release.yml`, whose trigger is `tags: ['v*']`, runs it again on
+every tag. That is the only reason a CLI that had never worked on Linux was found before a consumer
+met it.
 
 **The package is published, and releases go through the tag — never by hand.** Bump `version` and
 `VERSION` together, push `v<version>`, approve the `npm-publish` environment; the pipeline publishes

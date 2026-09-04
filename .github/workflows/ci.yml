@@ -34,7 +34,9 @@ jobs:
       - run: pnpm build
       - run: pnpm test
   drill:
-    # The packed-tarball drill, on every push rather than only on a tag. Every
+    # The packed-tarball drill, on this workflow's triggers rather than only on
+    # a tag: every push to main and every pull request (a push to a feature
+    # branch with no open PR runs nothing -- see `on:` above). Every
     # defect it has ever caught was a packaging defect -- a CJS pass that
     # silently dropped dist/index.cjs, and a bin entry that did nothing on
     # every platform but Windows -- and both were found by burning a version

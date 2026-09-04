@@ -187,9 +187,10 @@ Stated because this project's signature defect is a check that reports more than
   the CLI did not work. Run 33476872217 is the first green Linux drill. What that says about any
   check here: a check that has only run in one environment has established something about that
   environment and nothing else.
-- **The drill now runs on every push, not only on a tag.** Both operating systems, Node 24. A
-  packaging regression is found on the commit that introduces it rather than by burning a version
-  number.
+- **The drill now runs outside the release, not only on a tag.** `ci.yml` runs it on every push to
+  `main` and on every pull request — those two triggers and no others, so a push to a feature branch
+  with no open pull request runs nothing — on both operating systems, Node 24. A packaging
+  regression is found on the commit that introduces it rather than by burning a version number.
 - **No physical ZKTeco device has ever been connected to this library.** Publishing changes nothing
   about that. Keep the README's compatibility table honest.
 
