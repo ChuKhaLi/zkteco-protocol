@@ -63,6 +63,15 @@ export function detectUserRecordSize(
   bodyLength: number,
   userCount: number | null,
 ): typeof USER_RECORD_SIZE {
+  // Validated before the empty-body branch below so a negative or fractional
+  // count is refused the same way regardless of bodyLength -- previously
+  // (0, -1) reported "body is empty" instead of "non-negative integer",
+  // which is a different refusal than every other bodyLength gets for the
+  // same malformed count.
+  if (userCount !== null && (!Number.isInteger(userCount) || userCount < 0)) {
+    throw new ZkFramingError(`user count must be a non-negative integer, got ${userCount}`)
+  }
+
   // Zero records is zero users under either width -- arithmetically ambiguous
   // (0 is a multiple of 504), semantically not. Handled HERE rather than by an
   // early return in parseUserData, because an empty body against a count that
@@ -91,9 +100,6 @@ export function detectUserRecordSize(
     return USER_RECORD_SIZE
   }
 
-  if (!Number.isInteger(userCount) || userCount < 0) {
-    throw new ZkFramingError(`user count must be a non-negative integer, got ${userCount}`)
-  }
   if (userCount === 0) {
     throw new ZkFramingError(
       `user count is 0 but the body carries ${bodyLength} bytes; the count and the body ` +
@@ -116,7 +122,11 @@ export function detectUserRecordSize(
     )
   }
   if (size !== USER_RECORD_SIZE) {
-    throw new ZkFramingError(`derived user record size ${size} is not ${USER_RECORD_SIZE}`)
+    throw new ZkFramingError(
+      `user body of ${bodyLength} bytes over a count of ${userCount} implies ` +
+        `${size}-byte user records, which is neither ${USER_RECORD_SIZE} nor the ` +
+        `${ALTERNATE_USER_RECORD_SIZE}-byte dialect this library refuses.`,
+    )
   }
   return USER_RECORD_SIZE
 }

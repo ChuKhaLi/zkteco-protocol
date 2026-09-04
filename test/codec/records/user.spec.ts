@@ -174,7 +174,12 @@ describe('detectUserRecordSize', () => {
     // pass; 360 over a count of 9 is 40, a whole number that is neither
     // width, and is what this row actually exercises.
     expect(detectUserRecordSize(360, 5)).toBe(USER_RECORD_SIZE)
-    expect(() => detectUserRecordSize(360, 9)).toThrow(/derived user record size 40 is not 72/)
+    // The message must name the body length, the count, the derived size,
+    // and both candidate widths -- it is the entire evidentiary output of
+    // this refusal on first hardware.
+    expect(() => detectUserRecordSize(360, 9)).toThrow(
+      /360 bytes over a count of 9 implies 40-byte user records, which is neither 72 nor the 28-byte dialect/,
+    )
   })
 
   it('refuses a body that is not a whole number of 72-byte records without a count', () => {
@@ -184,6 +189,14 @@ describe('detectUserRecordSize', () => {
   it('refuses a negative or fractional count', () => {
     expect(() => detectUserRecordSize(144, -1)).toThrow(/non-negative integer/)
     expect(() => detectUserRecordSize(144, 1.5)).toThrow(/non-negative integer/)
+  })
+
+  it('refuses a negative count even against an empty body', () => {
+    // The count is validated ahead of the empty-body branch, so this gets
+    // the same "non-negative integer" refusal every other bodyLength gets --
+    // not "the body is empty", which would be a different, misleading
+    // refusal for the identical malformed count.
+    expect(() => detectUserRecordSize(0, -1)).toThrow(/non-negative integer/)
   })
 
   it('exports the alternate width and the ambiguous modulus', () => {
