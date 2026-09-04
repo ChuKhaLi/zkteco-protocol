@@ -170,6 +170,22 @@ check(
   /answered/.test(item1Captured) && item1Captured.includes('trace.jsonl'),
   item1Captured.slice(0, 90),
 )
+// The positive control for the check above. Without it, "item 1 flips to
+// answered" is a claim about the renderer; with it, the row rests on a
+// request that actually went out. Item 1 asks for a handshake AND an
+// attendance read, and the drill's device reported zero records until now.
+const captureEvents = readFileSync(capturePath, 'utf8')
+  .split('\n')
+  .filter(Boolean)
+  .map((line) => JSON.parse(line))
+const askedForAttendance = captureEvents.some((e) => {
+  if (e.direction !== 'send' || typeof e.hex !== 'string') return false
+  if (e.command === 13) return true                    // CMD_ATTLOG_RRQ, sent directly
+  if (e.command !== 1503) return false                 // CMD_PREPARE_BUFFER wrapping it:
+  const payload = Buffer.from(e.hex, 'hex')            // header is 8 bytes, then
+  return payload.length >= 11 && payload.readUInt16LE(9) === 13  // <int8 1><int16 command>
+})
+check('the capture holds an attendance request, so item 1 rests on the wire', askedForAttendance)
 check('the Markdown still hides the serial with a capture written', !capturedMd.includes(SERIAL))
 // The capture is unredacted BY DESIGN -- that is the whole reason it is
 // opt-in and carries a header saying so. Asserting the bytes ARE there keeps

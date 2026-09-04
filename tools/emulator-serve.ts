@@ -34,6 +34,22 @@ function emUser(uid: number, userId: string, name: string): ZkUser {
   }
 }
 
+/**
+ * One 40-byte attendance record: uid, the printed id, then the packed time.
+ *
+ * The drill's device used to report zero records, so `getAttendanceLogs`
+ * returned without issuing a read and checklist item 1 was answered by a
+ * capture containing no attendance request at all. The drill now checks the
+ * capture for that request, which needs a device that has one to give.
+ */
+function rec40(uid: number, userId: string, seconds: number): Buffer {
+  const b = Buffer.alloc(40)
+  b.writeUInt16LE(uid, 0)
+  b.write(userId, 2, 24, 'latin1')
+  b.writeUInt32LE(seconds, 27)
+  return b
+}
+
 const portFile = process.argv[2]
 if (!portFile) throw new Error('usage: emulator-serve.ts <port-file>')
 
@@ -46,8 +62,9 @@ const running = await startEmulator({
     '~OS': 'Linux',
   },
   firmware: 'Ver 6.60 Jun 10 2019',
-  info: { userCount: 1, recordCount: 0, recordCapacity: 100_000 },
+  info: { userCount: 1, recordCount: 1, recordCapacity: 100_000 },
   users: [emUser(1, '000123', 'Alice')],
+  records: { size: 40, rows: [rec40(1, '000123', 86_400)] },
   deviceTimeRaw: 0,
 })
 
