@@ -16,7 +16,7 @@
  * expected, what was found, and where the artifacts were left for inspection.
  */
 import { spawn, spawnSync } from 'node:child_process'
-import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync, mkdirSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -36,16 +36,46 @@ function check(name, ok, detail) {
   process.stdout.write(`${ok ? '  ok  ' : ' FAIL '} ${name}${detail ? ` — ${detail}` : ''}\n`)
 }
 
+/**
+ * Quotes arguments that a shell would otherwise split.
+ *
+ * `run()` passes `shell: true` on Windows (npm and npx are batch files there),
+ * and every path here goes through `mkdtempSync(join(tmpdir(), …))` — which on
+ * Windows contains the user's name, so an account named "Ada Lovelace" split
+ * the argument in two and the drill failed on a path it had constructed
+ * itself.
+ */
+function shellArgs(args) {
+  if (!IS_WINDOWS) return args
+  return args.map((a) => (/[\s"]/.test(a) ? `"${a.replaceAll('"', '\\"')}"` : a))
+}
+
 function run(command, args, opts = {}) {
-  const res = spawnSync(command, args, { encoding: 'utf8', shell: IS_WINDOWS, ...opts })
+  const res = spawnSync(command, IS_WINDOWS ? shellArgs(args) : args, {
+    encoding: 'utf8', shell: IS_WINDOWS, ...opts,
+  })
   if (res.error) throw res.error
   return res
 }
 
+/**
+ * Aborts, having flushed the reason.
+ *
+ * `process.stderr.write()` is asynchronous when stderr is a pipe — which is
+ * how CI reads it — so `process.exit()` right after it truncates the
+ * message. Deferring the exit to the write's callback does not fix that
+ * either: this script is almost entirely blocking `spawnSync` calls, which
+ * hold the event loop and starve that callback, so an "aborted" run falls
+ * through and keeps executing build/pack/install/spawn regardless — flushed
+ * but not actually aborted. `fs.writeSync` issues the write as a blocking
+ * syscall, so the bytes are already on their way to the fd before this
+ * function returns, and the `process.exit()` right after it is synchronous
+ * too: nothing past this call ever runs.
+ */
 function must(condition, message) {
   if (!condition) {
-    process.stderr.write(`\ndrill aborted: ${message}\n`)
     cleanup()
+    writeSync(2, `\ndrill aborted: ${message}\n`)
     process.exit(2)
   }
 }
@@ -69,12 +99,26 @@ function describeRun(res) {
   ].join('')
 }
 
+/**
+ * Kills the emulator and the process it spawned.
+ *
+ * `tsx` spawns a child of its own, so signalling the npx wrapper left the
+ * socket bound after every POSIX run — the comment here described that and
+ * fixed it only for Windows. The emulator is spawned detached on POSIX, which
+ * makes it a process-group leader, so a negative pid signals the whole group.
+ */
 function killEmulator() {
   if (!emulator || emulator.killed) return
-  // tsx spawns a child of its own, so killing the wrapper leaves the socket
-  // bound and the next run picks a different port while this one leaks.
-  if (IS_WINDOWS) spawnSync('taskkill', ['/pid', String(emulator.pid), '/T', '/F'], { shell: true })
-  else emulator.kill('SIGTERM')
+  if (IS_WINDOWS) {
+    spawnSync('taskkill', ['/pid', String(emulator.pid), '/T', '/F'], { shell: true })
+  } else {
+    try {
+      process.kill(-emulator.pid, 'SIGTERM')
+    } catch {
+      // Already gone, or never became a group leader: fall back to the child.
+      try { emulator.kill('SIGTERM') } catch { /* nothing left to kill */ }
+    }
+  }
   emulator = null
 }
 
@@ -114,7 +158,7 @@ check(
 
 // --- 4. start the emulator ------------------------------------------------
 const portFile = join(workdir, 'port.txt')
-emulator = spawn('npx', ['tsx', 'tools/emulator-serve.ts', portFile], {
+emulator = spawn('npx', shellArgs(['tsx', 'tools/emulator-serve.ts', portFile]), {
   stdio: 'ignore', shell: IS_WINDOWS, detached: !IS_WINDOWS,
 })
 const deadline = Date.now() + 30_000
