@@ -19,6 +19,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync, mkdirSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { consumerSource, consumerTsconfig } from './consumer-fixture.mjs'
 
 const IS_WINDOWS = process.platform === 'win32'
 /** Values baked into tools/emulator-serve.ts. Kept in sync by hand; the drill
@@ -142,6 +143,16 @@ must(packed.status === 0, `npm pack failed:\n${packed.stderr}`)
 const tarball = join(workdir, JSON.parse(packed.stdout)[0].filename)
 must(existsSync(tarball), `packed tarball not found at ${tarball}`)
 
+// The CJS bundle of the CLI could never run — its import.meta is shimmed to
+// {} so the main-module check is always false — so v0.5 stopped building it.
+// The tarball is where a consumer would meet it.
+const packedFiles = JSON.parse(packed.stdout)[0].files.map((f) => f.path)
+check(
+  'no CommonJS CLI or CLI declaration is in the tarball',
+  !packedFiles.some((p) => /^dist\/cli\.(cjs|d\.[cm]?ts)$/.test(p)),
+  packedFiles.filter((p) => p.startsWith('dist/cli')).join(', ') || 'dist/cli.js only',
+)
+
 // --- 3. install into a directory that shares nothing with this repo -------
 const consumer = join(workdir, 'consumer')
 mkdirSync(consumer)
@@ -154,6 +165,23 @@ check(
   'install pulls exactly 1 package, 0 transitive dependencies',
   /added 1 package/.test(install.stdout),
   install.stdout.trim().split('\n').find((l) => l.includes('package')) ?? 'no package line',
+)
+
+// --- 3b. a CommonJS consumer must typecheck against the packed types -------
+// The review reproduced TS1479 here on TypeScript 5.9.3 under node16 and
+// node18: `exports` carried one top-level `types` pointing at the ESM
+// declaration, so a require()-style consumer was sent to a file it cannot use
+// while require() itself worked at runtime. dist/index.d.cts existed and was
+// referenced by nothing. Nothing in the test suite compiles a consumer.
+const repoRoot = process.cwd().replaceAll('\\', '/')
+writeFileSync(join(consumer, 'consumer.ts'), consumerSource())
+writeFileSync(join(consumer, 'tsconfig.json'), consumerTsconfig(repoRoot))
+const tsc = join(process.cwd(), 'node_modules', 'typescript', 'bin', 'tsc')
+const typecheck = spawnSync(process.execPath, [tsc, '-p', join(consumer, 'tsconfig.json')], { encoding: 'utf8' })
+check(
+  'a CommonJS TypeScript consumer typechecks against the packed declarations',
+  typecheck.status === 0,
+  typecheck.status === 0 ? 'module: node16' : `${(typecheck.stdout ?? '').trim().split('\n')[0] ?? ''}`,
 )
 
 // --- 4. start the emulator ------------------------------------------------
