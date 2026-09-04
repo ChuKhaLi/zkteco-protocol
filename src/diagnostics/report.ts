@@ -61,37 +61,69 @@ const KEYWORD_FORM_NOTE: Record<KeywordFormVerdict, string> = {
     'The keyword was refused in BOTH shapes, so this is a keyword question (item 17), not a shape question. Re-run the A/B against a keyword this firmware exposes before recording any item-18 answer.',
 }
 
-/**
- * Items 8, 9 and 13: what a completed subscription window shows.
- *
- * 'not requested' when the operator never passed --realtime (the device was
- * never asked) — a different claim from 'not answered', which means the
- * probe ran and the subscription did not complete (refused, or torn down by
- * a desync — see `realtimeDesyncState` for that case's OWN, positive answer
- * to item 14). Collapsing 'not requested' into 'not answered' would make a
- * default, unattended run look like it had probed items it never touched
- * (design spec §4.5, items 8-10 and 12-14).
- *
- * Item 12 does NOT share this function — see `realtimeCancelState` below. Fix
- * round 1 (F11): 'answered' here would have meant "a window completed", which
- * is evidence about whether events arrive, not about whether a subscription
- * can be CANCELLED. This library has no unsubscribe/cancel primitive at all
- * and the probe never attempts one, in any branch — so item 12 was a false
- * 'answered' before this fix, borrowing a flag with zero supporting mechanism
- * behind it.
- */
-function realtimeGeneralState(f: Findings): ChecklistState {
-  if (f.realtime === null) return 'not requested'
-  return f.realtime.registered ? 'answered' : 'not answered'
+/** `answered` when the evidence is there, `not answered` when it is not. */
+function answeredIf(ok: boolean): ChecklistState {
+  return ok ? 'answered' : 'not answered'
 }
 
-function realtimeGeneralObservation(f: Findings): string {
+/**
+ * The message behind a failure the producer always records.
+ *
+ * Unreachable through `probeRealtime` and `probeConcurrent` — both set `error`
+ * on every path that clears the flag beside it — and present only because the
+ * field's type allows null. One named helper rather than three inline
+ * `(no message)` strings, so a reader meets it once.
+ */
+function reason(message: string | null): string {
+  return message ?? 'no message was recorded'
+}
+
+/** 'not requested' when the probe never ran, otherwise `ok`'s verdict. */
+function realtimeState(f: Findings, ok: (r: NonNullable<Findings['realtime']>) => boolean): ChecklistState {
+  if (f.realtime === null) return 'not requested'
+  return answeredIf(ok(f.realtime))
+}
+
+const REALTIME_NOT_REQUESTED = 'the realtime probe was not requested (pass --realtime=<seconds> to run it).'
+
+/**
+ * Item 8: does the device require an acknowledgment for each realtime event?
+ *
+ * Always 'not testable by this tool', like items 12 and 22. This library never
+ * sends one — `ackEvent` (src/codec/events.ts) is implemented, tested, and
+ * called from nowhere, by the v0.2 design's ruling — so no run of this probe
+ * can distinguish a device that requires an acknowledgment from one that does
+ * not. A completed window used to read 'answered' here, which was the window's
+ * evidence borrowed for a question it cannot address. The symptom is named
+ * instead, because a reader with hardware in front of them can recognise it.
+ */
+function item8Observation(f: Findings): string {
   const r = f.realtime
-  if (r === null) return 'the realtime probe was not requested (pass --realtime=<seconds> to run it).'
-  if (!r.registered) {
-    return `the subscription did not complete: ${r.error ?? '(no message)'}.`
+  const symptom =
+    'if a terminal delivers one event and then goes silent, that is the symptom of a device waiting for one — record it by hand.'
+  if (r === null) return `this library never acknowledges an event, so this cannot be answered here; ${symptom} The realtime probe was not requested on this run.`
+  return `this library never acknowledges an event: none was sent for any of the ${r.eventsObserved} event(s) observed, so a device that requires one would look exactly like a quiet device. ${symptom}`
+}
+
+/** Item 9: does a subscription survive an idle period, or does the device drop it? */
+function item9Observation(f: Findings): string {
+  const r = f.realtime
+  if (r === null) return REALTIME_NOT_REQUESTED
+  if (!r.registered) return `the subscription did not complete: ${reason(r.error)}.`
+  return r.heldOpen
+    ? `registered and still alive when the ${r.windowSeconds}s window ended.`
+    : `registered, then the device dropped it after ${r.endedAfterMs}ms of a ${r.windowSeconds}s window: ${reason(r.error)}. A drop answers this item as decisively as surviving does.`
+}
+
+/** Item 13: event types outside the mask, or a request-response packet interleaved. */
+function item13Observation(f: Findings): string {
+  const r = f.realtime
+  if (r === null) return REALTIME_NOT_REQUESTED
+  if (!r.registered) return `the subscription did not complete: ${reason(r.error)}.`
+  if (r.eventsObserved === 0) {
+    return `no event arrived in the ${r.windowSeconds}s window, so nothing can be said about which types this device emits; ${r.nonEventPackets} non-event packet(s) arrived on the listening connection.`
   }
-  return `registered and held open for a ${r.windowSeconds}s window; ${r.eventsObserved} event(s) observed, event type(s) seen: ${r.eventTypes.length > 0 ? r.eventTypes.join(', ') : '(none)'}.`
+  return `${r.eventsObserved} event(s) observed, type(s) seen: ${r.eventTypes.join(', ')}; ${r.nonEventPackets} non-event packet(s) arrived on the listening connection.`
 }
 
 /**
@@ -100,42 +132,36 @@ function realtimeGeneralObservation(f: Findings): string {
  *
  * This is an anomaly-detection item, like item 5's framing cap: a desync
  * observed is a positive, decisive answer ('answered') even though it means
- * `registered` stayed false and the OTHER realtime items above stay 'not
- * answered' for this same run — the session was torn down before a window
- * could be held open (v0.2 RULING R11), but item 14 already has its answer
- * the moment the race is caught. No desync is 'not answered': the race not
- * firing on one run is not evidence it cannot happen.
+ * `registered` stayed false and items 9 and 13 stay 'not answered' for this
+ * same run — the session was torn down before a window could be held open
+ * (v0.2 RULING R11), but item 14 already has its answer the moment the race is
+ * caught. No desync is 'not answered': the race not firing on one run is not
+ * evidence it cannot happen.
  */
 function realtimeDesyncState(f: Findings): ChecklistState {
   if (f.realtime === null) return 'not requested'
-  return f.realtime.desyncOnRegister ? 'answered' : 'not answered'
+  return answeredIf(f.realtime.desyncOnRegister)
 }
 
 function realtimeDesyncObservation(f: Findings): string {
   const r = f.realtime
-  if (r === null) return 'the realtime probe was not requested (pass --realtime=<seconds> to run it).'
+  if (r === null) return REALTIME_NOT_REQUESTED
   if (r.desyncOnRegister) {
-    return `yes — the device pushed an event before acknowledging CMD_REG_EVENT: ${r.error ?? '(no message)'}. The session was torn down, as designed (v0.2 RULING R11).`
+    return `yes — the device pushed an event before acknowledging CMD_REG_EVENT: ${reason(r.error)}. The session was torn down, as designed (v0.2 RULING R11).`
   }
   return 'no desync was observed on this run — inconclusive, since the race is only caught if the device happens to lose it, not provoked deliberately.'
 }
 
 /**
- * Item 12 alone: is there a way to cancel a subscription without dropping
- * the connection?
+ * Item 12's observation: is there a way to cancel a subscription without
+ * dropping the connection?
  *
- * Always 'not testable by this tool' (Fix round 1, F11) — the same state
- * item 22 uses, and for the same reason: this library ships no unsubscribe
- * or cancel primitive (`Transport.listen` is documented one-way, once per
- * socket, and `Session` has nothing that reverses it), so no branch of
- * `probeRealtime`, success or failure, ever attempts one. There is no
- * outcome this probe could observe that would answer the question either
- * way, unlike items 8/9/13, which at least a completed window weakly informs.
+ * The row is written inline as 'not testable by this tool' (Fix round 1, F11)
+ * — the same state items 8 and 22 use, and for the same reason: this library
+ * ships no unsubscribe or cancel primitive (`Transport.listen` is documented
+ * one-way, once per socket, and `Session` has nothing that reverses it), so no
+ * branch of `probeRealtime`, success or failure, ever attempts one.
  */
-function realtimeCancelState(): ChecklistState {
-  return 'not testable by this tool'
-}
-
 const REALTIME_CANCEL_OBSERVATION =
   'this library has no unsubscribe/cancel primitive (Transport.listen is one-way, once per socket) and the probe never attempts one; not answerable from a probe run.'
 
@@ -157,7 +183,7 @@ function concurrentObservation(f: Findings): string {
   if (c === null) return 'the second-connection probe was not requested (pass --concurrent to run it).'
   return c.accepted
     ? 'a second connection was accepted while the first was still open.'
-    : `a second connection was refused: ${c.error ?? '(no message)'}.`
+    : `a second connection was refused: ${reason(c.error)}.`
 }
 
 /**
@@ -331,9 +357,9 @@ function item19Observation(f: Findings): string {
     return "CMD_PREPARE_BUFFER's 11-byte payload was sent and the device ACCEPTED it (the buffered path served the read), so an odd-length checksum was accepted."
   }
   if (f.bulkPath === 'legacy') {
-    return "CMD_PREPARE_BUFFER's 11-byte payload was sent and the device did not accept it (the read fell back to the legacy path). A refusal may be about the command rather than the checksum — see the per-step table for the exact reply."
+    return "CMD_PREPARE_BUFFER's 11-byte payload was sent and the device answered ACK_ERROR, which is the only reply that now produces the legacy fallback (v0.5 §6.2). A refusal may be about the command rather than the checksum — see the per-step table for the exact reply."
   }
-  return "CMD_PREPARE_BUFFER's 11-byte payload was sent, but the read did not complete, so which path served it is unknown; see the per-step table."
+  return "CMD_PREPARE_BUFFER's 11-byte payload was sent, but the read did not complete, so which path served it is unknown. Since v0.5 a framing failure on the buffered path ends the read as ZkFramingError rather than falling back; see the per-step table."
 }
 
 /** The step-name prefix `probeIdentity` gives every key in the parameter sweep. */
@@ -354,18 +380,35 @@ const PARAM_STEP_PREFIX = 'param:'
  * genuinely did not: a device that demands a comm key it did not get sweeps
  * all 12 keys and has all 12 refused, which is a device profile finding and
  * not an absence. The two used to be indistinguishable.
+ *
+ * The three `ParameterFinding` outcomes are counted apart rather than summed
+ * into "answered", because items 15, 16 and 17 ask three different questions
+ * of them: 15 is about the echo, 16 about a refusal or a blank, 17 about which
+ * keys exist. "None returned a value to inspect" is the state where no key
+ * echoed AND none answered without echoing — not merely the state where
+ * `parameters` is empty, which a sweep of nothing but refusals also produces.
  */
 function parameterSummary(f: Findings, steps: readonly StepResult[]): string {
   const paramSteps = steps.filter((s) => s.name.startsWith(PARAM_STEP_PREFIX))
   if (paramSteps.length === 0) return 'the parameter sweep did not run.'
-
   const unauthorized = paramSteps.filter((s) => s.outcome === 'unauthorized').length
-  if (f.parameters.length === 0) {
-    return `the sweep ran: ${paramSteps.length} keyword(s) tried, ${unauthorized} refused authorization (ACK_UNAUTH), and none returned a value to inspect. That is a device profile finding, not an absence — a session holding the device's comm key would see different answers.`
-  }
-  const answered = f.parameters.filter((p) => p.outcome === 'answered').length
+  const echoed = f.parameters.filter((p) => p.outcome === 'answered').length
+  const mismatched = f.parameters.filter((p) => p.outcome === 'mismatched-echo').length
+  const refusedCount = f.parameters.filter((p) => p.outcome === 'refused').length
   const empty = f.parameters.filter((p) => p.outcome === 'answered' && p.empty).length
-  return `${paramSteps.length} keyword(s) tried; ${answered} answered, ${empty} of those empty, ${unauthorized} refused authorization (ACK_UNAUTH).`
+  if (echoed === 0 && mismatched === 0) {
+    return `the sweep ran: ${paramSteps.length} keyword(s) tried, ${refusedCount} refused (ACK_ERROR), ${unauthorized} refused authorization (ACK_UNAUTH), and none returned a value to inspect. That is a device profile finding, not an absence — a session holding the device's comm key would see different answers.`
+  }
+  return `${paramSteps.length} keyword(s) tried; ${echoed} echoed the keyword back (${empty} of those empty), ${mismatched} answered WITHOUT echoing it, ${refusedCount} refused (ACK_ERROR), ${unauthorized} refused authorization (ACK_UNAUTH).`
+}
+
+/** Item 17 lists the keys, which are this library's own constants, never device data. */
+function item17Observation(f: Findings, steps: readonly StepResult[]): string {
+  const answered = f.parameters
+    .filter((p) => p.outcome === 'answered' || p.outcome === 'mismatched-echo')
+    .map((p) => p.key)
+  const summary = parameterSummary(f, steps)
+  return answered.length === 0 ? summary : `keyword(s) that answered: ${answered.join(', ')}. ${summary}`
 }
 
 /**
@@ -375,12 +418,13 @@ function parameterSummary(f: Findings, steps: readonly StepResult[]): string {
  * ("Checklist coverage") and §4.6 ("What cannot be probed"): each item is
  * driven by the `Findings`/`steps` field that section names as its answer.
  * Item 22 is 'not testable by this tool' per the design doc's "What cannot be
- * probed" heading; item 12 shares that same state as of Fix round 1 (F11) for
- * an analogous reason the design doc predates — this library has no
- * cancel/unsubscribe primitive for the probe to exercise. No OTHER item
- * borrows either state, even where evidence is thin.
+ * probed" heading; items 8 and 12 share that same state for an analogous
+ * reason the design doc predates — this library never sends an event
+ * acknowledgment and has no cancel/unsubscribe primitive, so the probe cannot
+ * exercise either one in any branch. No OTHER item borrows that state, even
+ * where evidence is thin.
  *
- * Three deliberate departures, named here rather than left for a reader to
+ * Four deliberate departures, named here rather than left for a reader to
  * discover by diffing against §4.5. This comment previously claimed the
  * mapping was "verbatim" while sitting directly above two rows that were not:
  *
@@ -397,6 +441,11 @@ function parameterSummary(f: Findings, steps: readonly StepResult[]): string {
  * - **Item 23.** §4.5 says "which bulk path was taken". That names the input,
  *   not the state: only the `legacy` path carries a refusal to reason from, so
  *   `buffered` is 'not answered' here. See the row itself.
+ * - **Items 15-17.** §4.5 names `findings.parameters` for all three, which was
+ *   read as one boolean ("did any key answer?") for all three. They are three
+ *   questions: 15 is about the ECHO, 16 about a refusal or a blank, 17 about
+ *   which keys exist. `ParameterFinding.outcome` separates them, so 16 no
+ *   longer rides on 15's evidence.
  */
 function buildChecklist(result: ProbeResult): ChecklistRow[] {
   const f = result.findings
@@ -404,6 +453,10 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
 
   const capStep = steps.find(isDeclaredSizeCap)
   const recordSize = f.attendance?.detectedRecordSize ?? null
+  const answeredKeys = f.parameters.filter((p) => p.outcome === 'answered' || p.outcome === 'mismatched-echo').length
+  const refusedOrEmpty =
+    f.parameters.some((p) => p.outcome === 'refused') || f.parameters.some((p) => p.outcome === 'answered' && p.empty)
+  const encodingDecided = f.encoding !== null && f.encoding.validUtf8 !== null
 
   const rows: ChecklistRow[] = []
   const push = (item: number, question: string, state: ChecklistState, observation: string): void => {
@@ -420,14 +473,14 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
   push(
     2,
     'Reconcile the checksum formulation, comm-key mixing and reply-id quirk against §5.',
-    f.checksum.received.packetsChecked > 0 ? 'answered' : 'not answered',
+    answeredIf(f.checksum.received.packetsChecked > 0),
     item2Observation(f),
   )
 
   push(
     3,
     'Confirm which attendance record size this model actually emits.',
-    recordSize !== null ? 'answered' : 'not answered',
+    answeredIf(recordSize !== null),
     recordSize !== null
       ? `detected record size: ${recordSize} bytes.`
       : `${attendanceAbsence(result)}, so no record size could be detected.`,
@@ -436,16 +489,16 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
   push(
     4,
     'Confirm the CMD_GET_FREE_SIZES field offsets (FREE_SIZES_OFFSET) against a real reply.',
-    f.freeSizes !== null ? 'answered' : 'not answered',
+    answeredIf(f.freeSizes !== null),
     f.freeSizes !== null
-      ? `userCount=${f.freeSizes.userCount} recordCount=${f.freeSizes.recordCount} recordCapacity=${f.freeSizes.recordCapacity}; the first ${f.freeSizes.rawHex.length / 2} byte(s) of the raw body are in the JSON sidecar (findings.freeSizes.rawHex) for manual offset review — capped at ${FREE_SIZES_RAW_MAX_BYTES}, with the full reply in the raw capture if one was requested.`
+      ? `userCount=${f.freeSizes.userCount} recordCount=${f.freeSizes.recordCount} recordCapacity=${f.freeSizes.recordCapacity}; the first ${f.freeSizes.rawHex.length / 2} byte(s) of the raw body are in the JSON sidecar (findings.freeSizes.rawHex) for manual offset review — capped at ${FREE_SIZES_RAW_MAX_BYTES}, with the full reply in the raw capture if one was requested. CMD_GET_FREE_SIZES is also sent a second time after the attendance read, to bracket the record count (v0.5 §7.2), which is why the attendance step counts more exchanges than its command suggests.`
       : 'CMD_GET_FREE_SIZES was not answered.',
   )
 
   push(
     5,
     'Confirm the TCP declared-size cap in src/codec/framing.ts is not rejecting legitimate traffic.',
-    capStep ? 'answered' : 'not answered',
+    answeredIf(capStep !== undefined),
     capStep
       ? `the cap REJECTED a packet on step '${capStep.name}': ${capStep.errorMessage ?? '(no message)'}. MAX_DECLARED_SIZE is an unverified local guess, so treat this as evidence the cap is too tight until the packet says otherwise. The rejected ${capStep.rawByteLength ?? 0}-byte prefix is in the raw capture (--raw-capture), not in this report.`
       : 'the cap did not fire on this run — inconclusive, since it is only exercised if a device happens to declare an oversized packet. A record-parser framing error is NOT this cap and does not answer this item.',
@@ -461,7 +514,7 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
   push(
     6,
     'Resolve any oracle divergence recorded under §7.3.',
-    keywordDecided ? 'answered' : 'not answered',
+    answeredIf(keywordDecided),
     f.keywordForm === null
       ? 'the keyword-shape A/B did not complete, so this remains open.'
       : keywordDecided
@@ -473,7 +526,7 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
   push(
     7,
     'Add the model to the compatibility table.',
-    identityComplete ? 'answered' : 'not answered',
+    answeredIf(identityComplete),
     identityComplete
       ? `deviceName=${f.identity.deviceName} firmwareVersion=${f.identity.firmwareVersion} platform=${f.identity.platform ?? '(unset)'} os=${f.identity.os ?? '(unset)'}.`
       : 'the device name and firmware version were not both recovered.',
@@ -482,14 +535,14 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
   push(
     8,
     'Does the device require an acknowledgment for each realtime event?',
-    realtimeGeneralState(f),
-    realtimeGeneralObservation(f),
+    'not testable by this tool',
+    item8Observation(f),
   )
   push(
     9,
     'Does a subscription survive an idle period, or does the device drop it?',
-    realtimeGeneralState(f),
-    realtimeGeneralObservation(f),
+    realtimeState(f, (r) => r.registered),
+    item9Observation(f),
   )
   push(
     10,
@@ -501,7 +554,7 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
   push(
     11,
     "Is the small dialect's uid one byte or two?",
-    recordSize !== null ? 'answered' : 'not answered',
+    answeredIf(recordSize !== null),
     recordSize !== null
       ? `inferred from the attendance record size (${recordSize} bytes).`
       : `${attendanceAbsence(result)}, so the dialect could not be inferred.`,
@@ -510,14 +563,14 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
   push(
     12,
     'Is there a way to cancel a subscription without dropping the connection?',
-    realtimeCancelState(),
+    'not testable by this tool',
     REALTIME_CANCEL_OBSERVATION,
   )
   push(
     13,
     'Does the device emit event types outside the requested mask, or interleave a request-response packet into a listening connection?',
-    realtimeGeneralState(f),
-    realtimeGeneralObservation(f),
+    realtimeState(f, (r) => r.eventsObserved > 0),
+    item13Observation(f),
   )
   push(
     14,
@@ -526,30 +579,29 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
     realtimeDesyncObservation(f),
   )
 
-  const paramsAnswered = f.parameters.length > 0
   const paramSummary = parameterSummary(f, steps)
-  push(15, 'Does the device echo the requested keyword in a CMD_OPTIONS_RRQ reply?', paramsAnswered ? 'answered' : 'not answered', paramSummary)
-  push(16, 'Does an unsupported parameter answer ACK_ERROR or an empty value?', paramsAnswered ? 'answered' : 'not answered', paramSummary)
-  push(17, 'Which parameter keywords does this firmware actually expose?', paramsAnswered ? 'answered' : 'not answered', paramSummary)
+  push(15, 'Does the device echo the requested keyword in a CMD_OPTIONS_RRQ reply?', answeredIf(answeredKeys > 0), paramSummary)
+  push(16, 'Does an unsupported parameter answer ACK_ERROR or an empty value?', answeredIf(refusedOrEmpty), paramSummary)
+  push(17, 'Which parameter keywords does this firmware actually expose?', answeredIf(answeredKeys > 0), item17Observation(f, steps))
 
   push(
     18,
     'Is the keyword payload accepted as a bare string, with no NUL terminator?',
-    keywordDecided ? 'answered' : 'not answered',
+    answeredIf(keywordDecided),
     f.keywordForm !== null ? KEYWORD_FORM_NOTE[f.keywordForm] : 'the keyword-shape A/B did not complete.',
   )
 
   push(
     19,
     'Does the device accept a checksum over an odd-length payload?',
-    f.bulkPrepareAttempted ? 'answered' : 'not answered',
+    answeredIf(f.bulkPrepareAttempted),
     item19Observation(f),
   )
 
   push(
     20,
     'What character encoding does the device use for strings — device name and user name alike?',
-    f.encoding !== null ? 'answered' : 'not answered',
+    answeredIf(encodingDecided),
     f.encoding !== null
       ? `of ${f.encoding.namesInspected} name(s) inspected, ${f.encoding.withHighBytes} carried a byte above 0x7F` +
         (f.encoding.withHighBytes === 0
@@ -561,7 +613,7 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
   push(
     21,
     'Does CMD_GET_TIME return the packed uint32 at offset 0, and how far does the device clock drift from the collecting host?',
-    f.clock !== null ? 'answered' : 'not answered',
+    answeredIf(f.clock !== null),
     f.clock !== null
       ? `device=${f.clock.deviceLocal} host=${f.clock.hostLocal} skew=${f.clock.skewSeconds === null ? 'undetermined (decoded date does not exist on a real calendar)' : `${f.clock.skewSeconds}s`}.`
       : 'CMD_GET_TIME was not answered.',
@@ -582,9 +634,9 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
   push(
     23,
     'Does any firmware answer ACK_UNAUTH to mean "this command is not supported" rather than "you are not authorized"?',
-    f.bulkPath === 'legacy' ? 'answered' : 'not answered',
+    answeredIf(f.bulkPath === 'legacy'),
     f.bulkPath === 'legacy'
-      ? 'the device refused CMD_PREPARE_BUFFER and the read fell back to the legacy path — check that refusal\'s reply command in the per-step table: ACK_UNAUTH there means this firmware uses it for "unsupported".'
+      ? 'the device refused CMD_PREPARE_BUFFER with ACK_ERROR and the read fell back to the legacy path. Since v0.5 that is the ONLY reply that falls back: an ACK_UNAUTH to CMD_PREPARE_BUFFER ends the read as unauthorized and never reaches the legacy path, so a firmware using ACK_UNAUTH for "unsupported" shows up as an unauthorized step outcome, not as a fallback.'
       : f.bulkPath === 'buffered'
         ? 'the buffered path was accepted, so no refusal occurred and ACK_UNAUTH\'s meaning on this firmware was not exercised.'
         : 'no decisive bulk-path signal was captured.',

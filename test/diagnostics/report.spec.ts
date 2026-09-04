@@ -127,11 +127,15 @@ function withConcurrent(overrides: Partial<NonNullable<Findings['concurrent']>>)
  * report would be read, for the four cases the reviewer walked by hand.
  */
 describe('the realtime/concurrent checklist mapping (Fix round 1, F9)', () => {
-  it('a completed subscription answers 8/9/13, leaves 14 not answered, and 12 stays not testable', () => {
+  it('a completed subscription answers 9 and 13, leaves 14 not answered, and 8/12 stay not testable', () => {
     const md = renderMarkdown(
-      withRealtime({ registered: true, eventsObserved: 2, eventTypes: [1], desyncOnRegister: false }),
+      withRealtime({
+        registered: true, heldOpen: true, eventsObserved: 2, eventTypes: [1], desyncOnRegister: false,
+      }),
     )
-    expect(checklistState(md, 8)).toBe('answered')
+    // Item 8 used to read 'answered' here, borrowing the window's evidence for
+    // a question no run of this probe can ask -- see its own block below.
+    expect(checklistState(md, 8)).toBe('not testable by this tool')
     expect(checklistState(md, 9)).toBe('answered')
     expect(checklistState(md, 13)).toBe('answered')
     expect(checklistState(md, 14)).toBe('not answered')
@@ -141,7 +145,7 @@ describe('the realtime/concurrent checklist mapping (Fix round 1, F9)', () => {
     expect(checklistState(md, 12)).toBe('not testable by this tool')
   })
 
-  it('a refused registration leaves 8/9/13/14 all not answered', () => {
+  it('a refused registration leaves 9/13/14 not answered, with 8 not testable', () => {
     const md = renderMarkdown(
       withRealtime({
         registered: false,
@@ -149,11 +153,11 @@ describe('the realtime/concurrent checklist mapping (Fix round 1, F9)', () => {
         desyncOnRegister: false,
       }),
     )
-    for (const item of [8, 9, 13, 14]) expect(checklistState(md, item)).toBe('not answered')
-    expect(checklistState(md, 12)).toBe('not testable by this tool')
+    for (const item of [9, 13, 14]) expect(checklistState(md, item)).toBe('not answered')
+    for (const item of [8, 12]) expect(checklistState(md, item)).toBe('not testable by this tool')
   })
 
-  it('a desync answers item 14 alone, even though 8/9/13 stay not answered on the same run', () => {
+  it('a desync answers item 14 alone, even though 9/13 stay not answered on the same run', () => {
     const md = renderMarkdown(
       withRealtime({
         registered: false,
@@ -162,7 +166,8 @@ describe('the realtime/concurrent checklist mapping (Fix round 1, F9)', () => {
       }),
     )
     expect(checklistState(md, 14)).toBe('answered')
-    for (const item of [8, 9, 13]) expect(checklistState(md, item)).toBe('not answered')
+    for (const item of [9, 13]) expect(checklistState(md, item)).toBe('not answered')
+    expect(checklistState(md, 8)).toBe('not testable by this tool')
   })
 
   it('item 10 is answered whether the second connection was accepted or refused', () => {
@@ -170,6 +175,120 @@ describe('the realtime/concurrent checklist mapping (Fix round 1, F9)', () => {
     const declined = renderMarkdown(withConcurrent({ accepted: false, error: 'connection refused' }))
     expect(checklistState(accepted, 10)).toBe('answered')
     expect(checklistState(declined, 10)).toBe('answered')
+  })
+})
+
+describe('item 8 — the acknowledgment question this tool cannot ask', () => {
+  it('is not testable by this tool, even after a full window', () => {
+    // This library never sends ackEvent (v0.2 §9), so a completed window says
+    // nothing about whether the device requires one. It used to read
+    // 'answered' beside a sentence describing a window.
+    const md = renderMarkdown(withRealtime({ registered: true, heldOpen: true, eventsObserved: 3 }))
+    expect(checklistState(md, 8)).toBe('not testable by this tool')
+    expect(md).toMatch(/8 \|[^\n]*never acknowledges/i)
+  })
+
+  it('names the symptom a reader should watch for', () => {
+    const md = renderMarkdown(withRealtime({ registered: true, heldOpen: true, eventsObserved: 1 }))
+    expect(md).toMatch(/8 \|[^\n]*one event and then goes silent/i)
+  })
+
+  it('stays not testable when the probe never ran at all', () => {
+    // The fourth path: findings.realtime is null. Every other row that keys
+    // off the realtime probe reads 'not requested' here, and item 8 must not
+    // -- 'not requested' would imply that asking for the probe could answer it.
+    expect(checklistState(renderMarkdown(sample()), 8)).toBe('not testable by this tool')
+  })
+})
+
+describe('items 9 and 13 — what a window actually showed', () => {
+  it('answers 9 when the subscription held open, and 13 only if an event arrived', () => {
+    const md = renderMarkdown(withRealtime({ registered: true, heldOpen: true, eventsObserved: 0 }))
+    expect(checklistState(md, 9)).toBe('answered')
+    expect(checklistState(md, 13)).toBe('not answered')
+  })
+
+  it('answers 9 when the device dropped the subscription, naming when', () => {
+    const md = renderMarkdown(withRealtime({
+      registered: true, heldOpen: false, endedAfterMs: 1200, error: 'connection closed by peer',
+    }))
+    expect(checklistState(md, 9)).toBe('answered')
+    expect(md).toMatch(/9 \|[^\n]*dropped it after 1200ms/)
+  })
+
+  it('answers 13 when events arrived, listing types and non-event packets', () => {
+    const md = renderMarkdown(withRealtime({
+      registered: true, heldOpen: true, eventsObserved: 2, eventTypes: [1], nonEventPackets: 1,
+    }))
+    expect(checklistState(md, 13)).toBe('answered')
+    expect(md).toMatch(/13 \|[^\n]*1 non-event packet/)
+  })
+
+  it('leaves 9 and 13 not answered when the registration was refused', () => {
+    const md = renderMarkdown(withRealtime({ registered: false, error: 'device refused' }))
+    expect(checklistState(md, 9)).toBe('not answered')
+    expect(checklistState(md, 13)).toBe('not answered')
+    expect(md).not.toMatch(/no message/)
+  })
+})
+
+describe('item 20 — an encoding verdict, or none', () => {
+  it('is not answered when no name carried a high byte', () => {
+    const result = sample()
+    result.findings.encoding = { namesInspected: 2, withHighBytes: 0, validUtf8: null }
+    const md = renderMarkdown(result)
+    expect(checklistState(md, 20)).toBe('not answered')
+    expect(md).toMatch(/20 \|[^\n]*no evidence either way/)
+  })
+
+  it('is answered when a verdict exists', () => {
+    const result = sample()
+    result.findings.encoding = { namesInspected: 2, withHighBytes: 1, validUtf8: true }
+    expect(checklistState(renderMarkdown(result), 20)).toBe('answered')
+  })
+})
+
+describe('items 15-17 — three outcomes, not one boolean', () => {
+  function withParams(parameters: Findings['parameters']): ProbeResult {
+    const result = sample()
+    result.findings.parameters = parameters
+    result.steps = parameters.map((p) => ({ name: `param:${p.key}`, outcome: 'ok' as const }))
+    return result
+  }
+
+  it('answers 15 when a device answered without echoing, and says so', () => {
+    const md = renderMarkdown(withParams([{ key: '~DeviceName', outcome: 'mismatched-echo', empty: false }]))
+    expect(checklistState(md, 15)).toBe('answered')
+    expect(md).toMatch(/answered WITHOUT echoing/)
+  })
+
+  it('answers 16 on a refusal, and 17 lists the keys that answered', () => {
+    const md = renderMarkdown(withParams([
+      { key: '~DeviceName', outcome: 'answered', empty: false },
+      { key: 'MAC', outcome: 'refused', empty: false },
+    ]))
+    expect(checklistState(md, 16)).toBe('answered')
+    expect(md).toMatch(/17 \|[^\n]*~DeviceName/)
+  })
+
+  it('leaves 16 not answered when every key echoed a value', () => {
+    const md = renderMarkdown(withParams([{ key: '~DeviceName', outcome: 'answered', empty: false }]))
+    expect(checklistState(md, 16)).toBe('not answered')
+  })
+
+  it('answers 16 on an empty value, which is the other half of the question', () => {
+    // "ACK_ERROR *or* an empty value" -- an all-answered sweep where one key
+    // came back blank is evidence just as a refusal is.
+    const md = renderMarkdown(withParams([{ key: '~DeviceName', outcome: 'answered', empty: true }]))
+    expect(checklistState(md, 16)).toBe('answered')
+  })
+})
+
+describe('item 4 names the second free-sizes read', () => {
+  it('says why the attendance step shows an extra exchange', () => {
+    const result = sample()
+    result.findings.freeSizes = { userCount: 1, recordCount: 2, recordCapacity: 10, rawHex: 'ab' }
+    expect(renderMarkdown(result)).toMatch(/4 \|[^\n]*bracket/i)
   })
 })
 
@@ -413,7 +532,12 @@ describe('items 19 and 23 — the bulk path (I-4)', () => {
 
   it('distinguishes an accepted odd-length payload from a refused one', () => {
     expect(renderMarkdown(withBulk('buffered', true))).toMatch(/19 \|[^\n]*accepted/i)
-    expect(renderMarkdown(withBulk('legacy', true))).toMatch(/19 \|[^\n]*did not accept/i)
+    // Since v0.5, ACK_ERROR is the ONLY reply that produces the legacy
+    // fallback, so the row can name the reply rather than hedge with "did not
+    // accept". The negative keeps the two branches distinguishable.
+    const legacy = renderMarkdown(withBulk('legacy', true))
+    expect(legacy).toMatch(/19 \|[^\n]*answered ACK_ERROR/)
+    expect(legacy).not.toMatch(/19 \|[^\n]*accepted/i)
   })
 })
 
