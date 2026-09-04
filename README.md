@@ -212,7 +212,7 @@ npx zkteco-protocol <host> [flags]
 | `--timeout` | `5000` | Per-request timeout, in milliseconds. |
 | `--attendance` | `auto` | `auto` reads the attendance log unless the device reports more than 10,000 records; `always` reads regardless; `never` skips it. |
 | `--out` | *(stdout)* | Where the Markdown report goes. The JSON sidecar is always written too — alongside it, or as `zkteco-report.json` in the current directory when `--out` is omitted. If `--out` itself ends in `.json`, the sidecar becomes `<name>.sidecar.json` rather than overwriting the report. |
-| `--raw-capture <path>` | *(off)* | Opt-in path for the raw wire capture — see below. Must not be the path of either report artifact: the run refuses rather than landing unredacted bytes on top of a shareable one. |
+| `--raw-capture <path>` | *(off)* | Opt-in path for the raw wire capture — see below. Must not be the path of either report artifact, and must not be empty: the run refuses rather than landing unredacted bytes on top of a shareable one, or reporting a capture it never wrote. |
 | `--realtime <seconds>` | `0` | Hold a realtime subscription open this long and probe it. **Off by default, and irreversible**: subscribing switches the connection to one-way push mode for good (`Transport.listen`), so this always runs last, after every other probe. |
 | `--concurrent` | `false` | Probe whether the device accepts a second connection, opened alongside the first. Off by default; runs on its own socket and does not disturb the session the rest of the probe uses. |
 

@@ -442,6 +442,36 @@ Item 22 gains a note that it is not testable by this tool (§4.6). No other item
 
 ---
 
+## 9a. Amendment, 2026-09-04 (v0.5 sub-project B)
+
+Implemented by `2026-09-03-zkteco-diagnostics-evidence-design.md`. Four changes to what this
+document says, each because a row claimed something the wire did not show — too much, in three
+cases, and too little in the fourth.
+
+- **§4.5, item 8** moves from "answered by `--realtime`" to **not testable by this tool**, joining
+  items 12 and 22 in §4.6. This library never acknowledges a realtime event — `ackEvent` is
+  implemented, tested and called from nowhere, by the v0.2 design's ruling — so a completed window
+  is evidence about whether events arrive, not about whether an acknowledgment is required. The
+  report names the symptom (one event, then silence) instead of claiming an answer.
+- **§4.5, item 20** is answered only when a name actually carried a byte above 0x7F. `validUtf8:
+  null` means no evidence either way, and the row used to read "answered" beside an observation
+  saying exactly that.
+- **§5.2** gains the one sanctioned exception to the redaction boundary: `findings.freeSizes.rawHex`,
+  the head of the `CMD_GET_FREE_SIZES` reply, bounded to `FREE_SIZES_RAW_MAX_BYTES`. Item 4 needs
+  real bytes to check `FREE_SIZES_OFFSET` against, and §4.5 names that body as its evidence; the
+  boundary table did not record it. Device strings that DO travel (device name, platform, OS,
+  firmware) are stripped of control characters where they are produced, so a device cannot forge a
+  table row in a report meant to be pasted into a public issue.
+- **§4.5, item 13** is answered when `eventsObserved > 0` **or** `nonEventPackets > 0`, not on the
+  event count alone. A stray non-event packet arriving on a listening connection is exactly the
+  interleave item 13 asks about, so a window with no event but one stray packet has still answered
+  half the question. `Findings.realtime.nonEventPackets` was added to carry that count separately
+  from `eventsObserved`, so counting a stray as an event never happens either.
+
+§9's count is unchanged: this scope adds no checklist item.
+
+---
+
 ## 10. Sources
 
 Unchanged from v0.3. `adrobinoga/zk-protocol` carries no license — read for understanding, restate

@@ -52,7 +52,7 @@ Run, from the repository root, on a clean checkout of `main`:
 ```bash
 npm login                 # browser-based; 2FA challenge
 pnpm install --frozen-lockfile
-pnpm release:drill        # 11 checks, exit 0 — see §4 if it fails
+pnpm release:drill        # 14 checks, exit 0 — see §4 if it fails
 npm publish --dry-run     # read the file list before it is permanent
 npm publish --access public
 ```
@@ -173,11 +173,11 @@ Stated because this project's signature defect is a check that reports more than
   published tarball has shasum `fd2920178c1059d013ec5ae96dd7987c0707f37e`, which a fresh local
   `npm pack` of the same commit reproduces exactly. That is one sample on one machine, not a
   determinism guarantee — but the gap is narrower than this bullet used to imply.
-- **No CommonJS TypeScript consumer is ever typechecked against `dist/index.d.cts`.** Nothing in
-  the drill or the suite compiles a `require()`-style consumer under `module: node16`. What is
-  actually asserted is narrower: `test/smoke.spec.ts` checks that the file exists and that the
-  `exports` map points `require.types` at it. A `.d.cts` that exists and is wrong — or right for a
-  shape no consumer uses — passes every check here.
+- **A CommonJS TypeScript consumer is typechecked, on one TypeScript version.** The drill writes a
+  `require()`-style consumer into the installed-tarball directory and compiles it under
+  `module: node16` with this repository's own `typescript` — the resolution mode that produced
+  TS1479 against a single `types` condition. What that does not cover: other TypeScript versions,
+  `nodenext`, and bundler resolution. It runs on both CI operating systems as of 2026-09-04.
 - **The release job runs one OS and one Node version** (ubuntu-latest, Node 24). The 2×3 platform
   matrix stays CI's job on `main`, which is why step 2 of §3 says to look at it.
 - **A dry run cannot exercise OIDC.** The first tagged release is the first evidence the
@@ -187,6 +187,9 @@ Stated because this project's signature defect is a check that reports more than
   the CLI did not work. Run 33476872217 is the first green Linux drill. What that says about any
   check here: a check that has only run in one environment has established something about that
   environment and nothing else.
+- **The drill now runs on every push, not only on a tag.** Both operating systems, Node 24. A
+  packaging regression is found on the commit that introduces it rather than by burning a version
+  number.
 - **No physical ZKTeco device has ever been connected to this library.** Publishing changes nothing
   about that. Keep the README's compatibility table honest.
 

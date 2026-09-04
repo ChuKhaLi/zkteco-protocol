@@ -47,9 +47,9 @@ absence is meaningful, not vacuous), and item 1 names `--raw-capture` as the rem
 `package.json`'s `version` and `src/index.ts`'s `VERSION` must be bumped together; `test/smoke.spec.ts`
 asserts they agree.
 
-That drill is scripted: `pnpm release:drill` runs all eleven checks and exits 1 with a named temp
-directory on failure. It also runs in CI on every tag, which is the only reason it has ever run on
-Linux.
+That drill is scripted: `pnpm release:drill` runs all fourteen checks and exits 1 with a named temp
+directory on failure. It runs in CI on every push, on Linux and on Windows, and on every tag —
+which is the only reason a CLI that had never worked on Linux was found before a consumer met it.
 
 **The package is published, and releases go through the tag — never by hand.** Bump `version` and
 `VERSION` together, push `v<version>`, approve the `npm-publish` environment; the pipeline publishes
@@ -110,6 +110,11 @@ These are project decisions with reasons recorded; do not relax them without rea
 - **Redaction happens at the source, never in a renderer.** `Findings` is redacted where it is
   produced, so the renderers can trust it. Booleans and counts travel; device bytes and secrets do
   not. The unredacted bytes belong in the opt-in raw capture.
+  The one sanctioned exception is `findings.freeSizes.rawHex`, the head of the `CMD_GET_FREE_SIZES`
+  reply, bounded to `FREE_SIZES_RAW_MAX_BYTES` — checklist item 4 has to check unverified offsets
+  against real bytes. Strings the device chose that do travel are stripped of control characters
+  where they are produced (`sanitizeDeviceString`), so a device name cannot forge a row in the
+  Markdown report.
 
 ## The defect shape this project keeps catching
 
