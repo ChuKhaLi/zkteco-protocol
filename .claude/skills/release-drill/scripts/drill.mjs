@@ -148,10 +148,17 @@ check(
   md.includes(DEVICE_NAME),
   'positive control',
 )
+// The checklist row is `| # | question | state | observation |`; the state
+// cell is field index 3. Matching the STATE CELL exactly, rather than
+// substring-testing the whole row, matters: 'not answered' contains
+// 'answered', so a substring test can never fail regardless of which state
+// the row is actually in. See the captured-run check below for what that
+// cost before this fix.
+const stateCell = (row) => (row.split('|')[3] ?? '').trim()
 const item1 = md.split('\n').find((l) => l.startsWith('| 1 |')) ?? ''
 check(
   'item 1 reads "not answered" and names --raw-capture as the remedy',
-  /not answered/.test(item1) && /--raw-capture/.test(item1),
+  stateCell(item1) === 'not answered' && /--raw-capture/.test(item1),
   item1.slice(0, 90),
 )
 
@@ -167,7 +174,7 @@ const capturedMd = readFileSync(captured.out, 'utf8')
 const item1Captured = capturedMd.split('\n').find((l) => l.startsWith('| 1 |')) ?? ''
 check(
   'item 1 flips to "answered" and names the real capture file',
-  /answered/.test(item1Captured) && item1Captured.includes('trace.jsonl'),
+  stateCell(item1Captured) === 'answered' && item1Captured.includes('trace.jsonl'),
   item1Captured.slice(0, 90),
 )
 // The positive control for the check above. Without it, "item 1 flips to
