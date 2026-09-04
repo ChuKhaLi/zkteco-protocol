@@ -42,7 +42,7 @@
   - `detectUserRecordSize(bodyLength: number, userCount: number | null): typeof USER_RECORD_SIZE`
   - `parseUserData(data: Buffer, userCount: number | null): ZkUser[]` — **second parameter is required, no default.** Task 2 depends on this exact signature.
 
-- [ ] **Step 1: Update the 13 existing call sites in the spec file so they compile**
+- [ ] **Step 1: Update the 13 existing call sites so they compile — 12 in `user.spec.ts`, 1 in `report.spec.ts`**
 
 The second parameter is required, so every existing call must pass `null` explicitly. This is not
 busywork — it is the regression guard. Every one of these tests asserts today's behaviour, and
