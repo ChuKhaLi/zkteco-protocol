@@ -1,7 +1,7 @@
 import { mkdirSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import { startEmulator, type Emulator } from '../../test/emulator/index.js'
-import { describeFailure, runOracleScript, succeeded } from './run-oracle.js'
+import { describeFailure, reportFailures, runOracleScript, succeeded } from './run-oracle.js'
 
 const OUT_DIR = path.join('test', 'fixtures', 'oracle')
 const EMULATOR_SESSION_ID = 0x1f2e
@@ -254,8 +254,7 @@ for (const transport of ['tcp', 'udp'] as const) {
   }
 }
 
-if (failures.length > 0) {
-  process.stderr.write(`\n${failures.length} oracle run(s) produced no fixture:\n`)
-  for (const line of failures) process.stderr.write(`  ${line}\n`)
-  process.exitCode = 1
-}
+// Only assigned on failure: setting process.exitCode unconditionally would
+// clear a non-zero code set anywhere else in this script.
+const exitCode = reportFailures(failures, (s) => process.stderr.write(s))
+if (exitCode !== 0) process.exitCode = exitCode
