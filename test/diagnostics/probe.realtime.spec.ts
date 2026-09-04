@@ -164,9 +164,29 @@ describe('probeRealtime counts only events, and ends when the subscription does'
     const findings = emptyFindings()
     // A 60s window the test must NOT wait out: the drop ends it.
     const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
-    await probeRealtime(session, new StepRunner(), findings, { windowSeconds: 60, sleep, now: fakeNow() })
+    // A REAL monotonic clock here, unlike the fakeNow() the counting tests
+    // inject. `endedAfterMs` is printed to the operator as "dropped it after
+    // Nms" (src/diagnostics/report.ts, item 9), and under fakeNow() it is 10
+    // whatever the window did -- so setting the expression to 0 reddened
+    // nothing. The purity rule binds src/diagnostics/, not this test.
+    const startedAt = performance.now()
+    await probeRealtime(session, new StepRunner(), findings, {
+      windowSeconds: 60, sleep, now: () => performance.now(),
+    })
+    const wallMs = performance.now() - startedAt
     expect(findings.realtime).toMatchObject({ registered: true, heldOpen: false })
     expect(findings.realtime!.error).toBeTruthy()
+    // Bounded on both sides, because either bound alone is cheap to satisfy
+    // by accident. Below: the emulator arms its 30ms destroy timer as it
+    // writes the CMD_REG_EVENT ack, a shade before the probe takes its own
+    // start, so the measured span can land just under 30 -- 20 is the margin,
+    // still an order of magnitude above the fake's 10 and far from 0. Above:
+    // the span cannot exceed the probe call that contains it, and must be
+    // nowhere near the 60s window it did not wait out.
+    const endedAfterMs = findings.realtime!.endedAfterMs
+    expect(endedAfterMs).toBeGreaterThanOrEqual(20)
+    expect(endedAfterMs).toBeLessThanOrEqual(wallMs)
+    expect(endedAfterMs).toBeLessThan(60_000)
     session = null
   }, 10_000)
 })

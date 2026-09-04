@@ -10,7 +10,7 @@ import {
   ATTENDANCE_AUTO_THRESHOLD, attendanceRequested, emptyFindings, encodingVerdict, inferBulkPath,
   probeBulk, sentPrepareBuffer,
 } from '../../src/diagnostics/probe.js'
-import { startEmulator, type Emulator } from '../emulator/index.js'
+import { reply, startEmulator, type Emulator } from '../emulator/index.js'
 import type { ZkUser } from '../../src/types.js'
 import type { TraceEvent } from '../../src/diagnostics/types.js'
 
@@ -198,8 +198,10 @@ describe('probeBulk on a device with no records', () => {
       detectedRecordSize: null,
       rowCount: 0,
     })
-    // The positive control: the step itself completed, so this is not a
-    // failure being reported as an absence.
+    // The negative control: nothing that looks like an attendance read
+    // reached the socket, so `read: false` above is a skip rather than a read
+    // that happened and failed. The claim that the step itself completed is
+    // carried by the toMatchObject above, not by this absence.
     expect(running.received.map((p) => p.command)).not.toContain(CMD.ATTLOG_RRQ)
   })
 })
@@ -243,6 +245,48 @@ describe('probeBulk', () => {
     // path first on BOTH branches, so the odd-length payload reached this
     // device even though legacy served the read.
     expect(findings.bulkPrepareAttempted).toBe(true)
+  })
+
+  it("records a user read the device refused on the legacy path as 'refused', with the deciding exchange", async () => {
+    // The refusal must travel the whole way: PREPARE_BUFFER declined, the
+    // legacy CMD_USERTEMP_RRQ that readBulk falls back to answered ACK_ERROR,
+    // Session.execute's throw classified by the users step. step.spec.ts pins
+    // classifyError and the throw's wording in isolation; nothing exercised
+    // the path between them, so a change in src/session/dataRead.ts that
+    // caught or reworded that ACK_ERROR would turn every refused user read
+    // back into 'malformed' with the whole suite green.
+    //
+    // The `handlers` entry stands in for the `refuseLegacyUsers` emulator knob
+    // the design spec's §10 named: `handlers` already expresses it, so no new
+    // knob was added.
+    running = await startEmulator({
+      transport: 'tcp',
+      supportsBuffer: false,
+      handlers: { [CMD.USERTEMP_RRQ]: (req, state) => [reply(state, req, CMD.ACK_ERROR)] },
+      info: { userCount: 1, recordCount: 1, recordCapacity: 1000 },
+      users: [emUser(1, '000123', 'Alice')],
+      records: { size: 40, rows: [rec40(1, 'A', 86_400)] },
+    })
+    const opened = await open(running.port)
+    session = opened.session
+    const findings = emptyFindings()
+    findings.freeSizes = { userCount: 1, recordCount: 1, recordCapacity: 1000, rawHex: '' }
+    const runner = new StepRunner(() => opened.traced.events)
+    await probeBulk(session, runner, findings, { transport: 'tcp', attendance: 'auto' }, opened.traced.events)
+
+    const users = runner.steps.find((s) => s.name === 'users')
+    expect(users).toMatchObject({
+      outcome: 'refused',
+      command: CMD.USERTEMP_RRQ,
+      ackCode: CMD.ACK_ERROR,
+    })
+    // No user list was served, so 'refused' cannot be being read off a read
+    // that quietly succeeded.
+    expect(findings.bulkPath).toBeNull()
+    // And the run continued, because a refusal is an answer: the attendance
+    // step that follows reached the wire and came back.
+    expect(runner.truncated).toBeNull()
+    expect(findings.attendance).toMatchObject({ read: true })
   })
 
   it('skips the attendance read above the threshold and says why', async () => {
