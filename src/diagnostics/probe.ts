@@ -666,7 +666,7 @@ export async function probeBulk(
   // callback.
   let users: ZkUser[] | undefined
   await runner.run('users', async () => {
-    users = await getUsers(session, opts.transport)
+    users = await getUsers(session, opts.transport, findings.freeSizes?.userCount ?? null)
     return { count: users.length }
   })
   // Recorded UNCONDITIONALLY, unlike bulkPath: item 19 asks whether the device

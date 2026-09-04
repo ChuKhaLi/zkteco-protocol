@@ -168,8 +168,29 @@ export class ZkDevice {
     return getTime(this.requireIdleSession())
   }
 
+  /**
+   * Reads the enrolled user list.
+   *
+   * Asks the device for its user count first, because the record width is
+   * derived by dividing the body by it (codec/records/user.ts). The count is
+   * what lets a legitimate 72-byte device with a multiple of seven users be
+   * read at all, since 7 x 72 and 18 x 28 are the same 504 bytes.
+   */
   async getUsers(): Promise<ZkUser[]> {
-    return getUsers(this.requireIdleSession(), this.transportKind)
+    const session = this.requireIdleSession()
+    // Swallowed deliberately, and only here. "No count" is a defined
+    // behaviour, not a guess: the read falls back to 72-byte records for
+    // every body length that is not ambiguous, so a device whose free-sizes
+    // reply is broken keeps a working user list. It cannot mask a dead
+    // session either -- under spec v0.5 section 5.2 a timeout closes the
+    // session, so the read below then fails with its own message.
+    let userCount: number | null = null
+    try {
+      userCount = (await getInfo(session)).userCount
+    } catch {
+      userCount = null
+    }
+    return getUsers(session, this.transportKind, userCount)
   }
 
   /**
