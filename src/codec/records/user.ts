@@ -58,6 +58,15 @@ function decodeOne(rec: Buffer): ZkUser {
  * device whose CMD_GET_FREE_SIZES reply is broken keeps a working user read.
  * The count is what rescues a legitimate 72-byte device with a multiple of
  * seven users; it is not what closes the hole.
+ *
+ * A count that IS supplied is trusted absolutely. Nothing here second-guesses
+ * it, because the only other input is the body length and no function of those
+ * two numbers can separate a right count from a wrong one -- so a count read
+ * from a wrong FREE_SIZES_OFFSET.userCount can still fabricate users at the
+ * division below, exactly as pre-v0.6 did unconditionally. Two premises this
+ * function cannot check are therefore load-bearing: that the offset is right,
+ * and that the body holds exactly `userCount` records. PROVENANCE.md, "What
+ * deriving it cost", records both and what each one costs when it is false.
  */
 export function detectUserRecordSize(
   bodyLength: number,
@@ -112,6 +121,13 @@ export function detectUserRecordSize(
       `user body of ${bodyLength} bytes does not divide evenly by ${userCount} user(s)`,
     )
   }
+  // The residual PROVENANCE.md names, and this is the line it cites. The
+  // division trusts `userCount` outright: a misread count that happens to
+  // equal bodyLength / 72 passes every guard below, so eighteen 28-byte users
+  // under a misread count of 7 -- the pair (504, 7) -- decodes into seven
+  // people nobody enrolled, indistinguishably from a legitimate seven-user
+  // 72-byte device presenting the same pair. Not fixable from these two
+  // numbers; recorded rather than closed.
   const size = bodyLength / userCount
   if (size === ALTERNATE_USER_RECORD_SIZE) {
     throw new ZkFramingError(

@@ -1,8 +1,9 @@
 import { getAttendanceLogs, type GetAttendanceOptions } from './commands/attendance.js'
 import { getIdentity, getParameters, getTime } from './commands/device.js'
 import { getInfo } from './commands/info.js'
-import { getUsers } from './commands/users.js'
+import { readUserStream } from './commands/users.js'
 import { EVENT_FLAG } from './codec/events.js'
+import { parseUserData } from './codec/records/user.js'
 import { ZkConnectionError } from './errors.js'
 import { DEFAULT_BUFFER_LIMIT, Subscription, type SubscribeOptions, type ZkEventStream } from './realtime/Subscription.js'
 import { Session } from './session/Session.js'
@@ -171,26 +172,47 @@ export class ZkDevice {
   /**
    * Reads the enrolled user list.
    *
-   * Asks the device for its user count first, because the record width is
-   * derived by dividing the body by it (codec/records/user.ts). The count is
-   * what lets a legitimate 72-byte device with a multiple of seven users be
-   * read at all, since 7 x 72 and 18 x 28 are the same 504 bytes.
+   * The list is transferred FIRST and the device's user count asked for
+   * afterwards, even though the count is what decides the record width
+   * (codec/records/user.ts). The count is what lets a legitimate 72-byte
+   * device with a multiple of seven users be read at all, since 7 x 72 and
+   * 18 x 28 are the same 504 bytes — but asking for it first meant a device
+   * that would not answer CMD_GET_FREE_SIZES lost the user list too, because
+   * the failed count had already taken the session down. Bytes in hand cannot
+   * be lost to a count that never arrives. `getAttendanceLogs` orders its own
+   * getInfo the same way, for the same reason.
    */
   async getUsers(): Promise<ZkUser[]> {
     const session = this.requireIdleSession()
+    const stream = await readUserStream(session, this.transportKind)
     // Swallowed deliberately, and only here. "No count" is a defined
-    // behaviour, not a guess: the read falls back to 72-byte records for
+    // behaviour, not a guess: the parse falls back to 72-byte records for
     // every body length that is not ambiguous, so a device whose free-sizes
-    // reply is broken keeps a working user list. It cannot mask a dead
-    // session either -- under spec v0.5 section 5.2 a timeout closes the
-    // session, so the read below then fails with its own message.
+    // reply is broken keeps a working user list.
+    //
+    // Two things this swallow does NOT do, both worth stating because the
+    // comment here once claimed otherwise:
+    //
+    // 1. It does not keep the session alive. ZkTimeoutError, ZkFramingError
+    //    and ZkConnectionError each end the session in Session.exchange (spec
+    //    v0.5 section 5.2), and that happens before this catch runs. Only
+    //    ZkAuthError and ZkProtocolError -- the device ANSWERED, with
+    //    ACK_UNAUTH or ACK_ERROR -- leave a session that still works. So this
+    //    call can return a full user list and leave the session dead behind
+    //    it, and the caller's next ZkDevice call fails with "this session is
+    //    not open". That is the deliberate trade: the list is worth more than
+    //    the session, and connect() restores the session. It does mean the
+    //    swallow hides a state change from the caller.
+    // 2. It does not make the count trustworthy, only optional. A count that
+    //    arrives from a wrong FREE_SIZES_OFFSET is used as-is; see
+    //    PROVENANCE.md, "What deriving it cost".
     let userCount: number | null = null
     try {
       userCount = (await getInfo(session)).userCount
     } catch {
       userCount = null
     }
-    return getUsers(session, this.transportKind, userCount)
+    return parseUserData(stream, userCount)
   }
 
   /**

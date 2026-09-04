@@ -434,9 +434,26 @@ only: `ZkDevice.getUsers` falls back to no count when `CMD_GET_FREE_SIZES`
 gets no such fallback. It is a real way v0.6 could make first contact with
 hardware worse rather than better, and it is on this record for that reason.
 
+**What that fallback preserves, and what it does not.** It preserves the user
+*list*. `ZkDevice.getUsers` transfers the list first and asks for the count
+afterwards, so bytes already in hand cannot be lost to a count that never
+arrives. It does **not** preserve the *session*. Only `ZkAuthError` and
+`ZkProtocolError` — the two that mean the device *answered*, with
+`CMD_ACK_UNAUTH` or `CMD_ACK_ERROR` — leave a session that still works. A
+timeout, a framing failure or a connection failure ends the session inside
+`Session.exchange` (design spec v0.5 §5.2) before the swallowing `catch` is
+ever reached. So a device that answers `CMD_GET_FREE_SIZES` with silence
+returns its full user list and leaves the caller holding a dead session: the
+next `ZkDevice` call fails with "this session is not open", and `connect()` is
+the recovery. Until v0.6 the two reads were ordered the other way round, and
+that same device lost the list as well — the read after the failed count threw
+`ZkConnectionError` from a session the count had already killed. The claim that
+the swallow "cannot mask a dead session" was false under both orderings; what
+is true is that it now costs the session rather than the data.
+
 **The closure is conditional on that same offset**, and refusal is not the only
 way a wrong one can land. `detectUserRecordSize` trusts the count absolutely —
-it divides the body by it (`src/codec/records/user.ts:115`) — so a misread
+it divides the body by it (`src/codec/records/user.ts:131`) — so a misread
 value that happens to equal `bodyLength / 72` satisfies both the divisibility
 check and the width check. Where the true width is 28 that means a body length
 both widths divide, and the caller receives fabricated users exactly as before
@@ -447,6 +464,30 @@ computed from them separates the two devices; this is recorded as a residual
 rather than closed. What did change is its reach — before v0.6 that body
 fabricated users unconditionally, with no count involved at all, and it now
 takes a wrong offset whose value coincides with `bodyLength / 72`.
+
+**A second unconfirmed premise, distinct from the offset: that the count and
+the body describe the same moment.** Dividing `bodyLength` by `userCount`
+requires the `USERTEMP_RRQ` body to hold exactly `userCount` records. Neither
+oracle has been asked this and no device has answered it; the documentation
+above conditions the new risk entirely on `FREE_SIZES_OFFSET` being right, and
+this is a separate claim that has to be right as well. Its observable
+consequence is a race rather than a fabrication: a user enrolled between the
+two reads leaves the count describing a different device than the body does,
+and the read is refused — as "does not divide evenly" where the new count does
+not divide the body (four users is 288 bytes and a count of 5 does not divide
+it), and as an implied width that is neither 72 nor 28 where it happens to
+(seven users is 504 bytes, and a count of 8 implies 63-byte records). Refusing
+is correct under *refuse rather than guess*, and the next poll recovers.
+
+`getAttendanceLogs` guards its analogous race by reading the record count on
+**both** sides of the transfer and refusing only if it moved. The user path
+deliberately does not: that second round-trip was ruled out for the poll loop
+(design spec §3 decision 2 — `getUsers` runs inside it, and a hidden
+`CMD_GET_FREE_SIZES` per poll keeps the terminal busy for the people badging at
+it). Reading the list before the count, which v0.6 does for the reason recorded
+above, does not remove this race — it **flips** it. The count now describes the
+device *after* the transfer, so it is an enrolment landing during the read,
+rather than one landing just before it, that produces the refusal.
 
 Experiment E4
 (`test/fixtures/oracle/bulk/E4-*.json`, recorded under *The buffered read —

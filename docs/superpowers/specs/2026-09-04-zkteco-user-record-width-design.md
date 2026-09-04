@@ -98,6 +98,17 @@ Recorded so they are not re-litigated from memory.
    refusing outright. Rationale: a device whose `CMD_GET_FREE_SIZES` reply is broken keeps a
    working user read and the kit keeps its encoding verdict, while the hazard is still closed
    unconditionally — the count rescues legitimate devices, it does not close the hole.
+
+   **Corrected 2026-09-04, at final review.** "A device whose `CMD_GET_FREE_SIZES` reply is broken
+   keeps a working user read" was false as first implemented, and it took a reordering to make it
+   true. `ZkDevice.getUsers` fetched the count *before* the transfer, and `Session.exchange` ends
+   the session on `ZkTimeoutError`, `ZkFramingError` or `ZkConnectionError` (v0.5 §5.2) — so a
+   device that simply never answered `CMD_GET_FREE_SIZES` had a dead session by the time the
+   `catch` set the count to `null`, and the read that followed threw `ZkConnectionError`. Eight
+   users — 576 bytes, an unambiguous length needing no count at all — were lost where v0.5 had
+   returned them. The fix is ordering, not error handling: the transfer runs first, `getInfo`
+   second, so bytes in hand cannot be lost to a count that never arrives. `getAttendanceLogs` had
+   this ordering already. The guarantee is now the narrower one §6.2 states.
 4. **Detection lives in the codec**, beside `parseUserData`, mirroring `detectRecordSize`. Every
    framing refusal in this library lives in `src/codec/`; putting one in `src/commands/` would hide
    it where a reader would not look.
@@ -243,6 +254,16 @@ One command-level test asserts that `ZkDevice.getUsers()` still resolves when `g
 (§6.2), and that the resulting error, when the read then fails on its own, still reads sensibly
 rather than blaming the count.
 
+**Corrected 2026-09-04, at final review.** That is two tests, and only the first was written. The
+one that existed picked `ACK_UNAUTH` — the case where the session survives — so it covered the
+half of §6.2 that was never in doubt and left the half that was actually broken untested. Both now
+exist in `test/ZkDevice.spec.ts`: the `ACK_UNAUTH` case, and a device that answers
+`CMD_GET_FREE_SIZES` with silence against a short `timeoutMs`. The second asserts what the
+corrected ordering gives — the eight users, because the bytes arrive before the count is
+attempted — and then asserts the consequence §6.2's correction names, that the session behind them
+is dead. Written against the pre-fix code it failed with `ZkConnectionError` from `readBulk`,
+which is the regression itself.
+
 ---
 
 ## 6. Supplying the count
@@ -266,6 +287,36 @@ behaviour rather than a guess, and the `catch` carries a comment saying so. It m
 session: under v0.5 §5.2 a timeout closes the session, so a `getInfo` timeout is followed by a bulk
 read that fails on its own with its own message. §5's last test holds that the resulting error is
 still legible.
+
+**Corrected 2026-09-04, at final review.** Two errors, and the second is the one that shipped.
+
+First, "a `getInfo` timeout is followed by a bulk read that fails on its own with its own message"
+described the *defect*, not a safeguard. The bulk read failed with `ZkConnectionError` — "this
+session is not open" — which is not the count's message and not a legible account of what went
+wrong; it is a working user read being thrown away because an optional count could not be fetched.
+See §3 decision 3's correction. The order is now transfer first, count second:
+
+```ts
+const stream = await readUserStream(session, this.transportKind)
+let userCount: number | null = null
+try { userCount = (await getInfo(session)).userCount } catch { userCount = null }
+return parseUserData(stream, userCount)
+```
+
+`getUsers(session, transport, userCount)` is unchanged and keeps both its other call sites;
+`readUserStream` is the transfer half of it, exported so `ZkDevice` need not reach into
+`src/session/`.
+
+Second, "it must not mask a dead session" is a requirement the code cannot meet in either
+ordering, and stating it as satisfied was the false claim. Only `ZkAuthError` and `ZkProtocolError`
+leave a usable session — those are the replies where the device *answered*. `ZkTimeoutError`,
+`ZkFramingError` and `ZkConnectionError` each end the session inside `Session.exchange` before the
+`catch` here is reached, so the swallow cannot restore it. Under the new ordering the visible
+consequence is that **`ZkDevice.getUsers` can return a complete user list and leave the session
+dead**: the caller's next `ZkDevice` call fails with "this session is not open", and `connect()`
+is the recovery. That is a better trade than losing the list, and it is still a state change
+hidden from the caller. The `catch`'s comment says so rather than claiming otherwise, and §5's
+last test asserts both halves — the eight users, and the dead session behind them.
 
 ### 6.3 Public surface
 

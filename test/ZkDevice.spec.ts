@@ -139,9 +139,9 @@ it('still reads users when the device will not report a user count', async () =>
   // the no-count path reads 72-byte records for every decidable length, and
   // eight users is 576 bytes, which is not a multiple of 504.
   //
-  // ACK_UNAUTH rather than a timeout on purpose. A timeout closes the session
-  // (spec v0.5 section 5.2), so it would prove the degradation only by
-  // killing the thing being tested.
+  // ACK_UNAUTH rather than a timeout on purpose: this is the half of the
+  // degradation where the session SURVIVES the refusal, so the read that
+  // follows is unencumbered. The timeout half is the test below.
   const eight = Array.from({ length: 8 }, (_, i) => emUser(i + 1, String(i + 1), `U${i + 1}`))
   running = await startEmulator({
     transport: 'tcp',
@@ -151,6 +151,35 @@ it('still reads users when the device will not report a user count', async () =>
   device = new ZkDevice({ host: '127.0.0.1', port: running.port })
   await device.connect()
   expect((await device.getUsers()).map((u) => u.uid)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+  await device.disconnect()
+  device = null
+})
+
+it('still reads users when the count read times out, and leaves the session dead', async () => {
+  // The other half, and the one the ordering exists for. A timeout is not a
+  // refusal the session walks away from: Session.exchange abandons the
+  // session on ZkTimeoutError (spec v0.5 section 5.2), so the count read is
+  // fatal to it. Reading the list FIRST is what keeps the eight users --
+  // fetching the count first threw ZkConnectionError from the bulk read
+  // instead, on a session the swallowed getInfo had already killed.
+  //
+  // Both consequences are asserted, because the second is the price of the
+  // first: the users arrive, and the session behind them is gone.
+  const eight = Array.from({ length: 8 }, (_, i) => emUser(i + 1, String(i + 1), `U${i + 1}`))
+  running = await startEmulator({
+    transport: 'tcp',
+    users: eight,
+    // Never answers. `null` from a handler sends no reply at all, which is
+    // what a device that ignores CMD_GET_FREE_SIZES looks like.
+    handlers: { [CMD.GET_FREE_SIZES]: () => null },
+  })
+  device = new ZkDevice({ host: '127.0.0.1', port: running.port, timeoutMs: 200 })
+  await device.connect()
+  expect((await device.getUsers()).map((u) => u.uid)).toEqual([1, 2, 3, 4, 5, 6, 7, 8])
+  // The documented consequence, pinned rather than described: getUsers
+  // resolved, and the next call on the same ZkDevice does not.
+  await expect(device.getInfo()).rejects.toThrow(ZkConnectionError)
+  await expect(device.getInfo()).rejects.toThrow(/this session is not open/)
   await device.disconnect()
   device = null
 })
