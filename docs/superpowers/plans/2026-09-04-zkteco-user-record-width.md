@@ -498,17 +498,27 @@ Then run:
 
 Expected, and check each one:
 
-- `refuses a 28-byte device rather than returning seven fabricated users` — must fail with
-  **"promise resolved instead of rejecting"**. That resolved value is the defect: seven `ZkUser`
-  objects that no device enrolled. If it fails any other way, the test is not reaching the defect
-  and must be fixed before continuing.
-- `refuses seven 72-byte users with no count` — same shape, resolves instead of rejecting.
-- `reads seven 72-byte users when the count settles it` and `reads an unambiguous list with no
-  count` — these should **pass already**, since Task 1 left both paths decoding. If either fails,
-  Task 1's guard is over-broad and the fix belongs there, not here.
+- `reads seven 72-byte users when the count settles it` — must **fail** before Step 3 and pass
+  after. It serves a 504-byte body with a count of 7, so it fails if `getUsers` forwards `null`
+  instead of the count. This is the test that proves the plumbing does work rather than merely
+  type-checking.
+- `names the 28-byte dialect when the count settles it` — same: with a count of 18 it must produce
+  the `/28-byte/` message, where a dropped count would produce the "undecidable" one instead.
+- `refuses a 28-byte device rather than returning seven fabricated users` and `refuses seven
+  72-byte users with no count` — these **pass as soon as the file compiles**, and that is correct.
 
-The last two passing while the first two fail is the evidence that the change is targeted rather
-than a blanket refusal.
+**Corrected 2026-09-04, after Task 2 ran.** An earlier draft of this step predicted the last two
+tests would first fail by *resolving* with seven fabricated users. They cannot, and the prediction
+was wrong: Task 1 already closes the defect in `parseUserData`, so by the time this task's tests
+exist there is no path that returns fabricated users. Before Step 3 the third argument is simply
+missing, `userCount` is `undefined`, and Task 1's integer guard refuses it with "must be a
+non-negative integer, got undefined" — an arity artifact that proves nothing about the defect.
+
+The RED evidence for the fabrication belongs to Task 1, which observed it directly. What this
+task's tests establish is narrower and still worth having: that the count reaches the parser from a
+real socket, on both transports, against a device actually serving 28-byte records. Do not go
+looking for a resolved-with-garbage state here; it is not reachable, and manufacturing one would
+mean weakening Task 1.
 
 - [ ] **Step 3: Change `getUsers` to take the count**
 
