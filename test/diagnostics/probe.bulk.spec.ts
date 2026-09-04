@@ -337,6 +337,31 @@ describe('probeBulk', () => {
     expect(running.received.some(requestsAttendance)).toBe(true)
   })
 
+  it('reads all seven users when free-sizes reports the count that disambiguates the width', async () => {
+    // 7 users at 72 bytes is 504 bytes -- also 18 records at 28 bytes, the one
+    // length a wrong or missing count cannot decode. Every other fixture in
+    // this file uses a single user, so nothing else here would catch the
+    // users step forwarding recordCount, a hardcoded value, or null instead
+    // of findings.freeSizes.userCount.
+    const users = Array.from({ length: 7 }, (_, i) => emUser(i + 1, String(i + 1), `U${i + 1}`))
+    running = await startEmulator({
+      transport: 'tcp',
+      info: { userCount: 7, recordCount: 0, recordCapacity: 1000 },
+      users,
+    })
+    const opened = await open(running.port)
+    session = opened.session
+    const findings = emptyFindings()
+    findings.freeSizes = { userCount: 7, recordCount: 0, recordCapacity: 1000, rawHex: '' }
+    const runner = new StepRunner()
+    await probeBulk(
+      session, runner, findings, { transport: 'tcp', attendance: 'auto' }, opened.traced.events,
+    )
+    const usersStep = runner.steps.find((s) => s.name === 'users')
+    expect(usersStep).toMatchObject({ outcome: 'ok', value: { count: 7 } })
+    expect(findings.encoding).not.toBeNull()
+  })
+
   it('keeps no user names or ids in findings', async () => {
     running = await startEmulator({
       transport: 'tcp',

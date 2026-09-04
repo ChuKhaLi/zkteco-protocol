@@ -155,6 +155,26 @@ it('still reads users when the device will not report a user count', async () =>
   device = null
 })
 
+it('reads all seven users when the device reports a count that disambiguates the width', async () => {
+  // Success-path sibling of the test above: 7 users at 72 bytes is 504
+  // bytes, also 18 records at 28 bytes. The degradation test above proves
+  // the null fallback still works when the count cannot be read; this one
+  // proves the count getInfo() actually returns is the one that gets used,
+  // by picking the one body length where a wrong or missing count would
+  // refuse to decode it at all.
+  const seven = Array.from({ length: 7 }, (_, i) => emUser(i + 1, String(i + 1), `U${i + 1}`))
+  running = await startEmulator({
+    transport: 'tcp',
+    info: { userCount: 7, recordCount: 0, recordCapacity: 100_000 },
+    users: seven,
+  })
+  device = new ZkDevice({ host: '127.0.0.1', port: running.port })
+  await device.connect()
+  expect((await device.getUsers()).map((u) => u.uid)).toEqual([1, 2, 3, 4, 5, 6, 7])
+  await device.disconnect()
+  device = null
+})
+
 describe('ZkDevice defaults', () => {
   it('defaults to the TCP transport', async () => {
     running = await startEmulator({ transport: 'tcp' })

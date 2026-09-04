@@ -100,6 +100,24 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       expect(log).toMatchObject({ userId: '123456789', userIdSource: 'lookup' })
     })
 
+    it('forwards the post-transfer user count, not a stale or wrong one, to resolve a 504-byte body', async () => {
+      // 7 users at 72 bytes is 504 bytes -- also 18 records at 28 bytes, the
+      // one length that is a whole number of records under both widths. Only
+      // the value getAttendanceLogs actually forwards to getUsers can decide
+      // this: the pre-transfer count, the record count, or a hardcoded value
+      // would all differ from 7 here and fail to decode the list at all.
+      const users = Array.from({ length: 7 }, (_, i) => emUser(i + 1, String(i + 1), `U${i + 1}`))
+      running = await startEmulator({
+        transport: transportKind,
+        info: { userCount: 7, recordCount: 1, recordCapacity: 1000 },
+        users,
+        records: { size: 8, rows: [rec8(5, DAY)] },
+      })
+      session = await openSession(running.port)
+      const [log] = await getAttendanceLogs(session, transportKind)
+      expect(log).toMatchObject({ userId: '5', userIdSource: 'lookup', uid: 5 })
+    })
+
     it('resolves a 16-byte record by numeric id while preserving leading zeros', async () => {
       running = await startEmulator({
         transport: transportKind,
