@@ -7,8 +7,8 @@ import { USER_RECORD_SIZE } from '../../src/codec/records/user.js'
 import { StepRunner } from '../../src/diagnostics/step.js'
 import { TracingTransport } from '../../src/diagnostics/TracingTransport.js'
 import {
-  ATTENDANCE_AUTO_THRESHOLD, emptyFindings, encodingVerdict, inferBulkPath, probeBulk,
-  sentPrepareBuffer,
+  ATTENDANCE_AUTO_THRESHOLD, attendanceRequested, emptyFindings, encodingVerdict, inferBulkPath,
+  probeBulk, sentPrepareBuffer,
 } from '../../src/diagnostics/probe.js'
 import { startEmulator, type Emulator } from '../emulator/index.js'
 import type { ZkUser } from '../../src/types.js'
@@ -153,6 +153,54 @@ describe('sentPrepareBuffer', () => {
   it('does not count a PREPARE_BUFFER we merely received', () => {
     const received = { ...bufferedSend(CMD.USERTEMP_RRQ), direction: 'recv' as const }
     expect(sentPrepareBuffer([received])).toBe(false)
+  })
+})
+
+describe('attendanceRequested', () => {
+  it('is true for a direct ATTLOG_RRQ send', () => {
+    expect(attendanceRequested([directSend(CMD.ATTLOG_RRQ)])).toBe(true)
+  })
+
+  it('is true for a PREPARE_BUFFER wrapping ATTLOG_RRQ', () => {
+    expect(attendanceRequested([bufferedSend(CMD.ATTLOG_RRQ)])).toBe(true)
+  })
+
+  it('is false for a user-list read, which also goes out wrapped', () => {
+    expect(attendanceRequested([bufferedSend(CMD.USERTEMP_RRQ), directSend(CMD.GET_FREE_SIZES)])).toBe(false)
+  })
+
+  it('does not count an ATTLOG_RRQ we merely received', () => {
+    const recv = { ...directSend(CMD.ATTLOG_RRQ), direction: 'recv' as const }
+    expect(attendanceRequested([recv])).toBe(false)
+  })
+})
+
+describe('probeBulk on a device with no records', () => {
+  it('records read: false and says no request was issued, so item 1 cannot claim one', async () => {
+    // getAttendanceLogs returns [] without reading when the device reports 0
+    // records (src/commands/attendance.ts). `read: true` here was item 1's
+    // "answered" on a capture holding no attendance request at all.
+    running = await startEmulator({
+      transport: 'tcp',
+      info: { userCount: 1, recordCount: 0, recordCapacity: 1000 },
+      users: [emUser(1, '000123', 'Alice')],
+    })
+    const opened = await open(running.port)
+    session = opened.session
+    const findings = emptyFindings()
+    findings.freeSizes = { userCount: 1, recordCount: 0, recordCapacity: 1000, rawHex: '' }
+    await probeBulk(
+      session, new StepRunner(), findings, { transport: 'tcp', attendance: 'auto' }, opened.traced.events,
+    )
+    expect(findings.attendance).toMatchObject({
+      read: false,
+      skippedReason: 'the device reported 0 records; no read was issued',
+      detectedRecordSize: null,
+      rowCount: 0,
+    })
+    // The positive control: the step itself completed, so this is not a
+    // failure being reported as an absence.
+    expect(running.received.map((p) => p.command)).not.toContain(CMD.ATTLOG_RRQ)
   })
 })
 

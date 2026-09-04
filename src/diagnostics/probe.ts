@@ -603,6 +603,27 @@ export function sentPrepareBuffer(events: readonly TraceEvent[]): boolean {
 }
 
 /**
+ * Did a request for the attendance log leave the socket?
+ *
+ * `getAttendanceLogs` returns an empty list WITHOUT issuing a read when the
+ * device reports zero records (`src/commands/attendance.ts`), so "the call
+ * returned" is not evidence that anything was asked. Item 1's question has two
+ * halves — a full handshake AND one attendance read — and this is the half a
+ * returned value cannot supply. Recognises both shapes the read can take: the
+ * legacy `CMD_ATTLOG_RRQ`, and the buffered `CMD_PREPARE_BUFFER` whose body
+ * carries the target command as a uint16 at offset 1.
+ */
+export function attendanceRequested(events: readonly TraceEvent[]): boolean {
+  return events.some((e) => {
+    if (e.direction !== 'send') return false
+    if (e.command === CMD.ATTLOG_RRQ) return true
+    if (e.command !== CMD.PREPARE_BUFFER || !e.hex) return false
+    const { data } = decodePayload(Buffer.from(e.hex, 'hex'))
+    return data.length >= 3 && data.readUInt16LE(1) === CMD.ATTLOG_RRQ
+  })
+}
+
+/**
  * Step 7 of the probe: the user list, then the attendance log.
  *
  * Which bulk path the firmware took for the user read is recorded because it
@@ -660,15 +681,23 @@ export async function probeBulk(
   }
 
   await runner.run('attendance', async () => {
+    const before = events.length
     const logs = await getAttendanceLogs(session, opts.transport, { resolveUserIds: false })
     // Counts and shapes only. Never a row: those are movement records for
     // named people, and no checklist item needs their contents.
-    findings.attendance = {
-      read: true,
-      skippedReason: null,
-      detectedRecordSize: logs[0]?.recordSize ?? null,
-      rowCount: logs.length,
-    }
+    findings.attendance = attendanceRequested(events.slice(before))
+      ? {
+          read: true,
+          skippedReason: null,
+          detectedRecordSize: logs[0]?.recordSize ?? null,
+          rowCount: logs.length,
+        }
+      : {
+          read: false,
+          skippedReason: 'the device reported 0 records; no read was issued',
+          detectedRecordSize: null,
+          rowCount: 0,
+        }
     return findings.attendance
   })
 }
