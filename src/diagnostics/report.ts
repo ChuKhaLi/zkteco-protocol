@@ -135,6 +135,13 @@ function item9Observation(f: Findings): string {
  *
  * The prose says WHICH half was answered, because a row reading 'answered'
  * beside a sentence beginning "nothing can be said" tells a reader nothing.
+ *
+ * The state also carries `registered`, symmetrically with item 9, though no
+ * producer can reach it today: `probeRealtime` sets both counters only after
+ * registration succeeds, so an unregistered run has them at 0. It is defence,
+ * not a live fix — a future producer that counted strays arriving BEFORE the
+ * CMD_REG_EVENT ack would otherwise print 'answered' beside this function's
+ * "the subscription did not complete".
  */
 function item13Observation(f: Findings): string {
   const r = f.realtime
@@ -637,7 +644,7 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
   push(
     13,
     'Does the device emit event types outside the requested mask, or interleave a request-response packet into a listening connection?',
-    realtimeState(f, (r) => r.eventsObserved > 0 || r.nonEventPackets > 0),
+    realtimeState(f, (r) => r.registered && (r.eventsObserved > 0 || r.nonEventPackets > 0)),
     item13Observation(f),
   )
   push(
@@ -719,6 +726,12 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
  * belongs; this covers `errorMessage`, the one column fed from an `Error` whose
  * text can originate outside this codebase (`ZkConnectionError(err.message)`
  * wraps the OS's).
+ *
+ * A `|` already inside a `codeSpan` gets escaped again here, and that visible
+ * backslash is intentional and structurally required: GFM splits table cells
+ * on `|` before it parses inline code, so an unescaped pipe shifts the row
+ * whether or not it sits between backticks. Do not "fix" the cosmetics —
+ * doing so reopens the row-injection this pair closes.
  */
 function escapeCell(value: string): string {
   return value.replaceAll('|', '\\|').replaceAll(/[\r\n]+/g, ' ')

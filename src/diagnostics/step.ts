@@ -135,12 +135,7 @@ export class StepRunner {
    * Returns the callback's value — including the value inside a
    * `declined(outcome, value)`, which `probeConcurrent` and `probeRealtime`
    * both pass a real one. Returns undefined only when the callback threw, or
-   * when the run was already truncated. (This sentence previously said `refused(value)`
-   * returned undefined: Task 3 wrote it under a ruling that had removed
-   * `refused()` entirely, and Task 7 restored the mechanism without revisiting
-   * the text. No caller consumes the return today, so the difference was never
-   * behavioural — it was a docblock describing behaviour the code did not
-   * have, in the file whose job is classifying evidence.)
+   * when the run was already truncated.
    *
    * Once the run is truncated, later steps are NOT executed — returning
    * undefined without touching the socket. Recording them as skipped would be
