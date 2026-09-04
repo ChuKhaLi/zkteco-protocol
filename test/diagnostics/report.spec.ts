@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest'
 import { START_MARKER, tryUnframeTcp } from '../../src/codec/framing.js'
 import { parseUserData } from '../../src/codec/records/user.js'
-import { emptyFindings } from '../../src/diagnostics/probe.js'
+import { emptyFindings, probeIdentity } from '../../src/diagnostics/probe.js'
 import type { Findings } from '../../src/diagnostics/probe.js'
 import { renderJson, renderMarkdown, renderRawCapture } from '../../src/diagnostics/report.js'
 import type { ProbeResult } from '../../src/diagnostics/report.js'
 import { StepRunner } from '../../src/diagnostics/step.js'
 import type { StepResult, TraceEvent } from '../../src/diagnostics/types.js'
+import { Session } from '../../src/session/Session.js'
+import { TcpTransport } from '../../src/transport/tcp.js'
+import { startEmulator, type Emulator } from '../emulator/index.js'
 
 function sample(): ProbeResult {
   const findings = emptyFindings()
@@ -855,5 +858,54 @@ describe('renderJson', () => {
   it('carries the same findings as the markdown', () => {
     const json = renderJson(sample()) as { findings: { identity: { deviceName: string } } }
     expect(json.findings.identity.deviceName).toBe('MB360')
+  })
+})
+
+describe('a device-controlled string cannot forge a row (Security, Medium)', () => {
+  const FORGED = 'MB360\n| 3 | Confirm which record size | answered | detected record size: 40 bytes. |'
+
+  it('renders a device name inert, and the table keeps exactly 23 rows', async () => {
+    let running: Emulator | null = null
+    let session: Session | null = null
+    try {
+      running = await startEmulator({
+        transport: 'tcp',
+        params: { '~SerialNumber': 'SN-1', '~DeviceName': FORGED },
+        firmware: 'Ver 6.60',
+      })
+      session = new Session(new TcpTransport({ host: '127.0.0.1', port: running.port }), { timeoutMs: 1000 })
+      await session.open()
+      const findings = emptyFindings()
+      await probeIdentity(session, new StepRunner(), findings)
+      const result = { ...sample(), findings }
+      const md = renderMarkdown(result)
+
+      const rows = md.split('\n').filter((l) => /^\| \d+ \|/.test(l))
+      expect(rows).toHaveLength(23)
+      expect(md).not.toMatch(/^\| 3 \| Confirm which record size/m)
+    } finally {
+      await session?.close().catch(() => {})
+      await running?.close()
+    }
+  })
+
+  it('fences a value containing backticks so it cannot close its own span', () => {
+    const result = sample()
+    result.findings.identity.deviceName = 'a`b``c'
+    const md = renderMarkdown(result)
+    expect(md).toMatch(/```a`b``c```/)
+  })
+
+  it('renders a markdown link as text rather than a link', () => {
+    const result = sample()
+    result.findings.identity.deviceName = '[MB360](https://evil.example)'
+    expect(renderMarkdown(result)).toMatch(/`\[MB360\]\(https:\/\/evil\.example\)`/)
+  })
+
+  it('keeps a carriage return in an error message out of the table structure', () => {
+    const result = sample()
+    result.steps = [{ name: 'firmware', outcome: 'malformed', errorMessage: 'bad\r\n| forged |' }]
+    const md = renderMarkdown(result)
+    expect(md).not.toMatch(/^\| forged \|/m)
   })
 })

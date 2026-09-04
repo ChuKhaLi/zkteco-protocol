@@ -596,7 +596,7 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
     'Add the model to the compatibility table.',
     answeredIf(identityComplete),
     identityComplete
-      ? `deviceName=${f.identity.deviceName} firmwareVersion=${f.identity.firmwareVersion} platform=${f.identity.platform ?? '(unset)'} os=${f.identity.os ?? '(unset)'}.`
+      ? `deviceName=${deviceValue(f.identity.deviceName)} firmwareVersion=${deviceValue(f.identity.firmwareVersion)} platform=${deviceValue(f.identity.platform)} os=${deviceValue(f.identity.os)}.`
       : 'the device name and firmware version were not both recovered.',
   )
 
@@ -711,17 +711,38 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
 /**
  * Escapes a value going into a pipe-delimited table cell.
  *
- * `errorMessage` is the one column fed from an `Error` whose message can
- * originate outside this codebase — `ZkConnectionError(err.message)` wraps the
- * OS's text (`tcp.ts:35,111`) — and item 5's observation quotes it verbatim.
- * An unescaped `|` shifts every cell after it, so a Markdown renderer displays
- * the wrong value under a labelled heading: a step whose "Raw bytes" column
- * shows a fragment of an error message. A table that puts a wrong value under
- * a right heading is the exact failure this tool exists to avoid, so this runs
- * on every cell rather than on the one that can reach it today.
+ * Two characters break a Markdown table: `|` shifts every cell after it, and a
+ * newline ends the row, so text after it is parsed as a new row — a device
+ * name of `MB360\n| 3 | … | answered |` inserted a fabricated checklist row
+ * into a report meant to be pasted into a public issue. Device strings are
+ * sanitised at the source (`sanitizeDeviceString`), which is where redaction
+ * belongs; this covers `errorMessage`, the one column fed from an `Error` whose
+ * text can originate outside this codebase (`ZkConnectionError(err.message)`
+ * wraps the OS's).
  */
 function escapeCell(value: string): string {
-  return value.replaceAll('|', '\\|')
+  return value.replaceAll('|', '\\|').replaceAll(/[\r\n]+/g, ' ')
+}
+
+/**
+ * Renders a device-controlled value as an inert Markdown code span.
+ *
+ * The device chooses these bytes; a report reader must see them as text, not
+ * as markup — `[MB360](https://evil.example)` renders as a link otherwise. The
+ * fence is one backtick longer than the longest backtick run inside the value,
+ * and a value that starts or ends with a backtick gets a padding space, which
+ * is CommonMark's own rule for exactly this.
+ */
+function codeSpan(value: string): string {
+  const longest = (value.match(/`+/g) ?? []).reduce((n, run) => Math.max(n, run.length), 0)
+  const fence = '`'.repeat(longest + 1)
+  const pad = value.startsWith('`') || value.endsWith('`') ? ' ' : ''
+  return `${fence}${pad}${value}${pad}${fence}`
+}
+
+/** A device-sourced value for a report line: inert, or a plain marker when absent. */
+function deviceValue(value: string | null): string {
+  return value === null ? '(not reported)' : codeSpan(value)
 }
 
 function formatChecklistTable(rows: readonly ChecklistRow[]): string {
@@ -810,10 +831,10 @@ export function renderMarkdown(result: ProbeResult): string {
     [
       `## Device`,
       ``,
-      `- Device name: ${f.identity.deviceName ?? '(not reported)'}`,
-      `- Platform: ${f.identity.platform ?? '(not reported)'}`,
-      `- OS: ${f.identity.os ?? '(not reported)'}`,
-      `- Firmware version: ${f.identity.firmwareVersion ?? '(not reported)'}`,
+      `- Device name: ${deviceValue(f.identity.deviceName)}`,
+      `- Platform: ${deviceValue(f.identity.platform)}`,
+      `- OS: ${deviceValue(f.identity.os)}`,
+      `- Firmware version: ${deviceValue(f.identity.firmwareVersion)}`,
       `- Serial number: ${f.identity.serialNumberPresent ? 'present (value withheld — it identifies one unit)' : 'not reported'}`,
     ].join('\n'),
   )
