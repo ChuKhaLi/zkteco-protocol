@@ -60,7 +60,7 @@ async function runProbe() {
   const runner = new StepRunner()
   const findings = emptyFindings()
   await probeIdentity(session, runner, findings)
-  await probeState(session, runner, findings, 0)
+  await probeState(session, runner, findings, { epochSeconds: 0, utcOffsetMinutes: 0 })
   await probeBulk(session, runner, findings, { transport: 'tcp', attendance: 'auto' }, traced.events)
   findings.checksum = auditChecksums(traced.events)
   return { traced, runner, findings }

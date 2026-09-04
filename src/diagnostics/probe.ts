@@ -8,12 +8,12 @@ import { decodeZkTime } from '../codec/time.js'
 import { FREE_SIZES_OFFSET } from '../commands/info.js'
 import { getUsers } from '../commands/users.js'
 import { getAttendanceLogs } from '../commands/attendance.js'
-import { ZkAuthError } from '../errors.js'
+import { ZkAuthError, ZkProtocolError } from '../errors.js'
 import { Session } from '../session/Session.js'
 import { TcpTransport } from '../transport/tcp.js'
 import { UdpTransport } from '../transport/udp.js'
 import type { ZkNaiveTime, ZkUser } from '../types.js'
-import { refused, type StepRunner } from './step.js'
+import { declined, refused, replyOutcome, type StepRunner } from './step.js'
 import type { TraceEvent } from './types.js'
 
 /** Which CMD_OPTIONS_RRQ request shapes the device accepted. */
@@ -43,14 +43,15 @@ export interface Findings {
   parameters: ParameterFinding[]
   clock: {
     deviceLocal: string
+    /** The host's naive LOCAL wall-clock time, formatted exactly as deviceLocal. */
     hostLocal: string
+    /** The host's UTC offset when it read its clock, so a reader can separate zone from drift. */
+    hostUtcOffsetMinutes: number
     /**
-     * Null when the device's packed timestamp decoded to a day that does not
-     * exist on a real calendar (decodeZkTime's pseudo-calendar allows e.g.
-     * 2026-02-31). deviceLocal and hostLocal are still recorded verbatim in
-     * that case; only the derived skew is withheld, because a Date.parse of
-     * an impossible date silently rolls forward and would report a skew of
-     * days as though it were a fact.
+     * Device naive time minus host naive local time, in seconds. Null when the
+     * device's packed timestamp decoded to a day that does not exist on a real
+     * calendar (decodeZkTime's pseudo-calendar allows e.g. 2026-02-31);
+     * deviceLocal and hostLocal are still recorded verbatim in that case.
      */
     skewSeconds: number | null
   } | null
@@ -434,42 +435,61 @@ export function auditCommKey(
   return { configured, authSent: true, authAccepted: reply?.command === CMD.ACK_OK }
 }
 
+/** The host clock as the CLI read it: the only module allowed to read one. */
+export interface HostClock {
+  epochSeconds: number
+  /** `-new Date().getTimezoneOffset()` — positive east of UTC. */
+  utcOffsetMinutes: number
+}
+
+/** The host's naive local time, formatted like decodeZkTime's `local` (a `T` separator). */
+function hostLocalString(host: HostClock): string {
+  return new Date((host.epochSeconds + host.utcOffsetMinutes * 60) * 1000).toISOString().slice(0, 19)
+}
+
 /**
  * Steps 5 and 6 of the probe: the device clock, then its storage counters.
  *
- * `hostNowSeconds` is passed in rather than read here. Clock access lives only
- * in src/cli.ts, which is what keeps every test above deterministic.
+ * `host` is passed in rather than read here. Clock access lives only in
+ * src/cli.ts, which is what keeps every test above deterministic.
  */
 export async function probeState(
   session: Session,
   runner: StepRunner,
   findings: Findings,
-  hostNowSeconds: number,
+  host: HostClock,
 ): Promise<void> {
   await runner.run('clock', async () => {
     const res = await session.tryExecute(CMD.GET_TIME)
-    if (res.command === CMD.ACK_ERROR || res.data.length < 4) return null
+    // Checked BEFORE the length: an ACK_UNAUTH carrying four bytes is not a
+    // clock, and decoding it as one answered item 21 from a reply that
+    // acknowledged nothing.
+    const outcome = replyOutcome(res.command)
+    if (outcome) return declined(outcome, null)
+    if (res.data.length < 4) throw new ZkProtocolError(`CMD_GET_TIME answered with ${res.data.length} byte(s), not a packed time`)
     const device = decodeZkTime(res.data.readUInt32LE(0))
-    // Keeps decodeZkTime's `T` separator (src/codec/time.ts), NOT a space:
-    // item 21 prints deviceLocal and hostLocal adjacent in one sentence and
-    // side-by-side comparison is the whole point of the field, so the two must
-    // line up character for character.
-    const hostLocal = new Date(hostNowSeconds * 1000).toISOString().slice(0, 19)
+    // Naive against naive. The device stores wall-clock time with no zone
+    // (ZkNaiveTime), so the only like-for-like comparison is the host's own
+    // wall clock; the host's UTC offset is recorded so a reader can tell a
+    // zone difference from drift. Recorded side by side and NOT judged.
+    const hostLocal = hostLocalString(host)
     const deviceEpoch = deviceEpochSeconds(device)
-    // Recorded side by side and NOT judged. Device clocks drift and reset; the
-    // library returns readings verbatim (v0.1 §3) and so does this. Whether a
-    // skew is a problem is a human's call with the specs open.
     findings.clock = {
       deviceLocal: device.local,
       hostLocal,
-      skewSeconds: deviceEpoch === null ? null : deviceEpoch - hostNowSeconds,
+      hostUtcOffsetMinutes: host.utcOffsetMinutes,
+      skewSeconds: deviceEpoch === null ? null : deviceEpoch - (host.epochSeconds + host.utcOffsetMinutes * 60),
     }
     return findings.clock
   })
 
   await runner.run('free-sizes', async () => {
     const res = await session.tryExecute(CMD.GET_FREE_SIZES)
-    if (res.command === CMD.ACK_ERROR || res.data.length < REQUIRED_FREE_SIZES) return null
+    const outcome = replyOutcome(res.command)
+    if (outcome) return declined(outcome, null)
+    if (res.data.length < REQUIRED_FREE_SIZES) {
+      throw new ZkProtocolError(`CMD_GET_FREE_SIZES answered with ${res.data.length} byte(s); ${REQUIRED_FREE_SIZES} are needed for the offsets`)
+    }
     findings.freeSizes = {
       userCount: res.data.readUInt32LE(FREE_SIZES_OFFSET.userCount),
       recordCount: res.data.readUInt32LE(FREE_SIZES_OFFSET.recordCount),

@@ -31,7 +31,7 @@ describe('probeState', () => {
     })
     session = await open(running.port)
     const findings = emptyFindings()
-    await probeState(session, new StepRunner(), findings, 0)
+    await probeState(session, new StepRunner(), findings, { epochSeconds: 0, utcOffsetMinutes: 0 })
     expect(findings.freeSizes).toMatchObject({ userCount: 42, recordCount: 1337 })
     // FREE_SIZES_OFFSET is documentation-derived and unverified. The raw body
     // is what lets a reader check the offsets against a real reply.
@@ -56,7 +56,7 @@ describe('probeState', () => {
     })
     session = await open(running.port)
     const findings = emptyFindings()
-    await probeState(session, new StepRunner(), findings, 0)
+    await probeState(session, new StepRunner(), findings, { epochSeconds: 0, utcOffsetMinutes: 0 })
     expect(findings.freeSizes?.userCount).toBe(7) // the reply really was decoded
     expect(findings.freeSizes?.rawHex).toHaveLength(FREE_SIZES_RAW_MAX_BYTES * 2)
   })
@@ -69,7 +69,7 @@ describe('probeState', () => {
     })
     session = await open(running.port)
     const findings = emptyFindings()
-    await probeState(session, new StepRunner(), findings, 0)
+    await probeState(session, new StepRunner(), findings, { epochSeconds: 0, utcOffsetMinutes: 0 })
     expect(findings.freeSizes?.rawHex).toBe(short.toString('hex'))
   })
 
@@ -81,7 +81,7 @@ describe('probeState', () => {
     running = await startEmulator({ transport: 'tcp', deviceTimeRaw: 0 })
     session = await open(running.port)
     const findings = emptyFindings()
-    await probeState(session, new StepRunner(), findings, 0)
+    await probeState(session, new StepRunner(), findings, { epochSeconds: 0, utcOffsetMinutes: 0 })
     expect(findings.clock?.deviceLocal).toMatch(/^\d{4}-\d{2}-\d{2}/)
     expect(typeof findings.clock?.skewSeconds).toBe('number')
   })
@@ -95,7 +95,7 @@ describe('probeState', () => {
     running = await startEmulator({ transport: 'tcp', deviceTimeRaw: 0 })
     session = await open(running.port)
     const findings = emptyFindings()
-    await probeState(session, new StepRunner(), findings, 1_756_000_000)
+    await probeState(session, new StepRunner(), findings, { epochSeconds: 1_756_000_000, utcOffsetMinutes: 0 })
     expect(findings.clock?.hostLocal).toBe('2025-08-24T01:46:40')
     expect(findings.clock?.hostLocal).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}$/)
   })
@@ -108,7 +108,7 @@ describe('probeState', () => {
     session = await open(running.port)
     const runner = new StepRunner()
     const findings = emptyFindings()
-    await probeState(session, runner, findings, 0)
+    await probeState(session, runner, findings, { epochSeconds: 0, utcOffsetMinutes: 0 })
     expect(findings.clock).toBeNull()
     expect(findings.freeSizes).not.toBeNull()
     expect(runner.truncated).toBeNull()
@@ -135,9 +135,65 @@ describe('probeState', () => {
     })
     session = await open(running.port)
     const findings = emptyFindings()
-    await probeState(session, new StepRunner(), findings, 0)
+    await probeState(session, new StepRunner(), findings, { epochSeconds: 0, utcOffsetMinutes: 0 })
     expect(findings.clock?.deviceLocal).toBe('2026-02-31T00:00:00')
     expect(findings.clock?.skewSeconds).toBeNull()
+  })
+
+  it("records 'unauthorized' and no clock when GET_TIME answers ACK_UNAUTH with a body", async () => {
+    // Four bytes of ACK_UNAUTH used to decode as the device clock and answer item 21.
+    running = await startEmulator({
+      transport: 'tcp',
+      handlers: { [CMD.GET_TIME]: (req, state) => [reply(state, req, CMD.ACK_UNAUTH, Buffer.alloc(4))] },
+    })
+    session = await open(running.port)
+    const runner = new StepRunner()
+    const findings = emptyFindings()
+    await probeState(session, runner, findings, { epochSeconds: 0, utcOffsetMinutes: 0 })
+    expect(findings.clock).toBeNull()
+    expect(runner.steps.find((s) => s.name === 'clock')).toMatchObject({ outcome: 'unauthorized' })
+    expect(runner.truncated).toBeNull()
+  })
+
+  it("records 'refused', not ok, when the device refuses the clock", async () => {
+    running = await startEmulator({
+      transport: 'tcp',
+      handlers: { [CMD.GET_TIME]: (req, state) => [reply(state, req, CMD.ACK_ERROR)] },
+    })
+    session = await open(running.port)
+    const runner = new StepRunner()
+    await probeState(session, runner, emptyFindings(), { epochSeconds: 0, utcOffsetMinutes: 0 })
+    expect(runner.steps.find((s) => s.name === 'clock')).toMatchObject({ outcome: 'refused' })
+  })
+
+  it("records 'unauthorized' when GET_FREE_SIZES answers ACK_UNAUTH", async () => {
+    running = await startEmulator({
+      transport: 'tcp',
+      handlers: { [CMD.GET_FREE_SIZES]: (req, state) => [reply(state, req, CMD.ACK_UNAUTH)] },
+    })
+    session = await open(running.port)
+    const runner = new StepRunner()
+    const findings = emptyFindings()
+    await probeState(session, runner, findings, { epochSeconds: 0, utcOffsetMinutes: 0 })
+    expect(findings.freeSizes).toBeNull()
+    expect(runner.steps.find((s) => s.name === 'free-sizes')).toMatchObject({ outcome: 'unauthorized' })
+  })
+
+  it('compares the device clock with the host LOCAL clock, and records the zone beside it', async () => {
+    // deviceTimeRaw 0 is 2000-01-01T00:00:00 naive. A host at UTC+7 whose
+    // local wall clock reads the same instant is 1999-12-31T17:00:00Z, i.e.
+    // epoch 946659600. Comparing naive-to-UTC used to report the whole zone
+    // offset (25200 s) as drift.
+    running = await startEmulator({ transport: 'tcp', deviceTimeRaw: 0 })
+    session = await open(running.port)
+    const findings = emptyFindings()
+    await probeState(session, new StepRunner(), findings, { epochSeconds: 946_659_600, utcOffsetMinutes: 420 })
+    expect(findings.clock).toMatchObject({
+      deviceLocal: '2000-01-01T00:00:00',
+      hostLocal: '2000-01-01T00:00:00',
+      hostUtcOffsetMinutes: 420,
+      skewSeconds: 0,
+    })
   })
 })
 

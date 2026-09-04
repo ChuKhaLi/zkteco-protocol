@@ -284,7 +284,10 @@ async function runProbe(session: Session, traced: TracingTransport, opts: CliOpt
 
   try {
     await probeIdentity(session, runner, findings)
-    await probeState(session, runner, findings, Math.floor(Date.now() / 1000))
+    await probeState(session, runner, findings, {
+      epochSeconds: Math.floor(Date.now() / 1000),
+      utcOffsetMinutes: -new Date().getTimezoneOffset(),
+    })
     await probeBulk(
       session, runner, findings, { transport: opts.transport, attendance: opts.attendance }, traced.events,
     )
