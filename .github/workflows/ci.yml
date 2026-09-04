@@ -33,3 +33,27 @@ jobs:
       # -- CI was red on every push from 2026-08-31 for exactly this reason.
       - run: pnpm build
       - run: pnpm test
+  drill:
+    # The packed-tarball drill, on every push rather than only on a tag. Every
+    # defect it has ever caught was a packaging defect -- a CJS pass that
+    # silently dropped dist/index.cjs, and a bin entry that did nothing on
+    # every platform but Windows -- and both were found by burning a version
+    # number. One leg per OS, not the 2x3 matrix above: what this exercises is
+    # npm pack, npm install and the installed bin, which vary by platform and
+    # not by Node minor.
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v5
+      - uses: pnpm/action-setup@v6
+        with:
+          version: 10
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 24
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm release:drill
