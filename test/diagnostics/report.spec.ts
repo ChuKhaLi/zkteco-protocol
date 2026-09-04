@@ -907,5 +907,13 @@ describe('a device-controlled string cannot forge a row (Security, Medium)', () 
     result.steps = [{ name: 'firmware', outcome: 'malformed', errorMessage: 'bad\r\n| forged |' }]
     const md = renderMarkdown(result)
     expect(md).not.toMatch(/^\| forged \|/m)
+    // The regex above misses a defect it looks decisive about: pre-fix, the
+    // embedded \r\n still splits the row in two, it's only that the second
+    // fragment happens to start with an ESCAPED pipe ('\| forged \| |  |'),
+    // not a bare one, so the regex above never sees it. Asserting the row
+    // count directly is what actually proves the row stayed single-line.
+    const stepsIdx = md.split('\n').indexOf('## Steps')
+    const afterHeading = md.split('\n').slice(stepsIdx + 1).filter((l) => l.length > 0)
+    expect(afterHeading).toHaveLength(3) // header, separator, one step row
   })
 })
