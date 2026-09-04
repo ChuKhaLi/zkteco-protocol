@@ -2,10 +2,15 @@ import { describe, expect, it } from 'vitest'
 import {
   ZkAuthError, ZkConnectionError, ZkError, ZkFramingError, ZkProtocolError, ZkTimeoutError,
 } from '../../src/errors.js'
-import { StepRunner, classifyError, refused, stopsTheRun } from '../../src/diagnostics/step.js'
+import {
+  REJECTED_COMMAND_MESSAGE, StepRunner, classifyError, declined, refused, replyOutcome, stopsTheRun,
+} from '../../src/diagnostics/step.js'
 import { CMD } from '../../src/codec/commands.js'
 import { encodePayload } from '../../src/codec/packet.js'
 import type { TraceEvent } from '../../src/diagnostics/types.js'
+import { Session } from '../../src/session/Session.js'
+import { TcpTransport } from '../../src/transport/tcp.js'
+import { reply, startEmulator, type Emulator } from '../emulator/index.js'
 
 describe('classifyError', () => {
   it('maps each error class to its outcome', () => {
@@ -201,6 +206,9 @@ describe('StepRunner with a trace', () => {
 
   it('records the command even when the step then threw', async () => {
     // The failing step is the one a reader most needs the command for.
+    // Outcome is 'refused', not 'malformed': this message is exactly the
+    // shape classifyError now recognises as a device refusal (see the
+    // "classifyError maps a device's ACK_ERROR to 'refused'" describe block).
     const t = traced()
     const runner = new StepRunner(() => t.events)
     await runner.run('clock', async () => {
@@ -209,7 +217,7 @@ describe('StepRunner with a trace', () => {
     })
 
     expect(runner.steps[0]).toMatchObject({
-      outcome: 'malformed', command: CMD.GET_TIME, ackCode: CMD.ACK_ERROR,
+      outcome: 'refused', command: CMD.GET_TIME, ackCode: CMD.ACK_ERROR,
     })
   })
 
@@ -220,5 +228,106 @@ describe('StepRunner with a trace', () => {
 
     expect(runner.steps[0]).toMatchObject({ name: 'firmware', outcome: 'ok' })
     expect(runner.steps[0]!.command).toBeUndefined()
+  })
+})
+
+describe('replyOutcome', () => {
+  it('maps the two refusal codes and nothing else', () => {
+    expect(replyOutcome(CMD.ACK_ERROR)).toBe('refused')
+    expect(replyOutcome(CMD.ACK_UNAUTH)).toBe('unauthorized')
+    expect(replyOutcome(CMD.ACK_OK)).toBeNull()
+    expect(replyOutcome(CMD.ACK_DATA)).toBeNull()
+  })
+})
+
+describe('declined', () => {
+  it("records 'unauthorized' when a callback reports declined('unauthorized')", async () => {
+    const runner = new StepRunner()
+    await runner.run('clock', async () => declined('unauthorized', null))
+    expect(runner.steps[0]).toMatchObject({ name: 'clock', outcome: 'unauthorized' })
+    expect(runner.truncated).toBeNull()
+  })
+
+  it("keeps refused() as declined('refused')", async () => {
+    const runner = new StepRunner()
+    await runner.run('firmware', async () => refused(null))
+    expect(runner.steps[0]).toMatchObject({ outcome: 'refused' })
+  })
+})
+
+describe("classifyError maps a device's ACK_ERROR to 'refused'", () => {
+  it('recognises the message Session.execute throws for ACK_ERROR', () => {
+    expect(classifyError(new ZkProtocolError('device rejected command 9'))).toBe('refused')
+  })
+
+  it('leaves every other ZkProtocolError malformed', () => {
+    expect(classifyError(new ZkProtocolError('user body of 5 bytes is not a multiple of 72'))).toBe('malformed')
+  })
+
+  it('is pinned to what the real Session.execute throws', async () => {
+    // A reworded throw site in src/session/Session.ts must redden THIS test,
+    // not silently turn every refused read back into 'malformed'.
+    let running: Emulator | null = null
+    let session: Session | null = null
+    try {
+      running = await startEmulator({
+        transport: 'tcp',
+        handlers: { [CMD.USERTEMP_RRQ]: (req, state) => [reply(state, req, CMD.ACK_ERROR)] },
+      })
+      session = new Session(new TcpTransport({ host: '127.0.0.1', port: running.port }), { timeoutMs: 1000 })
+      await session.open()
+      const err = await session.execute(CMD.USERTEMP_RRQ).then(() => null, (e: unknown) => e as Error)
+      expect(err).toBeInstanceOf(ZkProtocolError)
+      expect(err!.message).toMatch(REJECTED_COMMAND_MESSAGE)
+      expect(classifyError(err)).toBe('refused')
+    } finally {
+      await session?.close().catch(() => {})
+      await running?.close()
+    }
+  })
+})
+
+describe('StepRunner attributes the deciding exchange', () => {
+  function traced2(): { events: TraceEvent[]; exchange: (command: number, ack: number) => void } {
+    const events: TraceEvent[] = []
+    const record = (direction: TraceEvent['direction'], command: number): void => {
+      const payload = encodePayload({ command, sessionId: 1, replyId: events.length })
+      events.push({ seq: events.length, direction, offsetMs: 0, hex: payload.toString('hex'), command, sessionId: 1, replyId: events.length })
+    }
+    return { events, exchange: (command, ack) => { record('send', command); record('recv', ack) } }
+  }
+
+  it('reports the FIRST exchange for a step that ended ok', async () => {
+    const t = traced2()
+    const runner = new StepRunner(() => t.events)
+    await runner.run('attendance', async () => {
+      t.exchange(CMD.GET_FREE_SIZES, CMD.ACK_OK)
+      t.exchange(CMD.PREPARE_BUFFER, CMD.ACK_OK)
+      t.exchange(CMD.GET_FREE_SIZES, CMD.ACK_OK)
+      return 'x'
+    })
+    expect(runner.steps[0]).toMatchObject({ outcome: 'ok', command: CMD.GET_FREE_SIZES, ackCode: CMD.ACK_OK, exchanges: 3 })
+  })
+
+  it('reports the LAST exchange for a step that did not end ok, since that is the one that decided it', async () => {
+    const t = traced2()
+    const runner = new StepRunner(() => t.events)
+    await runner.run('attendance', async () => {
+      t.exchange(CMD.GET_FREE_SIZES, CMD.ACK_OK)
+      t.exchange(CMD.PREPARE_BUFFER, CMD.ACK_OK)
+      t.exchange(CMD.ATTLOG_RRQ, CMD.ACK_ERROR)
+      throw new ZkProtocolError('device rejected command 13')
+    })
+    expect(runner.steps[0]).toMatchObject({ outcome: 'refused', command: CMD.ATTLOG_RRQ, ackCode: CMD.ACK_ERROR, exchanges: 3 })
+  })
+
+  it('reports the last exchange for a declined() step too', async () => {
+    const t = traced2()
+    const runner = new StepRunner(() => t.events)
+    await runner.run('clock', async () => {
+      t.exchange(CMD.GET_TIME, CMD.ACK_UNAUTH)
+      return declined('unauthorized', null)
+    })
+    expect(runner.steps[0]).toMatchObject({ outcome: 'unauthorized', command: CMD.GET_TIME, ackCode: CMD.ACK_UNAUTH })
   })
 })
