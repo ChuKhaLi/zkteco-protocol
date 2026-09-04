@@ -199,6 +199,17 @@ describe('item 8 — the acknowledgment question this tool cannot ask', () => {
     // -- 'not requested' would imply that asking for the probe could answer it.
     expect(checklistState(renderMarkdown(sample()), 8)).toBe('not testable by this tool')
   })
+
+  it('names the refusal instead of comparing against a quiet device that never existed', () => {
+    // Fix round 1, finding 4. "none was sent for any of the 0 event(s)
+    // observed, so a device that requires one would look exactly like a quiet
+    // device" describes a window that was held open. A refused registration
+    // never got one, so there was no quiet device to be mistaken for.
+    const md = renderMarkdown(withRealtime({ registered: false, error: 'device refused' }))
+    expect(checklistState(md, 8)).toBe('not testable by this tool')
+    expect(md).toMatch(/8 \|[^\n]*subscription did not complete/)
+    expect(md).not.toMatch(/8 \|[^\n]*0 event\(s\) observed/)
+  })
 })
 
 describe('items 9 and 13 — what a window actually showed', () => {
@@ -230,6 +241,34 @@ describe('items 9 and 13 — what a window actually showed', () => {
     expect(checklistState(md, 13)).toBe('not answered')
     expect(md).not.toMatch(/no message/)
   })
+
+  /**
+   * Fix round 1, finding 1. Item 13 is two questions — event types outside the
+   * mask, AND a request-response packet interleaved into a subscription — and
+   * `nonEventPackets` exists for the second one (spec §4.4). A window that saw
+   * no event but two stray packets observed the interleave on the wire, so
+   * gating the row on `eventsObserved` alone reported an observed fact as
+   * unobserved: this cycle's own defect, mirrored.
+   */
+  describe("item 13's second question — an interleaved packet answers it alone", () => {
+    it('answers 13 on a stray packet even though no event arrived', () => {
+      const md = renderMarkdown(withRealtime({
+        registered: true, heldOpen: true, eventsObserved: 0, nonEventPackets: 1,
+      }))
+      expect(checklistState(md, 13)).toBe('answered')
+      // The prose must not lead with "nothing can be said" and stop there:
+      // beside `answered`, a reader has to see WHICH half was answered.
+      expect(md).toMatch(/13 \|[^\n]*interleave half/)
+    })
+
+    it('leaves 13 not answered when neither an event nor a stray packet arrived', () => {
+      const md = renderMarkdown(withRealtime({
+        registered: true, heldOpen: true, eventsObserved: 0, nonEventPackets: 0,
+      }))
+      expect(checklistState(md, 13)).toBe('not answered')
+      expect(md).not.toMatch(/13 \|[^\n]*interleave half/)
+    })
+  })
 })
 
 describe('item 20 — an encoding verdict, or none', () => {
@@ -245,6 +284,20 @@ describe('item 20 — an encoding verdict, or none', () => {
     const result = sample()
     result.findings.encoding = { namesInspected: 2, withHighBytes: 1, validUtf8: true }
     expect(checklistState(renderMarkdown(result), 20)).toBe('answered')
+  })
+
+  it('says a verdict was not determined rather than rendering null as "not UTF-8"', () => {
+    // Fix round 1, finding 5. `validUtf8 ? 'ARE' : 'are NOT'` collapses null
+    // into false -- the exact distinction this field exists to preserve, in
+    // the row that exists to preserve it. Unreachable through
+    // `encodingVerdict` today (null comes only with withHighBytes 0), which is
+    // why it is pinned here rather than left to a future producer to notice.
+    const result = sample()
+    result.findings.encoding = { namesInspected: 2, withHighBytes: 1, validUtf8: null }
+    const md = renderMarkdown(result)
+    expect(checklistState(md, 20)).toBe('not answered')
+    expect(md).not.toMatch(/20 \|[^\n]*are NOT valid UTF-8/)
+    expect(md).toMatch(/20 \|[^\n]*not determined/)
   })
 })
 
@@ -282,13 +335,58 @@ describe('items 15-17 — three outcomes, not one boolean', () => {
     const md = renderMarkdown(withParams([{ key: '~DeviceName', outcome: 'answered', empty: true }]))
     expect(checklistState(md, 16)).toBe('answered')
   })
+
+  it('leaves 15 and 17 not answered when every keyword was refused, and counts the refusals', () => {
+    // Fix round 1, finding 2. `refused` entries DO reach findings.parameters
+    // (unlike ACK_UNAUTH ones), so the old `parameters.length > 0` rule
+    // rendered an all-ACK_ERROR firmware as 15/17 `answered` -- a row claiming
+    // keywords were exposed on a device that exposed none. The existing
+    // all-refused fixture leaves `parameters` EMPTY, where old and new rules
+    // agree, so this direction had no coverage.
+    const md = renderMarkdown(withParams([
+      { key: '~DeviceName', outcome: 'refused', empty: false },
+      { key: 'MAC', outcome: 'refused', empty: false },
+    ]))
+    expect(checklistState(md, 15)).toBe('not answered')
+    expect(checklistState(md, 17)).toBe('not answered')
+    expect(checklistState(md, 16)).toBe('answered') // a refusal IS item 16's evidence
+    expect(md).toMatch(/15 \|[^\n]*none returned a value to inspect/)
+    // The ACK_ERROR count itself: every other fixture renders it as 0.
+    expect(md).toMatch(/15 \|[^\n]*2 refused \(ACK_ERROR\)/)
+  })
 })
 
+/**
+ * Fix round 1, finding 3. The bracketing sentence was emitted whenever
+ * `freeSizes` was non-null, including runs where attendance was skipped or the
+ * device reported zero records — and `getAttendanceLogs` returns before the
+ * second `getInfo` in that case (src/commands/attendance.ts:66-79), so the row
+ * explained an extra exchange that never happened.
+ */
 describe('item 4 names the second free-sizes read', () => {
-  it('says why the attendance step shows an extra exchange', () => {
+  function withFreeSizes(attendance: Findings['attendance']): ProbeResult {
     const result = sample()
     result.findings.freeSizes = { userCount: 1, recordCount: 2, recordCapacity: 10, rawHex: 'ab' }
-    expect(renderMarkdown(result)).toMatch(/4 \|[^\n]*bracket/i)
+    result.findings.attendance = attendance
+    return result
+  }
+
+  it('says why the attendance step shows an extra exchange, when there was one', () => {
+    const md = renderMarkdown(withFreeSizes({
+      read: true, skippedReason: null, detectedRecordSize: 40, rowCount: 3,
+    }))
+    expect(md).toMatch(/4 \|[^\n]*bracket/i)
+  })
+
+  it('stays silent about a second read on a run that never read attendance', () => {
+    const skipped = renderMarkdown(withFreeSizes({
+      read: false, skippedReason: 'skipped: --attendance=never', detectedRecordSize: null, rowCount: 0,
+    }))
+    expect(skipped).not.toMatch(/4 \|[^\n]*bracket/i)
+    // Still the row's own evidence -- the offsets, which do not depend on it.
+    expect(skipped).toMatch(/4 \|[^\n]*recordCapacity=10/)
+    // And the same on a run where attendance was never attempted at all.
+    expect(renderMarkdown(withFreeSizes(null))).not.toMatch(/4 \|[^\n]*bracket/i)
   })
 })
 

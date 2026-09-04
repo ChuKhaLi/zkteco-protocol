@@ -102,6 +102,11 @@ function item8Observation(f: Findings): string {
   const symptom =
     'if a terminal delivers one event and then goes silent, that is the symptom of a device waiting for one — record it by hand.'
   if (r === null) return `this library never acknowledges an event, so this cannot be answered here; ${symptom} The realtime probe was not requested on this run.`
+  // A refused registration gets its own sentence. "None was sent for any of
+  // the 0 event(s) observed, so a device that requires one would look exactly
+  // like a quiet device" describes a window that was held open; there was no
+  // quiet device here to be mistaken for, because there was no window.
+  if (!r.registered) return `this library never acknowledges an event, and this run never reached the point of needing to: the subscription did not complete (${reason(r.error)}). ${symptom}`
   return `this library never acknowledges an event: none was sent for any of the ${r.eventsObserved} event(s) observed, so a device that requires one would look exactly like a quiet device. ${symptom}`
 }
 
@@ -115,15 +120,34 @@ function item9Observation(f: Findings): string {
     : `registered, then the device dropped it after ${r.endedAfterMs}ms of a ${r.windowSeconds}s window: ${reason(r.error)}. A drop answers this item as decisively as surviving does.`
 }
 
-/** Item 13: event types outside the mask, or a request-response packet interleaved. */
+/**
+ * Item 13: event types outside the mask, or a request-response packet
+ * interleaved into a listening connection.
+ *
+ * Two questions in one row, and either one alone answers it — which is why the
+ * state reads `eventsObserved > 0 || nonEventPackets > 0` rather than the event
+ * count alone. `nonEventPackets` exists for the second half (spec §4.4: "item
+ * 13 asks whether a device interleaves a request-response packet into a
+ * subscription"), so a window that saw no event and two stray packets observed
+ * the interleave ON THE WIRE. Gating on events alone printed 'not answered'
+ * over a fact the trace holds — the same defect as answering item 9 only when
+ * a subscription survived, when a drop answers it just as decisively.
+ *
+ * The prose says WHICH half was answered, because a row reading 'answered'
+ * beside a sentence beginning "nothing can be said" tells a reader nothing.
+ */
 function item13Observation(f: Findings): string {
   const r = f.realtime
   if (r === null) return REALTIME_NOT_REQUESTED
   if (!r.registered) return `the subscription did not complete: ${reason(r.error)}.`
+  const strays = `${r.nonEventPackets} non-event packet(s) arrived on the listening connection`
+  const noTypes = `no event arrived in the ${r.windowSeconds}s window, so nothing can be said about which types this device emits`
   if (r.eventsObserved === 0) {
-    return `no event arrived in the ${r.windowSeconds}s window, so nothing can be said about which types this device emits; ${r.nonEventPackets} non-event packet(s) arrived on the listening connection.`
+    return r.nonEventPackets === 0
+      ? `${noTypes}; ${strays}, so neither half of this item was exercised.`
+      : `${noTypes} — but ${strays}, which answers the interleave half of this item on its own.`
   }
-  return `${r.eventsObserved} event(s) observed, type(s) seen: ${r.eventTypes.join(', ')}; ${r.nonEventPackets} non-event packet(s) arrived on the listening connection.`
+  return `${r.eventsObserved} event(s) observed, type(s) seen: ${r.eventTypes.join(', ')}; ${strays}.`
 }
 
 /**
@@ -362,6 +386,50 @@ function item19Observation(f: Findings): string {
   return "CMD_PREPARE_BUFFER's 11-byte payload was sent, but the read did not complete, so which path served it is unknown. Since v0.5 a framing failure on the buffered path ends the read as ZkFramingError rather than falling back; see the per-step table."
 }
 
+/**
+ * Item 4's note about the SECOND CMD_GET_FREE_SIZES, on the runs that made one.
+ *
+ * `getAttendanceLogs` reads the counters, does the bulk read, then reads them
+ * again to bracket it (`src/commands/attendance.ts:66,79`) — but it returns
+ * before that second read when the device reports zero records, and the whole
+ * function is skipped by `--attendance=never` or the auto threshold. Emitting
+ * the sentence unconditionally explained an extra exchange that, on those
+ * runs, never happened.
+ *
+ * `attendance.read === true` is the gate because it is the wire fact: it is
+ * set only when a read request actually left the socket (Task 4), which
+ * happens only past the zero-record early return. It is sufficient rather than
+ * necessary — a read that threw leaves `attendance` null though the second
+ * counter read may have happened — and understating is the right direction for
+ * a row whose subject is the offsets, not the exchange count.
+ */
+function freeSizesBracketNote(f: Findings): string {
+  return f.attendance?.read === true
+    ? ' CMD_GET_FREE_SIZES is also sent a second time after the attendance read, to bracket the record count (v0.5 §7.2), which is why the attendance step counts more exchanges than its command suggests.'
+    : ''
+}
+
+/**
+ * Item 20: what encoding the device uses for strings.
+ *
+ * Three outcomes, not two. `validUtf8` is `null` for "no name carried a high
+ * byte, so there was nothing to test" — which is not `false`, and the ternary
+ * that rendered it as "are NOT valid UTF-8" was the null-collapsed-into-false
+ * shape this field exists to prevent, in the row that exists to preserve the
+ * distinction. `encodingVerdict` pairs null only with `withHighBytes === 0`
+ * today, so the third branch below is unreachable through the current
+ * producer; it is written out anyway because "unreachable" is a property of
+ * that function, not of this type.
+ */
+function item20Observation(f: Findings): string {
+  const e = f.encoding
+  if (e === null) return 'the user list was not read, so no names were available to inspect.'
+  const preamble = `of ${e.namesInspected} name(s) inspected, ${e.withHighBytes} carried a byte above 0x7F`
+  if (e.withHighBytes === 0) return `${preamble} (no evidence either way).`
+  if (e.validUtf8 === null) return `${preamble}, but whether they are valid UTF-8 was not determined (no evidence either way).`
+  return `${preamble}; those bytes ${e.validUtf8 ? 'ARE' : 'are NOT'} valid UTF-8.`
+}
+
 /** The step-name prefix `probeIdentity` gives every key in the parameter sweep. */
 const PARAM_STEP_PREFIX = 'param:'
 
@@ -491,7 +559,7 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
     'Confirm the CMD_GET_FREE_SIZES field offsets (FREE_SIZES_OFFSET) against a real reply.',
     answeredIf(f.freeSizes !== null),
     f.freeSizes !== null
-      ? `userCount=${f.freeSizes.userCount} recordCount=${f.freeSizes.recordCount} recordCapacity=${f.freeSizes.recordCapacity}; the first ${f.freeSizes.rawHex.length / 2} byte(s) of the raw body are in the JSON sidecar (findings.freeSizes.rawHex) for manual offset review — capped at ${FREE_SIZES_RAW_MAX_BYTES}, with the full reply in the raw capture if one was requested. CMD_GET_FREE_SIZES is also sent a second time after the attendance read, to bracket the record count (v0.5 §7.2), which is why the attendance step counts more exchanges than its command suggests.`
+      ? `userCount=${f.freeSizes.userCount} recordCount=${f.freeSizes.recordCount} recordCapacity=${f.freeSizes.recordCapacity}; the first ${f.freeSizes.rawHex.length / 2} byte(s) of the raw body are in the JSON sidecar (findings.freeSizes.rawHex) for manual offset review — capped at ${FREE_SIZES_RAW_MAX_BYTES}, with the full reply in the raw capture if one was requested.${freeSizesBracketNote(f)}`
       : 'CMD_GET_FREE_SIZES was not answered.',
   )
 
@@ -569,7 +637,7 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
   push(
     13,
     'Does the device emit event types outside the requested mask, or interleave a request-response packet into a listening connection?',
-    realtimeState(f, (r) => r.eventsObserved > 0),
+    realtimeState(f, (r) => r.eventsObserved > 0 || r.nonEventPackets > 0),
     item13Observation(f),
   )
   push(
@@ -602,12 +670,7 @@ function buildChecklist(result: ProbeResult): ChecklistRow[] {
     20,
     'What character encoding does the device use for strings — device name and user name alike?',
     answeredIf(encodingDecided),
-    f.encoding !== null
-      ? `of ${f.encoding.namesInspected} name(s) inspected, ${f.encoding.withHighBytes} carried a byte above 0x7F` +
-        (f.encoding.withHighBytes === 0
-          ? ' (no evidence either way).'
-          : `; those bytes ${f.encoding.validUtf8 ? 'ARE' : 'are NOT'} valid UTF-8.`)
-      : 'the user list was not read, so no names were available to inspect.',
+    item20Observation(f),
   )
 
   push(
