@@ -467,7 +467,7 @@ describe('item 5 — the TCP declared-size cap (C-1)', () => {
     // declared-size cap, and the exact shape that used to print `answered`.
     const short = Buffer.alloc(4 + 144)
     short.writeUInt32LE(800, 0)
-    const steps = await stepsFrom('users', () => parseUserData(short))
+    const steps = await stepsFrom('users', () => parseUserData(short, null))
 
     expect(steps[0]).toMatchObject({ outcome: 'malformed', errorClass: 'ZkFramingError' })
 
