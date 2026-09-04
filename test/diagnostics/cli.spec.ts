@@ -66,6 +66,17 @@ describe('parseCliArgs', () => {
   it('still accepts a real capture path', () => {
     expect(parseCliArgs(['h', '--raw-capture=trace.jsonl']).rawCapture).toBe('trace.jsonl')
   })
+
+  it('refuses --out with no value, and accepts one with a path', () => {
+    // `--out=` parsed as '' and reached writeOutputs, which failed on an
+    // empty path after the whole probe had run. --raw-capture= was fixed to
+    // fail during parsing; --out was left asymmetric.
+    expect(() => parseCliArgs(['h', '--out='])).toThrow(/--out/)
+    // The positive control: the rejection must not swallow a real path.
+    expect(parseCliArgs(['h', '--out=report.md']).out).toBe('report.md')
+    // And omitting it still means stdout, not an error.
+    expect(parseCliArgs(['h']).out).toBe(null)
+  })
 })
 
 describe('exitCodeFor', () => {
