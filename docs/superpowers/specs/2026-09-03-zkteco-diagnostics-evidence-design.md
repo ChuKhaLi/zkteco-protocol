@@ -406,7 +406,10 @@ The realtime tests use the injected `sleep` to keep windows short; nothing waits
   item 22 in §4.6 as not testable; the §4.5 coverage table marks items 8 and 20's conditions; §5.2
   records the `rawHex` exception; §9 names both items.
 - **`CLAUDE.md`**: the redaction rule records the bounded `freeSizes.rawHex` exception; the drill
-  sentence says fourteen checks and that it runs in CI on both operating systems on every push.
+  sentence says fourteen checks and that it runs in CI on both operating systems on every push to
+  `main` and on every pull request, and on every tag through `release.yml`. (Amended after drafting:
+  this line said "on every push", which `ci.yml`'s triggers — `push: branches: [main]` plus
+  `pull_request` — do not support. A directive that instructs a false claim re-creates it.)
 - **`README.md`**: the flag table's `--raw-capture` row says an empty path is rejected; the
   Diagnostics section's exit-code sentence is unchanged; the checklist link is unchanged.
 - **`docs/RELEASING.md` §5**: the CommonJS bullet is replaced by what the drill now proves and the

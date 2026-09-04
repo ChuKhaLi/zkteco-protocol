@@ -135,6 +135,13 @@ Unchanged, and none of it has softened:
 - **Do not read `pyzk` source.** Execute it; never read it.
 - **Do not publish by hand.** Every release goes through the tag; the `npm-publish` environment gates
   the publish job.
+- **If the realtime drop test flakes, raise the drop, do not lower the bound.**
+  `test/diagnostics/probe.realtime.spec.ts` asserts `endedAfterMs >= 20` against
+  `dropAfterRegisterMs: 30`, and the emulator arms that timer in the same tick it writes the
+  REG_EVENT acknowledgment while the probe starts its clock after `subscribe()` resolves — roughly
+  ten milliseconds of headroom, measured on Windows only. Raising `dropAfterRegisterMs` keeps the
+  assertion meaningful; lowering the floor towards zero would restore the defect the bound exists to
+  catch, which is that `endedAfterMs` was printed to the operator while no test measured it.
 
 ## 7. What you are choosing between
 
