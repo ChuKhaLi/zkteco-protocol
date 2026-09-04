@@ -1,12 +1,14 @@
-import { spawn } from 'node:child_process'
 import { mkdirSync, writeFileSync } from 'node:fs'
-import { existsSync } from 'node:fs'
 import path from 'node:path'
 import { startEmulator, type Emulator } from '../../test/emulator/index.js'
+import { describeFailure, runOracleScript, succeeded } from './run-oracle.js'
 
 const OUT_DIR = path.join('test', 'fixtures', 'oracle')
 const EMULATOR_SESSION_ID = 0x1f2e
 const ORACLE_COMM_KEY = 1234
+
+/** Runs that produced no evidence. A crashed driver must not leave a fixture behind. */
+const failures: string[] = []
 
 // Extra (commKey, sessionId) pairs, captured against pyzk only, specifically
 // to test the low-byte-discard invariance with real external data instead of
@@ -46,52 +48,6 @@ const REALTIME_DIR = path.join(OUT_DIR, 'realtime')
 // a different question and would silently change a number that test pins on
 // purpose.
 const PARAMS_DIR = path.join(OUT_DIR, 'params')
-
-function pythonPath(): string {
-  const win = path.join('tools', 'oracle', '.venv', 'Scripts', 'python.exe')
-  const posix = path.join('tools', 'oracle', '.venv', 'bin', 'python')
-  if (existsSync(win)) return win
-  if (existsSync(posix)) return posix
-  throw new Error('oracle venv not found — see tools/oracle/README.md')
-}
-
-function run(cmd: string, args: string[], useShell = false): Promise<void> {
-  return new Promise((resolve) => {
-    // useShell is set only for `npx`: on Windows it resolves to npx.cmd, a
-    // batch file that Windows refuses to spawn() directly (EINVAL) unless a
-    // shell interprets it. cmd/args here are always fixed literals plus a
-    // numeric OS-assigned port — never untrusted input — so the shell carries
-    // no injection risk. python.exe is a real executable and never needs this.
-    const child = spawn(cmd, args, { stdio: ['ignore', 'inherit', 'inherit'], shell: useShell })
-    child.on('close', () => resolve())
-    child.on('error', (err) => {
-      // A failure here means the oracle never ran at all — surface it loudly
-      // rather than let the caller mistake "spawn failed" for "captured zero
-      // packets because the emulator refused everything".
-      process.stderr.write(`failed to spawn ${cmd}: ${String(err)}\n`)
-      resolve()
-    })
-  })
-}
-
-/**
- * Runs one oracle's driver script against an already-listening emulator port.
- *
- * Shared by `capture` and `captureRealtime`, which differ only in which pair
- * of scripts they run and what arguments those scripts take.
- */
-async function runOracleScript(
-  source: 'pyzk' | 'zkteco-js',
-  pyScript: string,
-  tsScript: string,
-  args: string[],
-): Promise<void> {
-  if (source === 'pyzk') {
-    await run(pythonPath(), [pyScript, ...args])
-  } else {
-    await run('npx', ['tsx', tsScript, ...args], true)
-  }
-}
 
 /**
  * Waits for the last datagram to land, then writes what the emulator
@@ -146,17 +102,23 @@ async function capture(
 ): Promise<void> {
   const emulator = await startEmulator({ transport, sessionId, commKey })
   try {
-    await runOracleScript(
+    const kind = fileTag ?? (commKey === 0 ? 'handshake' : 'auth')
+    const file = `${kind}-${transport}-${source}.json`
+    const { run: oracleRun, script } = await runOracleScript(
       source,
       'tools/oracle/capture_pyzk.py',
       'tools/oracle/capture_zkjs.ts',
       [String(emulator.port), transport, String(commKey)],
     )
-    const kind = fileTag ?? (commKey === 0 ? 'handshake' : 'auth')
+    if (!succeeded(oracleRun)) {
+      failures.push(describeFailure(script, oracleRun))
+      process.stderr.write(`skipped ${file}: the oracle run produced no evidence\n`)
+      return
+    }
     await writeFixture(
       emulator,
       outDir,
-      `${kind}-${transport}-${source}.json`,
+      file,
       { source, transport, commKey, emulatorSessionId: sessionId },
       false,
     )
@@ -188,16 +150,22 @@ async function captureRealtime(
     pushWithAck: pushes,
   })
   try {
-    await runOracleScript(
+    const file = `realtime-${transport}-${source}.json`
+    const { run: oracleRun, script } = await runOracleScript(
       source,
       'tools/oracle/capture_pyzk_realtime.py',
       'tools/oracle/capture_zkjs_realtime.ts',
       [String(emulator.port), transport],
     )
+    if (!succeeded(oracleRun)) {
+      failures.push(describeFailure(script, oracleRun))
+      process.stderr.write(`skipped ${file}: the oracle run produced no evidence\n`)
+      return
+    }
     await writeFixture(
       emulator,
       REALTIME_DIR,
-      `realtime-${transport}-${source}.json`,
+      file,
       { source, transport, emulatorSessionId: EMULATOR_SESSION_ID },
       true,
     )
@@ -256,16 +224,22 @@ async function captureParams(
     deviceTimeRaw: 0x2b1f_c4d0,
   })
   try {
-    await runOracleScript(
+    const file = `params-${transport}-${source}.json`
+    const { run: oracleRun, script } = await runOracleScript(
       source,
       'tools/oracle/capture_pyzk_params.py',
       'tools/oracle/capture_zkjs_params.ts',
       [String(emulator.port), transport],
     )
+    if (!succeeded(oracleRun)) {
+      failures.push(describeFailure(script, oracleRun))
+      process.stderr.write(`skipped ${file}: the oracle run produced no evidence\n`)
+      return
+    }
     await writeFixture(
       emulator,
       PARAMS_DIR,
-      `params-${transport}-${source}.json`,
+      file,
       { source, transport, emulatorSessionId: EMULATOR_SESSION_ID },
       true,
     )
@@ -278,4 +252,10 @@ for (const transport of ['tcp', 'udp'] as const) {
   for (const source of ['pyzk', 'zkteco-js'] as const) {
     await captureParams(source, transport)
   }
+}
+
+if (failures.length > 0) {
+  process.stderr.write(`\n${failures.length} oracle run(s) produced no fixture:\n`)
+  for (const line of failures) process.stderr.write(`  ${line}\n`)
+  process.exitCode = 1
 }
