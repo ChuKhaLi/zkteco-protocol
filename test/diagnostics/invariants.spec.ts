@@ -7,7 +7,15 @@ import { Session } from '../../src/session/Session.js'
 import { TcpTransport } from '../../src/transport/tcp.js'
 import { TracingTransport } from '../../src/diagnostics/TracingTransport.js'
 import { StepRunner } from '../../src/diagnostics/step.js'
-import { auditChecksums, emptyFindings, probeBulk, probeIdentity, probeState } from '../../src/diagnostics/probe.js'
+import {
+  auditChecksums,
+  emptyFindings,
+  probeBulk,
+  probeConcurrent,
+  probeIdentity,
+  probeRealtime,
+  probeState,
+} from '../../src/diagnostics/probe.js'
 import { renderJson, renderMarkdown, renderRawCapture } from '../../src/diagnostics/report.js'
 import { startEmulator, type Emulator } from '../emulator/index.js'
 import { USER_RECORD_SIZE } from '../../src/codec/records/user.js'
@@ -25,6 +33,9 @@ const ALLOWED = new Set<number>([
   CMD.GET_FREE_SIZES, CMD.USERTEMP_RRQ, CMD.ATTLOG_RRQ, CMD.FREE_DATA,
   CMD.PREPARE_BUFFER, CMD.READ_BUFFER, CMD.REG_EVENT,
 ])
+// ALLOWED itself is unchanged here (see the brief) -- this task widens what the
+// harness below SENDS through it (REG_EVENT and a second CONNECT), not what
+// the allowlist permits.
 
 const SERIAL = 'SN-DO-NOT-LEAK'
 const NAME = 'Zaphod Beeblebrox'
@@ -43,6 +54,20 @@ function emUser(): ZkUser {
   return { uid: 1, userId: USER_ID, name: NAME, privilege: 0, hasPassword: false, cardNumber: 0, raw: b.toString('hex') }
 }
 
+function rec40(): Buffer {
+  const b = Buffer.alloc(40)
+  b.writeUInt16LE(1, 0)
+  b.write(USER_ID, 2, 24, 'latin1')
+  b.writeUInt32LE(86_400, 27)
+  return b
+}
+
+/** A monotonic fake clock: probes may not read a real one. */
+function fakeNow(): () => number {
+  let t = 0
+  return () => (t += 10)
+}
+
 async function runProbe() {
   running = await startEmulator({
     transport: 'tcp',
@@ -50,6 +75,7 @@ async function runProbe() {
     firmware: 'Ver 6.60',
     info: { userCount: 1, recordCount: 1, recordCapacity: 1000 },
     users: [emUser()],
+    records: { size: 40, rows: [rec40()] },
   })
   const traced = new TracingTransport(
     new TcpTransport({ host: '127.0.0.1', port: running.port }),
@@ -57,11 +83,22 @@ async function runProbe() {
   )
   session = new Session(traced, { timeoutMs: 2000 })
   await session.open()
-  const runner = new StepRunner()
+  const runner = new StepRunner(() => traced.events)
   const findings = emptyFindings()
   await probeIdentity(session, runner, findings)
   await probeState(session, runner, findings, { epochSeconds: 0, utcOffsetMinutes: 0 })
   await probeBulk(session, runner, findings, { transport: 'tcp', attendance: 'auto' }, traced.events)
+  // Both opt-in probes run here even though a default CLI run skips them:
+  // this is the only allowlist in the project, and a command sent by a probe
+  // it never covered would be exactly the kind of write CLAUDE.md says is
+  // enforced mechanically. probeConcurrent opens its own socket; probeRealtime
+  // is last, because Transport.listen is one-way, once per socket.
+  await probeConcurrent(runner, findings, {
+    host: '127.0.0.1', port: running.port, transport: 'tcp', timeoutMs: 2000, commKey: 0,
+  })
+  await probeRealtime(session, runner, findings, {
+    windowSeconds: 1, sleep: async () => {}, now: fakeNow(),
+  })
   findings.checksum = auditChecksums(traced.events)
   return { traced, runner, findings }
 }
@@ -76,6 +113,10 @@ describe('probe invariants', () => {
     // employees out every poll cycle. A diagnostic must not reintroduce it.
     expect(sent).not.toContain(CMD.DISABLEDEVICE)
     expect(sent).not.toContain(CMD.ENABLEDEVICE)
+    // The two opt-in probes really did run: without this, adding a probe and
+    // forgetting to call it here would leave the allowlist passing vacuously.
+    expect(sent).toContain(CMD.REG_EVENT)
+    expect(sent.filter((c) => c === CMD.CONNECT).length).toBeGreaterThan(1)
   })
 
   it('keeps the serial, user names and ids out of both shareable artifacts', async () => {
