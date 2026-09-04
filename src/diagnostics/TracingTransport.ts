@@ -1,4 +1,5 @@
 import { decodePayload } from '../codec/packet.js'
+import { ZkError } from '../errors.js'
 import type { Transport } from '../transport/Transport.js'
 import type { TraceDirection, TraceEvent } from './types.js'
 
@@ -36,7 +37,32 @@ export class TracingTransport implements Transport {
     return this.log
   }
 
+  /**
+   * Builds a complete `error` event, including the rejected framing prefix
+   * when the error carried one.
+   *
+   * A framing failure attaches the rejected 8-byte prefix as err.raw. The raw
+   * capture is unredacted by contract (kit spec §5.4) and TraceEvent reaches
+   * nothing else, so the prefix goes into the record here — this is the file
+   * item 5's observation points the operator at.
+   */
+  private errorEvent(err: Error): TraceEvent {
+    const event: TraceEvent = {
+      seq: this.seq++,
+      direction: 'error',
+      offsetMs: this.now() - this.start,
+      errorClass: err.constructor.name,
+      errorMessage: err.message,
+    }
+    if (err instanceof ZkError && err.raw) event.hex = err.raw
+    return event
+  }
+
   private record(direction: TraceDirection, payload?: Buffer, err?: Error): void {
+    if (err) {
+      this.log.push(this.errorEvent(err))
+      return
+    }
     const event: TraceEvent = {
       seq: this.seq++,
       direction,
@@ -56,10 +82,6 @@ export class TracingTransport implements Transport {
         // Intentionally empty: hex is the record that matters.
       }
     }
-    if (err) {
-      event.errorClass = err.constructor.name
-      event.errorMessage = err.message
-    }
     this.log.push(event)
   }
 
@@ -73,13 +95,22 @@ export class TracingTransport implements Transport {
   }
 
   async send(payload: Buffer): Promise<void> {
-    this.record('send', payload)
     try {
       await this.inner.send(payload)
     } catch (err) {
-      this.record('error', undefined, err as Error)
+      // Recorded as an error and NOT as a send: nothing moved. bulkPrepareAttempted
+      // (item 19) reads `send` events, and a write the socket refused is not
+      // evidence the device saw an odd-length payload.
+      const event = this.errorEvent(err as Error)
+      try {
+        event.attemptedCommand = decodePayload(payload).command
+      } catch {
+        // an undecodable payload is still an attempt; the class and message say so
+      }
+      this.log.push(event)
       throw err
     }
+    this.record('send', payload)
   }
 
   async receive(timeoutMs: number): Promise<Buffer> {

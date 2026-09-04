@@ -1,10 +1,11 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { CMD } from '../../src/codec/commands.js'
 import { encodePayload } from '../../src/codec/packet.js'
-import { ZkTimeoutError } from '../../src/errors.js'
+import { ZkConnectionError, ZkFramingError, ZkTimeoutError } from '../../src/errors.js'
 import { Session } from '../../src/session/Session.js'
 import { TcpTransport } from '../../src/transport/tcp.js'
 import { TracingTransport } from '../../src/diagnostics/TracingTransport.js'
+import type { Transport } from '../../src/transport/Transport.js'
 import { startEmulator, type Emulator } from '../emulator/index.js'
 
 let running: Emulator | null = null
@@ -106,5 +107,43 @@ describe('TracingTransport', () => {
     const errors = traced.events.filter((e) => e.direction === 'error')
     expect(errors.length).toBeGreaterThanOrEqual(1)
     expect(errors[errors.length - 1]?.errorClass).toBe('ZkConnectionError')
+  })
+})
+
+/** A transport whose send always fails, to see what the tracer records for it. */
+function refusingSend(): Transport {
+  return {
+    connect: async () => {},
+    send: async () => { throw new ZkConnectionError('socket refused the write') },
+    receive: async () => { throw new ZkTimeoutError('never') },
+    listen: () => {},
+    close: async () => {},
+  }
+}
+
+describe('TracingTransport records what actually moved', () => {
+  it('does not record a send the socket refused, but says what was attempted', async () => {
+    const traced = new TracingTransport(refusingSend(), fakeClock())
+    const payload = encodePayload({ command: CMD.PREPARE_BUFFER, sessionId: 1, replyId: 1 })
+    await expect(traced.send(payload)).rejects.toBeInstanceOf(ZkConnectionError)
+    expect(traced.events.filter((e) => e.direction === 'send')).toHaveLength(0)
+    const errors = traced.events.filter((e) => e.direction === 'error')
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toMatchObject({ errorClass: 'ZkConnectionError', attemptedCommand: CMD.PREPARE_BUFFER })
+  })
+
+  it('records the rejected framing prefix on the error event, for item 5', async () => {
+    running = await startEmulator({ transport: 'tcp', handlers: { [CMD.GET_FREE_SIZES]: () => null } })
+    const traced = new TracingTransport(new TcpTransport({ host: '127.0.0.1', port: running.port }), fakeClock())
+    await traced.connect(2_000)
+    await traced.send(encodePayload({ command: CMD.GET_FREE_SIZES, sessionId: 1, replyId: 1 }))
+    const pending = traced.receive(2_000)
+    await new Promise((r) => setTimeout(r, 50))
+    for (const socket of running.sockets) socket.write(Buffer.from('deadbeefdeadbeef', 'hex'))
+    await expect(pending).rejects.toBeInstanceOf(ZkFramingError)
+    await traced.close()
+
+    const errors = traced.events.filter((e) => e.direction === 'error')
+    expect(errors[errors.length - 1]).toMatchObject({ errorClass: 'ZkFramingError', hex: 'deadbeefdeadbeef' })
   })
 })

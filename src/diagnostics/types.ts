@@ -20,6 +20,13 @@ export interface TraceEvent {
   replyId?: number
   errorClass?: string
   errorMessage?: string
+  /**
+   * The command a `send` was carrying when the write failed. Present only on
+   * an `error` event that replaced a `send` — the send itself is NOT recorded,
+   * because nothing moved. Item 19 used to answer on a PREPARE_BUFFER the
+   * socket refused; a reader of the capture still needs to see what was tried.
+   */
+  attemptedCommand?: number
 }
 
 /**
