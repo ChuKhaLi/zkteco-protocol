@@ -497,8 +497,10 @@ and the checklist's rule against adding items applies in spirit.
 hazard, not a corner: 504 bytes is eighteen 28-byte records and also seven 72-byte ones, and such a
 body was decoded into seven users nobody had enrolled.
 `2026-09-04-zkteco-user-record-width-design.md` closes it by deriving the width — the body length
-divided by the device's own `userCount` — instead of assuming 72. That reads no record byte, so
-this section's ruling stands unchanged: no decoder was added, and a derived width of 28 is refused.
+divided by the device's own `userCount` — instead of assuming 72, for as long as that count is
+right; the residual where a misread count implies 72 over that same body is recorded in
+`PROVENANCE.md` §*User record width and size*. That reads no record byte, so this section's ruling
+stands unchanged: no decoder was added, and a derived width of 28 is refused.
 
 ---
 

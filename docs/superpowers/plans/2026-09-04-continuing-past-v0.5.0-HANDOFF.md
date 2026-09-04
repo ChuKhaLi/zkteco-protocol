@@ -81,7 +81,7 @@ short of, from `docs/RELEASING.md` §5:
 
 ## 4. The open questions this cycle did not close
 
-Three things this v0.5 sub-project surfaced or left standing, none settled without a device:
+Four things this v0.5 sub-project surfaced or left standing, none settled without a device:
 
 1. **Whether a device ever answers after this library's deadline has expired** — checklist item 22,
    §2 above. Not deterministically provokable by this tool.
@@ -100,12 +100,17 @@ Three things this v0.5 sub-project surfaced or left standing, none settled witho
    read depends on this table's `userCount` as the attendance read already depended on
    `recordCount`, so a wrong offset costs more than it did here; `PROVENANCE.md` §*User record
    width and size* records that.
-
-The 28-byte user record dialect over UDP was a fourth. The fabricated users it could produce — from
-a body length both widths divide — are closed by
-`docs/superpowers/specs/2026-09-04-zkteco-user-record-width-design.md`: the width is derived from
-the device's own user count, and that body is refused rather than decoded. The dialect itself is
-unanswered, and no decoder for it was added.
+4. **Which user record width a real device sends.** `zkteco-js` decodes 28-byte user records over
+   UDP and 72-byte records over TCP, and experiment E4 (`test/fixtures/oracle/bulk/E4-*.json`)
+   showed `pyzk` decodes both over UDP without fixing the width by transport — so neither oracle
+   says what a real device sends. No decoder for the 28-byte width was added, and telling the two
+   widths apart from the bytes alone is still a new wire hypothesis for the first hardware run to
+   settle. Since v0.6 a body length both widths divide is refused rather than decoded into
+   fabricated users (`docs/superpowers/specs/2026-09-04-zkteco-user-record-width-design.md`), but
+   only for as long as the count deciding it is right: that count comes from the
+   `FREE_SIZES_OFFSET.userCount` of item 3 above, and a misread value equal to `bodyLength / 72`
+   decodes such a body into fabricated users still. `PROVENANCE.md` §*User record width and size*
+   records that residual.
 
 ## 5. Where the evidence lives
 

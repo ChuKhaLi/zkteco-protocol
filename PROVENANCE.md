@@ -434,6 +434,20 @@ only: `ZkDevice.getUsers` falls back to no count when `CMD_GET_FREE_SIZES`
 gets no such fallback. It is a real way v0.6 could make first contact with
 hardware worse rather than better, and it is on this record for that reason.
 
+**The closure is conditional on that same offset**, and refusal is not the only
+way a wrong one can land. `detectUserRecordSize` trusts the count absolutely —
+it divides the body by it (`src/codec/records/user.ts:115`) — so a misread
+value that happens to equal `bodyLength / 72` satisfies both the divisibility
+check and the width check. Where the true width is 28 that means a body length
+both widths divide, and the caller receives fabricated users exactly as before
+v0.6: eighteen 28-byte users under a misread count of seven is the pair
+`(504, 7)`, which is the pair a legitimate 72-byte device with seven users
+presents as well. Those two numbers are the function's only inputs, so nothing
+computed from them separates the two devices; this is recorded as a residual
+rather than closed. What did change is its reach — before v0.6 that body
+fabricated users unconditionally, with no count involved at all, and it now
+takes a wrong offset whose value coincides with `bodyLength / 72`.
+
 Experiment E4
 (`test/fixtures/oracle/bulk/E4-*.json`, recorded under *The buffered read —
 restated from a single readable source*) served `pyzk` three users as
