@@ -19,7 +19,7 @@ import { spawn, spawnSync } from 'node:child_process'
 import { mkdtempSync, readFileSync, rmSync, existsSync, writeFileSync, mkdirSync, writeSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { consumerSource, consumerTsconfig } from './consumer-fixture.mjs'
+import { consumerPackageJson, consumerSource, consumerTsconfig } from './consumer-fixture.mjs'
 
 const IS_WINDOWS = process.platform === 'win32'
 /** Values baked into tools/emulator-serve.ts. Kept in sync by hand; the drill
@@ -146,17 +146,30 @@ must(existsSync(tarball), `packed tarball not found at ${tarball}`)
 // The CJS bundle of the CLI could never run — its import.meta is shimmed to
 // {} so the main-module check is always false — so v0.5 stopped building it.
 // The tarball is where a consumer would meet it.
+//
+// The absence carries a positive control beside it, for the same reason the
+// serial check below is paired with MB360: `!some(...)` alone is satisfied by
+// a tarball containing no dist/ at all, which would report "ok" for a package
+// with no CLI in it whatsoever. dist/cli.js is the file `bin` points at, so
+// its presence is what makes the absence mean something. The detail lists
+// every dist/cli* path that was packed, so it cannot state the opposite of
+// what happened — it used to print "dist/cli.js only" in exactly the case
+// where no dist/cli* file existed.
 const packedFiles = JSON.parse(packed.stdout)[0].files.map((f) => f.path)
+const packedCliFiles = packedFiles.filter((p) => p.startsWith('dist/cli'))
 check(
-  'no CommonJS CLI or CLI declaration is in the tarball',
-  !packedFiles.some((p) => /^dist\/cli\.(cjs|d\.[cm]?ts)$/.test(p)),
-  packedFiles.filter((p) => p.startsWith('dist/cli')).join(', ') || 'dist/cli.js only',
+  'the tarball carries dist/cli.js, and no CommonJS CLI or CLI declaration',
+  packedFiles.includes('dist/cli.js') && !packedCliFiles.some((p) => /^dist\/cli\.(cjs|d\.[cm]?ts)$/.test(p)),
+  `dist/cli*: ${packedCliFiles.join(', ') || '(none packed)'}`,
 )
 
 // --- 3. install into a directory that shares nothing with this repo -------
 const consumer = join(workdir, 'consumer')
 mkdirSync(consumer)
-writeFileSync(join(consumer, 'package.json'), '{"name":"drill-consumer","private":true}\n')
+// From consumer-fixture.mjs, not inline: the absence of `"type": "module"` in
+// this file is what makes the typecheck below a CommonJS check, and inline it
+// was pinned by nothing.
+writeFileSync(join(consumer, 'package.json'), consumerPackageJson())
 const install = run('npm', ['install', tarball], { cwd: consumer })
 must(install.status === 0, `npm install failed:\n${install.stderr}`)
 // "added 1 package" is the zero-runtime-dependencies rule, observed from
