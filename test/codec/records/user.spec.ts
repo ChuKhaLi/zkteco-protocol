@@ -131,7 +131,13 @@ describe('detectUserRecordSize', () => {
   })
 
   it('refuses rather than decodes when the count implies the 28-byte dialect', () => {
-    expect(() => detectUserRecordSize(AMBIGUOUS, 18)).toThrow(/28-byte/)
+    // /28-byte/ alone would not discriminate: the "neither width" message
+    // names the 28-byte dialect too ("neither 72 nor the 28-byte dialect this
+    // library refuses"), so a bug routing this input there would still match.
+    // Assert the sentence only the 28-branch produces.
+    expect(() => detectUserRecordSize(AMBIGUOUS, 18)).toThrow(
+      /implies 28-byte user records\. This library decodes only 72-byte records and will not guess/,
+    )
     expect(() => detectUserRecordSize(AMBIGUOUS, 18)).toThrow(ZkFramingError)
   })
 
@@ -218,5 +224,12 @@ describe('parseUserData width handling', () => {
     const data = Buffer.concat([head, body])
     expect(data.length - 4).toBe(504)
     expect(() => parseUserData(data, null)).toThrow(ZkFramingError)
+    // The class alone would pass on any framing refusal -- a short payload, a
+    // declared size that overruns, a bad count. This is the one test named for
+    // the defect, so pin the refusal that is actually the defect's: the
+    // ambiguity, with both readings named.
+    expect(() => parseUserData(data, null)).toThrow(
+      /user body of 504 bytes is undecidable without a user count: 7 record\(s\) of 72 bytes, or 18 of 28/,
+    )
   })
 })

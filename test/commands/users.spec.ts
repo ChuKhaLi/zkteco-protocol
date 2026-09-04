@@ -102,7 +102,12 @@ for (const transportKind of ['tcp', 'udp'] as const) {
     it('names the 28-byte dialect when the count settles it', async () => {
       running = await startEmulator({ transport: transportKind, users: eighteen, userRecordSize: 28 })
       session = await openSession(running.port)
-      await expect(getUsers(session, transportKind, 18)).rejects.toThrow(/28-byte/)
+      // Not /28-byte/: the "neither width" refusal names the dialect as well,
+      // so that pattern cannot tell the two refusals apart. This is the
+      // 28-branch's own sentence.
+      await expect(getUsers(session, transportKind, 18)).rejects.toThrow(
+        /implies 28-byte user records\. This library decodes only 72-byte records and will not guess/,
+      )
     })
 
     it('reads seven 72-byte users when the count settles it', async () => {
