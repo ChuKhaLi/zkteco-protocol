@@ -402,17 +402,39 @@ the returned string is unchanged.
 **The reference decodes 28-byte user records over UDP and 72-byte records over
 TCP** (`ztcp.js:471`, `zudp.js:382`, `helper/utils.js:114-126`). Whether that
 is a property of the transport, of firmware age, or of the reference's own
-history is not recorded anywhere readable. This library reads 72 on both
-transports and refuses a body that is not a whole number of 72-byte records,
-so a 28-byte device is refused rather than misparsed **unless its body length
-happens to divide both widths**. That case is reachable, not theoretical: 28
-and 72 share a factor of 4, so a device sending a multiple of eighteen records
-— 18, 36, 54 and so on — sends a whole number of 72-byte records, since
-18 × 28 = 504 = 7 × 72. The guard passes on a body it should refuse and the
-caller receives seven fabricated users. Nothing detects that today, and nothing
-here proposes a heuristic that would: telling the two widths apart from the
-bytes is a new wire hypothesis, and the first hardware run is where the
-question is settled. Experiment E4
+history is not recorded anywhere readable. This library decodes 72-byte records
+on both transports and has no decoder for the other width. Until v0.6 it also
+*assumed* that width, refusing only a body that was not a whole multiple of 72
+— which left a hole wherever the two readings agree: 28 and 72 share a factor
+of 4, so 504 bytes is eighteen 28-byte records and also seven 72-byte ones. A
+28-byte device sending eighteen users passed that guard, and the caller
+received seven users nobody had enrolled.
+
+Since v0.6 the width is **derived rather than assumed**: `detectUserRecordSize`
+(`src/codec/records/user.ts`) divides the body length by the device's own
+`userCount` from `CMD_GET_FREE_SIZES`. That is the technique `detectRecordSize`
+(`records/attendance.ts`) has used for the attendance dialects since v0.3, and
+it **inspects no record byte**, so it adds no wire hypothesis: telling the two
+widths apart from the bytes themselves is still unproposed and still
+unanswered, and the first hardware run is still where that question is settled.
+A derived width of 28 is **refused, not decoded**. Where no count is available
+the 72-byte read continues as before, except that a non-zero multiple of 504 —
+the lengths where the two readings agree — is refused instead of decoded, so a
+legitimate 72-byte device with a multiple of seven enrolled users needs the
+count to be read at all.
+
+**What deriving it cost** (`docs/superpowers/specs/2026-09-04-zkteco-user-record-width-design.md`
+§9.2): the user read now depends on `FREE_SIZES_OFFSET.userCount`, an offset no
+device has ever confirmed (*Unverified field offsets* below), exactly as the
+attendance read has depended on `recordCount` since v0.3. If that offset is
+wrong, a device whose user list reads fine today starts refusing instead. That
+is correct under *refuse rather than guess*, and it is bounded on one side
+only: `ZkDevice.getUsers` falls back to no count when `CMD_GET_FREE_SIZES`
+**fails**, but a reply that succeeds with the count taken from the wrong offset
+gets no such fallback. It is a real way v0.6 could make first contact with
+hardware worse rather than better, and it is on this record for that reason.
+
+Experiment E4
 (`test/fixtures/oracle/bulk/E4-*.json`, recorded under *The buffered read —
 restated from a single readable source*) served `pyzk` three users as
 72-byte and as 28-byte records over UDP; it decoded both correctly. So
@@ -545,6 +567,9 @@ on a count that is off by a divisor of the true size. Since v0.5
 `getAttendanceLogs` reads the count on both sides of the transfer and refuses
 if it moved, which catches a count that changed during the read but not one
 that was wrong to begin with — a wrong OFFSET returns a wrong count twice,
-consistently. For that reason the offsets live as named constants in one
-place, and confirming them against a real device is item 4 on the
-first-hardware checklist.
+consistently. Since v0.6 `userCount` is load-bearing the same way for the user
+read — the record width is derived by dividing the body by it — so this table's
+exposure is no longer confined to attendance; *User record width and size*
+above records what that trade cost. For that reason the offsets live as named
+constants in one place, and confirming them against a real device is item 4 on
+the first-hardware checklist.

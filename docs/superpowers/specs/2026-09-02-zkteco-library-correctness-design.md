@@ -493,6 +493,13 @@ size it expects over UDP, the transport the reference's 28-byte decode belongs t
 added: a second record layout is a new hypothesis,
 and the checklist's rule against adding items applies in spirit.
 
+**Amended in v0.6.** The "unless its body length happens to divide both" clause above was a live
+hazard, not a corner: 504 bytes is eighteen 28-byte records and also seven 72-byte ones, and such a
+body was decoded into seven users nobody had enrolled.
+`2026-09-04-zkteco-user-record-width-design.md` closes it by deriving the width — the body length
+divided by the device's own `userCount` — instead of assuming 72. That reads no record byte, so
+this section's ruling stands unchanged: no decoder was added, and a derived width of 28 is refused.
+
 ---
 
 ## 8. Subscription

@@ -4,11 +4,9 @@
 **For:** a session picking this repository up cold
 **Repository:** https://github.com/ChuKhaLi/zkteco-protocol — public, MIT, `main`
 **State:** the v0.5 work — 46 test files, 724 tests passed, 3 skipped, zero runtime dependencies.
-`package.json` and `src/index.ts` both read `0.5.0`; that is a bump, not a release.
-**Tag:** `v0.5.0` is **not applied yet**. It goes on `main` once both sub-projects below have landed
-there, and pushing it is what starts the publish pipeline. When this was written the
-diagnostics-evidence branch was still unmerged and `git tag -l 'v0.5*'` was empty, so nothing has
-been published: read §1's remaining steps as the work, not as history.
+`package.json` and `src/index.ts` both read `0.5.0`.
+**Tag:** `v0.5.0` is applied, at `155fcbc` on `main`, and `0.5.0` is published to npm as `latest`.
+Both sub-projects below are merged; §1's steps are history, not work.
 
 This continues `2026-09-01-continuing-past-v0.4.3-HANDOFF.md`, which continues five before it.
 Everything in them remains accurate. Read `CLAUDE.md` first, then `docs/RELEASING.md` if you intend
@@ -27,9 +25,8 @@ One multi-agent code review of the v0.4.3 tree produced two sub-projects, run on
   the release drill, and the oracle fixtures claim only what the wire actually showed. It built on
   top of the library-correctness merge rather than beside it.
 
-`v0.5.0` is the tag to apply once both are on `main`. Sub-project A is there; sub-project B was not
-when this was written, so the merge, the push and `git push origin v0.5.0` are the steps that
-remain, in that order and by `docs/RELEASING.md`.
+Both are on `main`, `v0.5.0` is tagged at `155fcbc`, and `0.5.0` is on npm as `latest`. Anything
+released after it goes through the tag the same way, by `docs/RELEASING.md`.
 
 ## 2. What the kit now claims, and what it still cannot
 
@@ -84,24 +81,14 @@ short of, from `docs/RELEASING.md` §5:
 
 ## 4. The open questions this cycle did not close
 
-Four things this v0.5 sub-project surfaced or left standing, none settled without a device:
+Three things this v0.5 sub-project surfaced or left standing, none settled without a device:
 
 1. **Whether a device ever answers after this library's deadline has expired** — checklist item 22,
    §2 above. Not deterministically provokable by this tool.
 2. **Whether the device needs each realtime event acknowledged** — item 8's symptom. This library has
    no way to find out because it never sends `ackEvent`; the tell to watch for by hand is one event
    followed by silence.
-3. **The 28-byte user record dialect over UDP.** The reference implementation this project reads
-   decodes 28-byte user records over UDP and 72-byte records over TCP; this library reads 72 on both
-   transports and refuses a body that is not a whole multiple of 72 bytes — except when the body
-   length happens to divide both widths (28 and 72 share a factor of 4, so a multiple of eighteen
-   28-byte records is also a whole number of 72-byte records: `18 × 28 = 504 = 7 × 72`). That case
-   passes the guard and hands the caller seven fabricated users. Experiment E4
-   (`test/fixtures/oracle/bulk/E4-*.json`) showed `pyzk` decodes both 72-byte and 28-byte bodies over
-   UDP without fixing the width by transport, so neither oracle says what a real device sends. No
-   heuristic is proposed; telling the two widths apart from the bytes alone is a new wire hypothesis
-   for the first hardware run to settle.
-4. **The `FREE_SIZES_OFFSET` table is unverified, and experiment E0b's control does not corroborate
+3. **The `FREE_SIZES_OFFSET` table is unverified, and experiment E0b's control does not corroborate
    it.** E0b (`test/fixtures/oracle/bulk/E0b-free-sizes-80-count-zero-tcp.json`) held the reply
    length fixed at the 80 bytes E1–E4 serve and zeroed only the count at byte offset 16; `pyzk`
    stopped short of any read, exactly as it does when the length itself is short (E0). That shows
@@ -109,7 +96,16 @@ Four things this v0.5 sub-project surfaced or left standing, none settled withou
    **not** corroboration that offset 16, or an 80-byte reply, is where or how a real device encodes
    `userCount`: intermediate lengths were never tried, no other offset was, and neither oracle
    exercises `CMD_GET_FREE_SIZES` in a way that pins the table `src/commands/info.ts` uses today.
-   `PROVENANCE.md`'s "Unverified field offsets" section is unchanged by E0b.
+   `PROVENANCE.md`'s "Unverified field offsets" section is unchanged by E0b. Since v0.6 the user
+   read depends on this table's `userCount` as the attendance read already depended on
+   `recordCount`, so a wrong offset costs more than it did here; `PROVENANCE.md` §*User record
+   width and size* records that.
+
+The 28-byte user record dialect over UDP was a fourth. The fabricated users it could produce — from
+a body length both widths divide — are closed by
+`docs/superpowers/specs/2026-09-04-zkteco-user-record-width-design.md`: the width is derived from
+the device's own user count, and that body is refused rather than decoded. The dialect itself is
+unanswered, and no decoder for it was added.
 
 ## 5. Where the evidence lives
 
