@@ -304,6 +304,7 @@ async function runProbe(session: Session, traced: TracingTransport, opts: CliOpt
       await probeRealtime(session, runner, findings, {
         windowSeconds: opts.realtimeSeconds,
         sleep: (ms) => new Promise((r) => setTimeout(r, ms)),
+        now: () => Date.now(),
       })
     }
 

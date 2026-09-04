@@ -109,6 +109,17 @@ export interface EmulatorOptions {
   /** When true, CMD_REG_EVENT is refused with ACK_ERROR instead of accepted. */
   refuseRegEvent?: boolean
   /**
+   * Packets pushed to a subscribed client that are NOT realtime events —
+   * a stray acknowledgment interleaved into a listening connection. The probe
+   * must count these separately from events (checklist item 13).
+   */
+  pushNonEvent?: Buffer[]
+  /**
+   * Destroys the client socket this many milliseconds after acknowledging
+   * CMD_REG_EVENT: a subscription that dies mid-window. TCP only.
+   */
+  dropAfterRegisterMs?: number
+  /**
    * Delays every reply by this many milliseconds. For the in-flight guard
    * (spec v0.5 §5.1) and for a reply that lands after the deadline (§5.2).
    */
@@ -447,7 +458,13 @@ const baseHandlers: HandlerTable = {
     const ack = reply(state, req, CMD.ACK_OK)
     const early = (state.opts.pushBeforeAck ?? []).map((p) => eventPacket(p.eventType, p.data))
     const pushes = state.opts.pushWithAck ?? []
-    return [...early, ack, ...pushes.map((p) => eventPacket(p.eventType, p.data))]
+    const strays = state.opts.pushNonEvent ?? []
+    return [
+      ...early,
+      ack,
+      ...pushes.map((p) => eventPacket(p.eventType, p.data)),
+      ...strays,
+    ]
   },
 }
 
@@ -480,9 +497,8 @@ export async function startEmulator(opts: EmulatorOptions): Promise<Emulator> {
   const receivedRaw: Buffer[] = []
   const socketErrors: Error[] = []
 
-  const respond = (raw: Buffer, payload: Buffer): Buffer[] | null => {
+  const respond = (raw: Buffer, payload: Buffer, req: DecodedPacket): Buffer[] | null => {
     receivedRaw.push(Buffer.from(raw))
-    const req = decodePayload(payload)
     received.push(req)
     if (opts.behavior === 'silent') return null
     const handler = handlers[req.command]
@@ -506,11 +522,17 @@ export async function startEmulator(opts: EmulatorOptions): Promise<Emulator> {
           if (!framed) break
           const raw = acc.subarray(0, framed.consumed)
           acc = acc.subarray(framed.consumed)
-          const out = respond(Buffer.from(raw), framed.payload)
+          const req = decodePayload(framed.payload)
+          const out = respond(Buffer.from(raw), framed.payload, req)
           if (out) {
             const write = (): void => { if (!sock.destroyed) for (const p of out) sock.write(frameTcp(p)) }
             if (opts.replyDelayMs) setTimeout(write, opts.replyDelayMs)
             else write()
+          }
+          // A subscription the device kills mid-window: the probe must notice
+          // rather than sleep out the rest of it.
+          if (opts.dropAfterRegisterMs !== undefined && req.command === CMD.REG_EVENT) {
+            setTimeout(() => { if (!sock.destroyed) sock.destroy() }, opts.dropAfterRegisterMs)
           }
           if (state.dropConnection) {
             state.dropConnection = false
@@ -551,7 +573,7 @@ export async function startEmulator(opts: EmulatorOptions): Promise<Emulator> {
   let lastClient: { port: number; address: string } | null = null
   sock.on('message', (msg, rinfo) => {
     lastClient = { port: rinfo.port, address: rinfo.address }
-    const out = respond(Buffer.from(msg), Buffer.from(msg))
+    const out = respond(Buffer.from(msg), Buffer.from(msg), decodePayload(msg))
     if (out) {
       const write = (): void => { for (const p of out) sock.send(p, rinfo.port, rinfo.address) }
       if (opts.replyDelayMs) {

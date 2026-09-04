@@ -1,5 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { CMD } from '../../src/codec/commands.js'
 import { EVENT_FLAG } from '../../src/codec/events.js'
+import { encodePayload } from '../../src/codec/packet.js'
 import { Session } from '../../src/session/Session.js'
 import { TcpTransport } from '../../src/transport/tcp.js'
 import { StepRunner } from '../../src/diagnostics/step.js'
@@ -63,7 +65,7 @@ describe('probeRealtime', () => {
       running!.pushEvent(EVENT_FLAG.ATTENDANCE, attendancePayload('B2'))
       await new Promise((r) => setTimeout(r, 80))
     }
-    await probeRealtime(session, new StepRunner(), findings, { windowSeconds: 5, sleep })
+    await probeRealtime(session, new StepRunner(), findings, { windowSeconds: 5, sleep, now: fakeNow() })
     expect(findings.realtime).toMatchObject({ registered: true, windowSeconds: 5 })
     expect(findings.realtime!.eventsObserved).toBe(2)
     expect(findings.realtime!.eventTypes).toContain(EVENT_FLAG.ATTENDANCE)
@@ -76,7 +78,7 @@ describe('probeRealtime', () => {
     const findings = emptyFindings()
     const runner = new StepRunner()
     await probeRealtime(session, runner, findings, {
-      windowSeconds: 1, sleep: async () => {},
+      windowSeconds: 1, sleep: async () => {}, now: fakeNow(),
     })
     expect(findings.realtime).toMatchObject({ registered: false })
     expect(findings.realtime?.error).toBeTruthy()
@@ -91,7 +93,7 @@ describe('probeRealtime', () => {
       running!.pushEvent(EVENT_FLAG.ATTENDANCE, attendancePayload('SECRET99'))
       await new Promise((r) => setTimeout(r, 80))
     }
-    await probeRealtime(session, runner, findings, { windowSeconds: 1, sleep })
+    await probeRealtime(session, runner, findings, { windowSeconds: 1, sleep, now: fakeNow() })
     expect(JSON.stringify(findings)).not.toContain('SECRET99')
     // Fix round 1 (F10): `renderJson` spreads `result` -- `steps` and their
     // `value` fields included -- verbatim into the JSON sidecar the CLI
@@ -106,4 +108,41 @@ describe('probeRealtime', () => {
     expect(JSON.stringify(runner.steps)).not.toContain('SECRET99')
     await session.close().catch(() => {}); session = null
   })
+})
+
+/** A monotonic fake clock: 10ms per read, so endedAfterMs is deterministic. */
+function fakeNow(): () => number {
+  let t = 0
+  return () => (t += 10)
+}
+
+describe('probeRealtime counts only events, and ends when the subscription does', () => {
+  it('counts a stray non-event packet separately from events', async () => {
+    running = await startEmulator({
+      transport: 'tcp',
+      pushNonEvent: [encodePayload({ command: CMD.ACK_OK, sessionId: 1, replyId: 9 })],
+    })
+    session = await open(running.port)
+    const findings = emptyFindings()
+    const sleep = async (): Promise<void> => {
+      running!.pushEvent(EVENT_FLAG.ATTENDANCE, attendancePayload('A1'))
+      running!.pushEvent(EVENT_FLAG.ATTENDANCE, attendancePayload('B2'))
+      await new Promise((r) => setTimeout(r, 80))
+    }
+    await probeRealtime(session, new StepRunner(), findings, { windowSeconds: 5, sleep, now: fakeNow() })
+    expect(findings.realtime).toMatchObject({ registered: true, heldOpen: true, eventsObserved: 2, nonEventPackets: 1 })
+    await session.close().catch(() => {}); session = null
+  })
+
+  it('ends the window when the device drops the connection, and says it did not hold open', async () => {
+    running = await startEmulator({ transport: 'tcp', dropAfterRegisterMs: 30 })
+    session = await open(running.port)
+    const findings = emptyFindings()
+    // A 60s window the test must NOT wait out: the drop ends it.
+    const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+    await probeRealtime(session, new StepRunner(), findings, { windowSeconds: 60, sleep, now: fakeNow() })
+    expect(findings.realtime).toMatchObject({ registered: true, heldOpen: false })
+    expect(findings.realtime!.error).toBeTruthy()
+    session = null
+  }, 10_000)
 })

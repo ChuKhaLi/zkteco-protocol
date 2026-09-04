@@ -102,7 +102,10 @@ function withRealtime(overrides: Partial<NonNullable<Findings['realtime']>>): Pr
   result.findings.realtime = {
     windowSeconds: 5,
     registered: false,
+    heldOpen: false,
+    endedAfterMs: 0,
     eventsObserved: 0,
+    nonEventPackets: 0,
     eventTypes: [],
     desyncOnRegister: false,
     error: null,

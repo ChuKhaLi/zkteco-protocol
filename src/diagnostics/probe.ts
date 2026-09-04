@@ -1,6 +1,6 @@
 import { CMD } from '../codec/commands.js'
 import { checksum16 } from '../codec/checksum.js'
-import { EVENT_FLAG } from '../codec/events.js'
+import { EVENT_FLAG, isEventPacket, readEventType } from '../codec/events.js'
 import { decodePayload } from '../codec/packet.js'
 import { DEVICE_PARAM } from '../codec/params.js'
 import { readNulTerminated } from '../codec/records/shared.js'
@@ -164,8 +164,20 @@ export interface Findings {
   concurrent: { attempted: boolean; accepted: boolean; error: string | null } | null
   realtime: {
     windowSeconds: number
+    /** CMD_REG_EVENT was acknowledged. */
     registered: boolean
+    /** The window elapsed with the subscription still alive. */
+    heldOpen: boolean
+    /** How long the window actually lasted, by the injected clock. */
+    endedAfterMs: number
     eventsObserved: number
+    /**
+     * Packets pushed on the listening connection that were not events.
+     * Counted apart because item 13 asks whether a device interleaves a
+     * request-response packet into a subscription — and because counting them
+     * as events reported a stray acknowledgment as an event type.
+     */
+    nonEventPackets: number
     eventTypes: number[]
     desyncOnRegister: boolean
     error: string | null
@@ -773,44 +785,67 @@ export async function probeRealtime(
   session: Session,
   runner: StepRunner,
   findings: Findings,
-  opts: { windowSeconds: number; sleep: (ms: number) => Promise<void> },
+  opts: { windowSeconds: number; sleep: (ms: number) => Promise<void>; now: () => number },
 ): Promise<void> {
   await runner.run('realtime', async () => {
     const types = new Set<number>()
     let observed = 0
+    let strays = 0
     findings.realtime = {
       windowSeconds: opts.windowSeconds,
       registered: false,
+      heldOpen: false,
+      endedAfterMs: 0,
       eventsObserved: 0,
+      nonEventPackets: 0,
       eventTypes: [],
       desyncOnRegister: false,
       error: null,
     }
+    // The subscription's own failure, if it has one. A no-op error handler
+    // meant a connection that died one second into a sixty-second window was
+    // reported as held open for sixty.
+    let markFailed: (err: Error) => void = () => {}
+    const died = new Promise<Error>((resolve) => { markFailed = resolve })
     try {
       await session.subscribe(
         EVENT_FLAG.ATTENDANCE,
         (pkt) => {
-          observed += 1
-          // The event type occupies the session-id slot (v0.2 §5.1) — itself a
-          // checklist item, which is why the raw type is recorded rather than a
-          // decoded name.
-          types.add(pkt.sessionId)
+          if (isEventPacket(pkt)) {
+            observed += 1
+            // The event type occupies the session-id slot (v0.2 §5.1) — itself
+            // a checklist item, which is why the raw type is recorded.
+            types.add(readEventType(pkt))
+          } else {
+            strays += 1
+          }
         },
-        () => {},
+        (err) => markFailed(err),
       )
       findings.realtime.registered = true
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err)
       findings.realtime.error = message
       findings.realtime.desyncOnRegister = /out of step/.test(message)
-      // Same argument as probeConcurrent's catch branch (Ruling R7): a
-      // refused registration or a desync is the device declining, which is
-      // data the checklist items above want -- not this probe failing.
-      return refused(findings.realtime)
+      // A refused registration or a desync is the device declining, which is
+      // the data the checklist items want — not this probe failing.
+      return declined('refused', findings.realtime)
     }
-    await opts.sleep(opts.windowSeconds * 1000)
+
+    const startedAt = opts.now()
+    const ended = await Promise.race([
+      opts.sleep(opts.windowSeconds * 1000).then(() => null),
+      died.then((err) => err),
+    ])
+    findings.realtime.endedAfterMs = opts.now() - startedAt
+    findings.realtime.heldOpen = ended === null
+    if (ended !== null) findings.realtime.error = ended.message
     findings.realtime.eventsObserved = observed
+    findings.realtime.nonEventPackets = strays
     findings.realtime.eventTypes = [...types].sort((a, b) => a - b)
+    // The step stays 'ok': the probe registered and produced its observation.
+    // WHAT it observed — held open, or dropped after endedAfterMs — is the
+    // finding, and items 9 and 13 read it from there.
     return findings.realtime
   })
 }
