@@ -56,6 +56,16 @@ describe('parseCliArgs', () => {
   it('rejects a non-numeric port', () => {
     expect(() => parseCliArgs(['h', '--port=nope'])).toThrow(/port/)
   })
+
+  it('rejects an empty --raw-capture rather than reporting a capture written to nowhere', () => {
+    // `--raw-capture=` parsed as '' survived the null check, wrote nothing,
+    // and item 1 reported a capture at the path ','.
+    expect(() => parseCliArgs(['h', '--raw-capture='])).toThrow(/--raw-capture/)
+  })
+
+  it('still accepts a real capture path', () => {
+    expect(parseCliArgs(['h', '--raw-capture=trace.jsonl']).rawCapture).toBe('trace.jsonl')
+  })
 })
 
 describe('exitCodeFor', () => {

@@ -13,9 +13,7 @@ import { TracingTransport } from './diagnostics/TracingTransport.js'
 import type { TraceEvent } from './diagnostics/types.js'
 import { VERSION } from './index.js'
 import { Session } from './session/Session.js'
-import { TcpTransport } from './transport/tcp.js'
-import type { Transport } from './transport/Transport.js'
-import { UdpTransport } from './transport/udp.js'
+import { createTransport } from './transport/createTransport.js'
 
 /**
  * This is the ONE impure module. Argument parsing, the clock, the filesystem
@@ -92,6 +90,18 @@ export function parseCliArgs(argv: string[]): CliOptions {
     throw new Error(`--attendance must be one of ${ATTENDANCE_MODES.join(', ')}, got '${attendance}'`)
   }
 
+  // `--raw-capture=` (no value) parses as the empty string, which passes a
+  // `!== null` check and goes on to write nothing -- while checklist item 1,
+  // reading `rawCapture` as truthy-ish evidence, reported a capture written
+  // to the path ','. The raw capture is UNREDACTED (comm key, employee names,
+  // user ids); a flag that silently produces no file while the report claims
+  // one exists is the worst shape this tool can take. Caught here, in
+  // parsing, so it fails before anything is probed or written.
+  const rawCapture = values['raw-capture'] ?? null
+  if (rawCapture === '') {
+    throw new Error("--raw-capture needs a path, got ''. The raw capture is UNREDACTED; give it a path of its own.")
+  }
+
   return {
     host,
     port: parseNumberOption('port', values.port, 4370),
@@ -99,7 +109,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     commKey: parseNumberOption('comm-key', values['comm-key'], 0),
     timeoutMs: parseNumberOption('timeout', values.timeout, 5000),
     attendance,
-    rawCapture: values['raw-capture'] ?? null,
+    rawCapture,
     out: values.out ?? null,
     realtimeSeconds: parseNumberOption('realtime', values.realtime, 0),
     concurrent: values.concurrent ?? false,
@@ -178,11 +188,6 @@ export function exitCodeFor(outcome: { connected: boolean; wroteOutput: boolean 
   if (!outcome.connected) return 1
   if (!outcome.wroteOutput) return 1
   return 0
-}
-
-function makeTransport(opts: CliOptions): Transport {
-  const t = { host: opts.host, port: opts.port }
-  return opts.transport === 'tcp' ? new TcpTransport(t) : new UdpTransport(t)
 }
 
 /**
@@ -348,17 +353,13 @@ export async function main(): Promise<void> {
     return
   }
 
-  const traced = new TracingTransport(makeTransport(opts), () => Date.now())
+  const traced = new TracingTransport(createTransport(opts.transport, { host: opts.host, port: opts.port }), () => Date.now())
   const session = new Session(traced, { timeoutMs: opts.timeoutMs, commKey: opts.commKey })
 
-  let connected = true
   try {
     await session.open()
   } catch (err) {
-    connected = false
     process.stderr.write(`could not connect to ${opts.host}:${opts.port}: ${(err as Error).message}\n`)
-  }
-  if (!connected) {
     process.exitCode = exitCodeFor({ connected: false, wroteOutput: false })
     return
   }
@@ -373,7 +374,7 @@ export async function main(): Promise<void> {
     process.stderr.write(`could not write report output: ${(err as Error).message}\n`)
   }
 
-  process.exitCode = exitCodeFor({ connected, wroteOutput })
+  process.exitCode = exitCodeFor({ connected: true, wroteOutput })
 }
 
 // Not `await main()` at top level: tsup builds this entry as both ESM and
