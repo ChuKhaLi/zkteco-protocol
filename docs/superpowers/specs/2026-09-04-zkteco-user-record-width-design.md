@@ -164,7 +164,15 @@ Division, exactly `detectRecordSize`'s technique:
 | `bodyLength` is a non-zero multiple of 504 | refuse — undecidable |
 
 Because 504 is `lcm(72, 28)`, the third row is exactly and only the exposure described in §1.1.
-Every body that decodes correctly today still decodes. The change is not over-broad, and §5's
+Every body whose length is **not** a non-zero multiple of 504 decodes exactly as it does today.
+
+**Corrected 2026-09-04, during implementation.** An earlier draft of this section claimed "every
+body that decodes correctly today still decodes." That is false, and it is this project's own
+defect shape appearing in the document written to prevent it. A legitimate 72-byte device with a
+multiple of seven users produces a 504-byte body, which decodes correctly today and is refused
+under the no-count path. That refusal is the deliberate price of the ambiguity, and §3's decision 3
+is where the count earns its keep by rescuing exactly those devices — but the cost is real and
+saying otherwise understated it. The change is not over-broad, and §5's
 576-byte test is what holds that property in place.
 
 ### 4.4 Two edge cases
@@ -332,21 +340,51 @@ wording) are already on `main`; the branch is a stale Aug-29 duplicate.
   misparsed, that no second decoder was added, and §9.2 below.
 - **`src/codec/records/user.ts`'s doc comment** describes the fabrication as unaddressed. It is the
   file being changed; its comment must not survive the change.
-- **The v0.5.0 handoff** — §1's "tag is not applied yet" is now history, §4.3 is closed by this
-  cycle, and two of the four follow-ups it carried were already closed before it was written
-  (`test/commands/info.spec.ts:60` covers the full-length `ACK_UNAUTH` free-sizes body;
-  `src/diagnostics/report.ts:139` explains item 13's `registered` conjunct as deliberate defence).
+- **The v0.5.0 handoff** — §1's "tag is not applied yet" is now history, and its §4 item 3 (the
+  28-byte dialect) is closed by this cycle in the narrow sense §9.2 records.
+
+  **Corrected 2026-09-04, during implementation.** An earlier draft added that "two of the four
+  follow-ups it carried were already closed before it was written", naming
+  `test/commands/info.spec.ts:60` and `src/diagnostics/report.ts:139`. Those two belong to a
+  session-memory follow-up list, not to the handoff, whose §4 items are checklist item 22, item 8,
+  the 28-byte dialect, and the `FREE_SIZES_OFFSET`/E0b entry. Two four-item lists were conflated.
+  The handoff's count goes from four to four — item 3 is replaced by the half of it that is still
+  open, not deleted outright, because the dialect itself remains unanswered.
 
 ### 9.2 The risk this change introduces
 
 `getUsers` now behaves differently depending on `FREE_SIZES_OFFSET.userCount`, a field no device
 has ever confirmed. **If that offset is wrong, a device that reads users fine today starts
-refusing.** That is correct behaviour under *refuse rather than guess*, and §4.3's no-count path
-limits the blast radius to callers that do supply a count — but it is a real way this change could
-make first contact with hardware worse rather than better.
+refusing.** That is correct behaviour under *refuse rather than guess*, and it is a real way this
+change could make first contact with hardware worse rather than better.
 
-It belongs in `PROVENANCE.md` and in the v0.6.0 release notes. It is not a reason to skip the
-change: the alternative is continuing to hand callers seven strangers.
+**Corrected 2026-09-04, during implementation.** Two things an earlier draft of this section got
+wrong, both in the direction of sounding safer than the code is.
+
+First, it claimed §4.3's no-count path "limits the blast radius to callers that do supply a count".
+It does not. That path engages only when `CMD_GET_FREE_SIZES` *fails*; a call that succeeds while
+reading from a wrong offset returns a confident wrong number, and nothing falls back. The bound
+holds on one side only.
+
+Second, and worse, refusal is not the only outcome of a wrong offset. `detectUserRecordSize`
+divides and trusts: a 28-byte device with eighteen users sends 504 bytes, and a misread count of 7
+gives `504 / 7 = 72`, which passes every guard and returns seven fabricated users — the defect this
+cycle exists to close, reached through the offset this cycle admits is unverified.
+
+That residual cannot be closed here, and the reason is structural rather than an oversight:
+`detectUserRecordSize` sees only `(bodyLength, userCount)`, and the misread 28-byte device presents
+`(504, 7)` — the identical pair a legitimate seven-user 72-byte device presents. No function of
+those two numbers separates them. The escapes all leave this cycle's constraints: reading record
+bytes (§2.2), adopting the reference's transport hypothesis, or re-reading a count that a wrong
+offset returns wrongly twice.
+
+So the honest framing is narrower than "the hazard is closed". Before v0.6 a 504-byte body
+fabricated users unconditionally, with no count involved at all. After it, that outcome requires a
+wrong offset whose garbage value coincides with `bodyLength / 72`. That is a large reduction, not
+an elimination, and `PROVENANCE.md` records it as such.
+
+All of this belongs in `PROVENANCE.md` and in the v0.6.0 release notes. None of it is a reason to
+skip the change: the alternative is continuing to hand callers seven strangers unconditionally.
 
 ---
 
