@@ -294,7 +294,7 @@ async function runProbe(session: Session, traced: TracingTransport, opts: CliOpt
 
     if (opts.concurrent) {
       await probeConcurrent(runner, findings, {
-        host: opts.host, port: opts.port, transport: opts.transport, timeoutMs: opts.timeoutMs,
+        host: opts.host, port: opts.port, transport: opts.transport, timeoutMs: opts.timeoutMs, commKey: opts.commKey,
       })
     }
 

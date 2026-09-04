@@ -34,9 +34,9 @@ describe('probeConcurrent', () => {
     session = await open(running.port)
     const findings = emptyFindings()
     await probeConcurrent(new StepRunner(), findings, {
-      host: '127.0.0.1', port: running.port, transport: 'tcp', timeoutMs: 1000,
+      host: '127.0.0.1', port: running.port, transport: 'tcp', timeoutMs: 1000, commKey: 0,
     })
-    expect(findings.concurrent).toMatchObject({ attempted: true, accepted: true, error: null })
+    expect(findings.concurrent).toMatchObject({ accepted: true, error: null })
   })
 
   it('records a refused second connection as data rather than throwing', async () => {
@@ -45,12 +45,36 @@ describe('probeConcurrent', () => {
     const findings = emptyFindings()
     const runner = new StepRunner()
     await probeConcurrent(runner, findings, {
-      host: '127.0.0.1', port: 1, transport: 'tcp', timeoutMs: 300,
+      host: '127.0.0.1', port: 1, transport: 'tcp', timeoutMs: 300, commKey: 0,
     })
     expect(findings.concurrent?.accepted).toBe(false)
     expect(findings.concurrent?.error).toBeTruthy()
     // It must not truncate the run: this probe opens its OWN socket, so its
     // failure says nothing about the session the rest of the probe is using.
+    expect(runner.truncated).toBeNull()
+  })
+
+  it('opens the second connection with the comm key the first one used', async () => {
+    // Against a keyed device the probe used to report "a second connection was
+    // refused: device requires a comm key" — item 10 answered with this tool's
+    // omission rather than with the device's behaviour.
+    const COMM_KEY = 483927
+    running = await startEmulator({ transport: 'tcp', commKey: COMM_KEY })
+    const findings = emptyFindings()
+    await probeConcurrent(new StepRunner(), findings, {
+      host: '127.0.0.1', port: running.port, transport: 'tcp', timeoutMs: 1000, commKey: COMM_KEY,
+    })
+    expect(findings.concurrent).toMatchObject({ accepted: true, error: null })
+  })
+
+  it('still reports a refusal as a refusal when the key is wrong', async () => {
+    running = await startEmulator({ transport: 'tcp', commKey: 483927 })
+    const findings = emptyFindings()
+    const runner = new StepRunner()
+    await probeConcurrent(runner, findings, {
+      host: '127.0.0.1', port: running.port, transport: 'tcp', timeoutMs: 1000, commKey: 1,
+    })
+    expect(findings.concurrent?.accepted).toBe(false)
     expect(runner.truncated).toBeNull()
   })
 })

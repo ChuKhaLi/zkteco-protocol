@@ -116,7 +116,7 @@ function withRealtime(overrides: Partial<NonNullable<Findings['realtime']>>): Pr
 
 function withConcurrent(overrides: Partial<NonNullable<Findings['concurrent']>>): ProbeResult {
   const result = sample()
-  result.findings.concurrent = { attempted: true, accepted: false, error: null, ...overrides }
+  result.findings.concurrent = { accepted: false, error: null, ...overrides }
   return result
 }
 

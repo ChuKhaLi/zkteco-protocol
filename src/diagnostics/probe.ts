@@ -10,10 +10,9 @@ import { getUsers } from '../commands/users.js'
 import { getAttendanceLogs } from '../commands/attendance.js'
 import { ZkProtocolError } from '../errors.js'
 import { Session } from '../session/Session.js'
-import { TcpTransport } from '../transport/tcp.js'
-import { UdpTransport } from '../transport/udp.js'
+import { createTransport } from '../transport/createTransport.js'
 import type { ZkNaiveTime, ZkUser } from '../types.js'
-import { declined, refused, replyOutcome, type StepRunner } from './step.js'
+import { declined, replyOutcome, type StepRunner } from './step.js'
 import type { TraceEvent } from './types.js'
 
 /** Which CMD_OPTIONS_RRQ request shapes the device accepted. */
@@ -161,7 +160,7 @@ export interface Findings {
     rowCount: number
   } | null
   encoding: { namesInspected: number; withHighBytes: number; validUtf8: boolean | null } | null
-  concurrent: { attempted: boolean; accepted: boolean; error: string | null } | null
+  concurrent: { accepted: boolean; error: string | null } | null
   realtime: {
     windowSeconds: number
     /** CMD_REG_EVENT was acknowledged. */
@@ -737,29 +736,29 @@ export async function probeBulk(
 export async function probeConcurrent(
   runner: StepRunner,
   findings: Findings,
-  opts: { host: string; port: number; transport: 'tcp' | 'udp'; timeoutMs: number },
+  opts: { host: string; port: number; transport: 'tcp' | 'udp'; timeoutMs: number; commKey: number },
 ): Promise<void> {
   await runner.run('second-connection', async () => {
-    const transport =
-      opts.transport === 'tcp'
-        ? new TcpTransport({ host: opts.host, port: opts.port })
-        : new UdpTransport({ host: opts.host, port: opts.port })
-    const second = new Session(transport, { timeoutMs: opts.timeoutMs })
+    // The SAME credentials the first session used: without the comm key, a
+    // keyed device refuses this connection and item 10 reports the tool's
+    // omission as the device's answer.
+    const second = new Session(
+      createTransport(opts.transport, { host: opts.host, port: opts.port }),
+      { timeoutMs: opts.timeoutMs, commKey: opts.commKey },
+    )
     try {
       await second.open()
-      findings.concurrent = { attempted: true, accepted: true, error: null }
+      findings.concurrent = { accepted: true, error: null }
       await second.close().catch(() => {})
       return findings.concurrent
     } catch (err) {
       findings.concurrent = {
-        attempted: true,
         accepted: false,
         error: err instanceof Error ? err.message : String(err),
       }
-      // Ruling R7's argument applies here too: the device (or the network)
-      // declined a second connection, which is the checklist item's answer,
-      // not a failure of this probe. 'ok' would conflate the two.
-      return refused(findings.concurrent)
+      // The device (or the network) declined a second connection, which is the
+      // checklist item's answer, not a failure of this probe.
+      return declined('refused', findings.concurrent)
     }
   })
 }
