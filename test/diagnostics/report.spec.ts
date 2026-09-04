@@ -353,7 +353,7 @@ describe('items 15-17 — the parameter sweep summary (I-5)', () => {
   it('counts the keys TRIED, not the ones that survived the ACK_UNAUTH guard', () => {
     const result = { ...sample(), steps: paramSteps(12, 3) }
     for (let i = 3; i < 12; i++) {
-      result.findings.parameters.push({ key: `~Key${i}`, answered: true, empty: false })
+      result.findings.parameters.push({ key: `~Key${i}`, outcome: 'answered', empty: false })
     }
     const md = renderMarkdown(result)
     expect(checklistState(md, 17)).toBe('answered')

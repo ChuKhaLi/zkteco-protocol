@@ -8,7 +8,7 @@ import { decodeZkTime } from '../codec/time.js'
 import { FREE_SIZES_OFFSET } from '../commands/info.js'
 import { getUsers } from '../commands/users.js'
 import { getAttendanceLogs } from '../commands/attendance.js'
-import { ZkAuthError, ZkProtocolError } from '../errors.js'
+import { ZkProtocolError } from '../errors.js'
 import { Session } from '../session/Session.js'
 import { TcpTransport } from '../transport/tcp.js'
 import { UdpTransport } from '../transport/udp.js'
@@ -21,10 +21,37 @@ export type KeywordFormVerdict = 'both' | 'nul-only' | 'bare-only' | 'neither'
 
 export interface ParameterFinding {
   key: string
-  /** The device answered rather than refusing with ACK_ERROR. */
-  answered: boolean
+  /**
+   * What the device did with this keyword.
+   *
+   * 'mismatched-echo' is its own outcome because item 15 asks whether the
+   * device echoes the keyword it was asked for. Collapsing it into "not
+   * answered" made a device that answers without echoing indistinguishable
+   * from one that refuses — on the row whose whole subject is the difference.
+   * ACK_UNAUTH is not here: the step records it as `unauthorized` and the key
+   * stays out of this array, so `parameterSummary`'s "tried" count comes from
+   * the steps.
+   */
+  outcome: 'answered' | 'refused' | 'mismatched-echo'
   /** It answered with an empty value. Distinct from not answering — item 16. */
   empty: boolean
+}
+
+/**
+ * Strips control characters from a string the DEVICE chose.
+ *
+ * Device name, platform, OS and firmware are latin1-decoded device bytes that
+ * stop only at NUL, so a name carrying a newline and pipes inserts a fabricated
+ * row into the checklist table of a report meant to be pasted into a public
+ * issue. Redaction and sanitisation both happen where the value is produced,
+ * so every renderer can trust `Findings` (CLAUDE.md).
+ *
+ * C0 (0x00-0x1F), DEL and C1 (0x7F-0x9F) become U+FFFD. Everything at 0xA0 and
+ * above is KEPT: item 7 needs the model name as the device spells it, and item
+ * 20's evidence is exactly those high bytes.
+ */
+export function sanitizeDeviceString(value: string): string {
+  return value.replaceAll(/[\x00-\x1f\x7f-\x9f]/g, '�')
 }
 
 export interface Findings {
@@ -179,16 +206,8 @@ const AB_KEYWORD = DEVICE_PARAM.SERIAL_NUMBER
 const nulTerminated = (keyword: string): Buffer => Buffer.from(`${keyword}\0`, 'latin1')
 const bare = (keyword: string): Buffer => Buffer.from(keyword, 'latin1')
 
-/**
- * Did this reply answer the keyword, as opposed to refusing it?
- *
- * Deliberately does NOT reuse decodeParamReply: that throws on an echo
- * mismatch, and here a mismatched echo is an observation to record rather than
- * an error to raise. The test is only "did the device come back with this
- * keyword and an '='".
- */
-function answeredKeyword(command: number, body: Buffer, keyword: string): boolean {
-  if (command === CMD.ACK_ERROR || command === CMD.ACK_UNAUTH) return false
+/** Did the reply echo this keyword back with an '='? Item 15's test, and only that. */
+function answeredKeyword(body: Buffer, keyword: string): boolean {
   return body.toString('latin1').startsWith(`${keyword}=`)
 }
 
@@ -208,9 +227,9 @@ function answeredKeyword(command: number, body: Buffer, keyword: string): boolea
  */
 async function requestShapeAb(session: Session, keyword: string): Promise<KeywordFormVerdict> {
   const withNul = await session.tryExecute(CMD.OPTIONS_RRQ, nulTerminated(keyword))
-  const nulOk = answeredKeyword(withNul.command, withNul.data, keyword)
+  const nulOk = replyOutcome(withNul.command) === null && answeredKeyword(withNul.data, keyword)
   const without = await session.tryExecute(CMD.OPTIONS_RRQ, bare(keyword))
-  const bareOk = answeredKeyword(without.command, without.data, keyword)
+  const bareOk = replyOutcome(without.command) === null && answeredKeyword(without.data, keyword)
   if (nulOk && bareOk) return 'both'
   if (nulOk) return 'nul-only'
   if (bareOk) return 'bare-only'
@@ -243,22 +262,16 @@ export async function probeIdentity(
   // is otherwise indistinguishable from the answer item 16 exists to collect.
   await runner.run('firmware', async () => {
     const res = await session.tryExecute(CMD.GET_VERSION)
-    // ACK_ERROR is decoded inline rather than thrown, so it is reported here
-    // rather than via classifyError — see Refused's doc comment.
-    if (res.command === CMD.ACK_ERROR) return refused(null)
     // Must be checked before the decode below: this is the read in the
     // library with no other validation of any kind (no echo, no length
-    // check), so an ACK_UNAUTH reply is the case with nothing else to catch
-    // it — readNulTerminated would otherwise decode its (usually empty) body
-    // as if it were a genuine firmware string, indistinguishable from a
-    // device that truly answered with no value. Mirrors
-    // src/commands/device.ts's readFirmware() exactly; unlike that function
-    // this one cannot propagate the throw (runner.run is the boundary), so it
-    // surfaces as classifyError's 'unauthorized' outcome instead.
-    if (res.command === CMD.ACK_UNAUTH) {
-      throw new ZkAuthError('CMD_GET_VERSION answered ACK_UNAUTH', res.data)
-    }
-    const value = readNulTerminated(res.data, 0, res.data.length)
+    // check), so an ACK_ERROR or ACK_UNAUTH reply is the case with nothing
+    // else to catch it — readNulTerminated would otherwise decode its
+    // (usually empty) body as if it were a genuine firmware string,
+    // indistinguishable from a device that truly answered with no value.
+    // Mirrors src/commands/device.ts's readFirmware() exactly.
+    const outcome = replyOutcome(res.command)
+    if (outcome) return declined(outcome, null)
+    const value = sanitizeDeviceString(readNulTerminated(res.data, 0, res.data.length))
     findings.identity.firmwareVersion = value
     return value
   })
@@ -272,25 +285,20 @@ export async function probeIdentity(
   for (const key of Object.values(DEVICE_PARAM)) {
     await runner.run(`param:${key}`, async () => {
       const res = await session.tryExecute(CMD.OPTIONS_RRQ, nulTerminated(key))
-      // Must be checked before answeredKeyword below, for the same reason
-      // getParameters() in src/commands/device.ts carries this guard on its
-      // own tryExecute call: it does not inherit Session.execute's ACK_UNAUTH
-      // guard, and without one here an ACK_UNAUTH reply would just fall into
-      // the "not answered" branch below as outcome 'ok' — a step actively
-      // claiming success on a read the device refused to authorize.
-      if (res.command === CMD.ACK_UNAUTH) {
-        throw new ZkAuthError(`CMD_OPTIONS_RRQ for ${key} answered ACK_UNAUTH`, res.data)
+      const outcome = replyOutcome(res.command)
+      if (outcome === 'unauthorized') return declined('unauthorized', null)
+      if (outcome === 'refused') {
+        findings.parameters.push({ key, outcome: 'refused', empty: false })
+        return declined('refused', null)
       }
-      if (!answeredKeyword(res.command, res.data, key)) {
-        findings.parameters.push({ key, answered: false, empty: false })
-        // The only case left here is ACK_ERROR or a mismatched echo — ACK_UNAUTH
-        // was already sent to the guard above. Only ACK_ERROR is a refusal in
-        // the StepOutcome sense (see Refused's doc comment); a mismatched
-        // echo stays 'ok', findings.parameters unchanged either way.
-        return res.command === CMD.ACK_ERROR ? refused(null) : null
+      if (!answeredKeyword(res.data, key)) {
+        // The device answered — it simply did not echo the keyword. Item 15's
+        // whole question. The step stays 'ok' because a reply arrived.
+        findings.parameters.push({ key, outcome: 'mismatched-echo', empty: false })
+        return null
       }
-      const value = paramValue(res.data) ?? ''
-      findings.parameters.push({ key, answered: true, empty: value === '' })
+      const value = sanitizeDeviceString(paramValue(res.data) ?? '')
+      findings.parameters.push({ key, outcome: 'answered', empty: value === '' })
       // The serial is recorded as presence only; every other identity field
       // carries its value, because item 7 cannot build a compatibility table
       // without the model, platform, OS and firmware.

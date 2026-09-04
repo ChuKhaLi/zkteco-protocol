@@ -363,8 +363,8 @@ function parameterSummary(f: Findings, steps: readonly StepResult[]): string {
   if (f.parameters.length === 0) {
     return `the sweep ran: ${paramSteps.length} keyword(s) tried, ${unauthorized} refused authorization (ACK_UNAUTH), and none returned a value to inspect. That is a device profile finding, not an absence — a session holding the device's comm key would see different answers.`
   }
-  const answered = f.parameters.filter((p) => p.answered).length
-  const empty = f.parameters.filter((p) => p.answered && p.empty).length
+  const answered = f.parameters.filter((p) => p.outcome === 'answered').length
+  const empty = f.parameters.filter((p) => p.outcome === 'answered' && p.empty).length
   return `${paramSteps.length} keyword(s) tried; ${answered} answered, ${empty} of those empty, ${unauthorized} refused authorization (ACK_UNAUTH).`
 }
 

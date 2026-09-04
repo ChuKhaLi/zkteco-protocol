@@ -3,7 +3,7 @@ import { Session } from '../../src/session/Session.js'
 import { TcpTransport } from '../../src/transport/tcp.js'
 import { CMD } from '../../src/codec/commands.js'
 import { StepRunner } from '../../src/diagnostics/step.js'
-import { emptyFindings, probeIdentity } from '../../src/diagnostics/probe.js'
+import { emptyFindings, probeIdentity, sanitizeDeviceString } from '../../src/diagnostics/probe.js'
 import { reply, startEmulator, type Emulator } from '../emulator/index.js'
 
 let running: Emulator | null = null
@@ -90,9 +90,9 @@ describe('probeIdentity', () => {
     const findings = emptyFindings()
     await probeIdentity(session, new StepRunner(), findings)
     const os = findings.parameters.find((p) => p.key === '~OS')
-    expect(os).toMatchObject({ answered: true, empty: true })
+    expect(os).toMatchObject({ outcome: 'answered', empty: true })
     const missing = findings.parameters.find((p) => !PARAMS[p.key as keyof typeof PARAMS] && p.key !== '~OS')
-    expect(missing?.answered).toBe(false)
+    expect(missing?.outcome).toBe('refused')
   })
 
   it('keeps the serial number value out of findings, recording only presence', async () => {
@@ -178,5 +178,74 @@ describe('probeIdentity', () => {
     const findings = emptyFindings()
     await probeIdentity(session, runner, findings)
     expect(JSON.stringify(runner.steps)).not.toContain('SN-123')
+  })
+})
+
+describe('sanitizeDeviceString', () => {
+  it('replaces control characters, which is what lets a name forge a table row', () => {
+    expect(sanitizeDeviceString('MB360\n| 3 | x |')).toBe('MB360�| 3 | x |')
+    expect(sanitizeDeviceString('a\r\tb')).toBe('a��b')
+  })
+
+  it('keeps bytes above 0x9F, which item 20 needs and item 7 prints', () => {
+    expect(sanitizeDeviceString('Ünïcode')).toBe('Ünïcode')
+  })
+})
+
+describe('probeIdentity records what the device answered with', () => {
+  it("distinguishes a device that answers without echoing the keyword from one that refuses", async () => {
+    // A firmware replying `DeviceName=MB360` to `~DeviceName` used to land as
+    // answered: false — indistinguishable from ACK_ERROR, on item 15, whose
+    // question is precisely whether the device echoes.
+    running = await startEmulator({ transport: 'tcp', params: PARAMS, paramEchoOverride: 'DeviceName' })
+    session = await open(running.port)
+    const findings = emptyFindings()
+    const runner = new StepRunner()
+    await probeIdentity(session, runner, findings)
+    const name = findings.parameters.find((p) => p.key === '~DeviceName')
+    expect(name).toMatchObject({ outcome: 'mismatched-echo' })
+    // The device answered, so the step is not a refusal.
+    expect(runner.steps.find((s) => s.name === 'param:~DeviceName')).toMatchObject({ outcome: 'ok' })
+    // And a key this emulator does not carry is still a refusal.
+    expect(findings.parameters.find((p) => p.key === 'MAC')).toMatchObject({ outcome: 'refused' })
+  })
+
+  it('records an answered keyword as answered, with empty separate', async () => {
+    running = await startEmulator({ transport: 'tcp', params: { ...PARAMS, MAC: '' } })
+    session = await open(running.port)
+    const findings = emptyFindings()
+    await probeIdentity(session, new StepRunner(), findings)
+    expect(findings.parameters.find((p) => p.key === '~DeviceName')).toMatchObject({ outcome: 'answered', empty: false })
+    expect(findings.parameters.find((p) => p.key === 'MAC')).toMatchObject({ outcome: 'answered', empty: true })
+  })
+
+  it('sanitises the identity values it records, at the source', async () => {
+    running = await startEmulator({
+      transport: 'tcp',
+      params: { ...PARAMS, '~DeviceName': 'MB360\n| 3 | forged |' },
+    })
+    session = await open(running.port)
+    const findings = emptyFindings()
+    await probeIdentity(session, new StepRunner(), findings)
+    expect(findings.identity.deviceName).toBe('MB360�| 3 | forged |')
+    expect(findings.identity.deviceName).not.toContain('\n')
+  })
+
+  it("records 'unauthorized' without throwing when a parameter answers ACK_UNAUTH", async () => {
+    running = await startEmulator({
+      transport: 'tcp',
+      params: PARAMS,
+      handlers: { [CMD.OPTIONS_RRQ]: (req, state) => [reply(state, req, CMD.ACK_UNAUTH)] },
+    })
+    session = await open(running.port)
+    const runner = new StepRunner()
+    const findings = emptyFindings()
+    await probeIdentity(session, runner, findings)
+    const steps = runner.steps.filter((s) => s.name.startsWith('param:'))
+    expect(steps.length).toBeGreaterThan(0)
+    for (const step of steps) expect(step.outcome).toBe('unauthorized')
+    // Unauthorized keys stay out of the array, as before: parameterSummary
+    // counts them from the steps, so "tried" stays honest.
+    expect(findings.parameters).toEqual([])
   })
 })
