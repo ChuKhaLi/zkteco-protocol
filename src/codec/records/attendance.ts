@@ -11,7 +11,16 @@ export type RecordSize = (typeof KNOWN_SIZES)[number]
  * device behaviour, not evidence of corruption, so it is skipped rather than
  * thrown on. Its exact relationship to the declared totalSize is unverified
  * until real hardware is available — the guards below run on the body AFTER
- * this prefix is removed.
+ * this prefix is removed, so the size is taken to INCLUDE these nine bytes.
+ *
+ * Experiment E8 tried to settle that and could not: NEITHER oracle implements
+ * this prefix. `pyzk` misframes every record when one is present — silently,
+ * exit 0, with a fabricated user id — and `zkteco-js` never reads the declared
+ * size at all. So this is the one decoding behaviour here that rests on
+ * documentation alone; see PROVENANCE.md, *The junk prefix*. If firmware
+ * declares a size that EXCLUDES the prefix, this library refuses with
+ * ZkFramingError rather than returning misframed records, which
+ * test/commands/attendance.spec.ts pins over both transports.
  */
 const JUNK_PREFIX = Buffer.from([0xff, 0x32, 0x35, 0x35, 0x00, 0x00, 0x00, 0x00, 0x00])
 

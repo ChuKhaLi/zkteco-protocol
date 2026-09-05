@@ -697,6 +697,58 @@ parser and the `zkteco-js` reading is a fact about its source, exactly as with
 the free-sizes offsets above. If both inherited the same layout from the same
 documentation, both would agree and both could be wrong.
 
+## The junk prefix — corroborated by nothing
+
+`src/codec/records/attendance.ts` skips a nine-byte prefix
+(`ff 32 35 35 00 00 00 00 00`) at the head of some 40-byte payloads, and takes
+the declared `totalSize` to **include** those nine bytes: the body is
+`data[4 .. 4+totalSize]` and the prefix is stripped afterwards. That file has
+always said the relationship is unverified. Experiment E8 tried to settle it
+and could not, and what it found instead is worth more than the answer would
+have been.
+
+**Neither oracle implements the junk prefix at all.**
+
+*`pyzk` — behaviour, black box (experiment E8).* Three arms, differing in one
+thing each: the prefix served with `totalSize` 129 (this library's model), the
+prefix served with 120 (the alternative), and a control with no prefix and 120.
+The control reads all three rows back, so the rows are not what breaks. Both
+prefix arms print **identical** output — so the declared size carries no
+information about which model `pyzk` uses — and that output is not the served
+rows.
+
+**It fails silently, and that is the finding.** `pyzk` did not refuse. It
+completed, exited 0, printed the right *number* of records, and invented an
+identity for the first: `55`. That is exactly the two ASCII `5` bytes of the
+prefix (`0x35 0x35`), read at the user-id offset of a window shifted by nine.
+The records are misframed and nothing says so. Fixtures:
+`test/fixtures/oracle/bulk/E8-junk-prefix-*.json`; the assertions derive the
+fabricated id from the prefix and the served row rather than hardcoding it, so
+what is pinned is the mechanism.
+
+*`zkteco-js` — source, MIT and readable.* Read before E8 ran, and it has no
+position to offer. `ztcp.js:533` takes `data.data.subarray(4)` and then
+consumes forty bytes at a time while any remain: it never reads the declared
+size, and there is no junk-prefix handling anywhere in the file.
+
+**So this library's prefix stripping rests on documentation alone.** It is the
+one decoding behaviour here that neither independent implementation
+corroborates — not because they disagree, but because neither has the concept.
+Do not write that up as agreement in either direction.
+
+**What this library does with the unverified alternative, pinned rather than
+described.** If a device declares a size that excludes the prefix, this library
+reads nine bytes too few, the remainder stops dividing by the record count, and
+`getAttendanceLogs` throws `ZkFramingError`. It refuses where `pyzk` fabricates.
+Until E8 nothing served that model — `attendanceBody` declares
+`prefixed.length`, so every junk-prefix test exercised exactly the assumption it
+was testing — and `test/commands/attendance.spec.ts` now covers it over both
+transports.
+
+That refusal is the right failure to have, but it is still a failure: on such a
+device this library returns no attendance at all. Which of the two models real
+firmware uses remains open, and only hardware closes it.
+
 ## Unverified field offsets
 
 The byte offsets `CMD_GET_FREE_SIZES` uses for `userCount`, `recordCount`, and

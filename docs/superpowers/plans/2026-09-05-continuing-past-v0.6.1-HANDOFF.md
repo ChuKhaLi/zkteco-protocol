@@ -3,11 +3,11 @@
 **Date:** 2026-09-05
 **For:** a session picking this repository up cold
 **Repository:** https://github.com/ChuKhaLi/zkteco-protocol — public, MIT, `main`
-**State:** 46 test files, 777 tests passed, 3 skipped, zero runtime dependencies, with
-`package.json` and `src/index.ts` both reading `0.6.1`. 58 oracle fixtures under
-`test/fixtures/oracle/bulk/`. Experiment E7 landed after the tag and added eight tests; it changed
-one docblock in `src/` and no behaviour at all, so npm's `0.6.1` still describes the published
-behaviour exactly.
+**State:** 46 test files, 784 tests passed, 3 skipped, zero runtime dependencies, with
+`package.json` and `src/index.ts` both reading `0.6.1`. 61 oracle fixtures under
+`test/fixtures/oracle/bulk/`. Experiments E7 and E8 landed after the tag and added fifteen tests
+between them; they changed two docblocks in `src/` and no behaviour at all, so npm's `0.6.1` still
+describes the published behaviour exactly.
 **Tag:** `v0.6.1` is applied, and `0.6.1` is published to npm as `latest` **with a provenance
 attestation and zero dependencies**; the GitHub Release exists. `v0.6.0` remains at `b04cfde`. CI
 was green on all eight jobs for every merge in this cycle, `drill` on Linux and Windows included.
@@ -17,8 +17,10 @@ This continues `2026-09-05-continuing-past-v0.6.0-HANDOFF.md`, which continues s
 Everything in them remains accurate about the trees they describe. Read `CLAUDE.md` first, then
 `docs/RELEASING.md` if you intend to release anything.
 
-This was a small cycle: two experiments that produced evidence and changed no shipped behaviour,
-and one three-line fix that closed the last item on v0.6's backlog a consumer could observe.
+This was a small cycle: three experiments that produced evidence and changed no shipped behaviour,
+and one three-line fix that closed the last item on v0.6's backlog a consumer could observe. The
+third experiment failed to settle its question, which is recorded as its result rather than tidied
+away.
 
 ---
 
@@ -122,6 +124,46 @@ fields swapped in each of the three dialects, a status read from some other
 byte, the served bytes losing their discriminating property in two different
 ways, a dialect parsing nothing, and UDP disagreeing with TCP.
 
+## 1c. Experiment E8 — the junk prefix, and an experiment that concluded nothing
+
+**The question.** `src/codec/records/attendance.ts` skips a nine-byte prefix at the head of some
+40-byte payloads and takes the declared `totalSize` to **include** those bytes. The file has always
+said the relationship is unverified. Nothing in this repository's own suite had ever served the
+other model, because `attendanceBody` declares `prefixed.length` — every junk-prefix test to date
+exercised exactly the assumption it was testing.
+
+**Three arms, one control.** Prefix with size 129 (this library's model), prefix with size 120 (the
+alternative), and no prefix with size 120. The control exists so a failure is attributable: without
+it, both arms failing is equally consistent with "pyzk rejects both models" and "pyzk cannot read
+these rows at all".
+
+**The result: E8 cannot settle it, and the framing said so before the run.** The control reads all
+three rows back. Both prefix arms print **identical** output, so the declared size carries no
+information about which model `pyzk` uses — and that output is not the served rows. `pyzk` has no
+junk-prefix handling at all.
+
+**It fails silently, which is the part worth carrying forward.** `pyzk` did not refuse: it
+completed, exited 0, printed the right *number* of records, and invented an identity for the first
+one — `55`, exactly the two ASCII `5` bytes of the prefix read at the user-id offset of a window
+shifted by nine. The test derives that from the prefix and the served row rather than hardcoding it,
+so what is pinned is the mechanism. **Counting printed lines would have called both arms a
+success**, which is this repository's signature defect observed in somebody else's implementation.
+
+**The second oracle has no position either**, and was read before the run rather than after:
+`zkteco-js`'s `ztcp.js:533` skips the four-byte header and consumes forty bytes at a time while any
+remain. It never reads the declared size and never looks for a prefix.
+
+**So the prefix stripping is corroborated by nothing** — the only decoding behaviour in this library
+of which that is true. Not because the oracles disagree, but because neither has the concept. Do not
+write it up as agreement in either direction.
+
+**What this library does under the untested model, now pinned.** It reads nine bytes too few, the
+remainder stops dividing by the record count, and `getAttendanceLogs` throws `ZkFramingError` — it
+refuses where `pyzk` fabricates. `test/commands/attendance.spec.ts` covers that over both
+transports, and two mutations confirm the test: removing the known-size guard and removing the
+prefix strip each redden it. That refusal is the right failure to have, but it is still a failure —
+on such a device this library returns no attendance at all.
+
 ## 2. The pyzk driver grew a second mode, and the GPL boundary held
 
 `tools/oracle/capture_pyzk.py`'s `argv[4]` was a boolean recognising only `read-users`. It is now a
@@ -194,11 +236,11 @@ manual, was done once, and only on Windows.
 
 ## 5. What the checks establish now
 
-- `pnpm test` — 777 passed, 3 skipped, 46 files. `pnpm typecheck` clean. Run `pnpm build` first; the
+- `pnpm test` — 784 passed, 3 skipped, 46 files. `pnpm typecheck` clean. Run `pnpm build` first; the
   smoke test reads `dist/`.
 - `pnpm release:drill` — 14/14 locally (Windows) and on `ubuntu-latest` and `windows-latest` in CI.
 - **The oracle fixtures regenerate byte-identically.** `pnpm oracle:experiments` on an unchanged
-  tree leaves all **fifty-eight** untouched. Any churn is a signal; investigate it rather than
+  tree leaves all **sixty-one** untouched. Any churn is a signal; investigate it rather than
   committing it.
 - CI runs the drill on both operating systems for every push to `main` and every pull request. A
   push to a feature branch with no open pull request runs nothing.
@@ -289,6 +331,12 @@ implementation inherited the same wrong offset from the same documentation, all 
 and all of them would be wrong.
 
 Checklist item 4 retires that, and it needs a device.
+
+E8 (§1c) is the sharpest version of the argument this cycle produced, because it is the experiment
+that **failed**. The junk prefix is real enough to be in the documentation and in this library's
+decoder, and neither independent implementation has heard of it. No amount of oracle work closes
+that: you cannot ask two parsers about a case neither parses. One device sending one attendance
+payload with that prefix settles in a second what three experiments could not touch.
 
 E7 (§1b) shows the same shape from the other end. It settled which two bytes carry the
 model-dependent fields — three implementations' worth of agreement — and then ran straight into a

@@ -84,7 +84,13 @@ experiment showed.
   v0.1. E6 could not ask it: it served both bytes as zero, so `0|0` proved
   nothing.
 
-Every one of these says which byte or word a *parser* reads. None says what a
+- **E8** — the nine-byte junk prefix against the declared `totalSize`: served
+  with a size that counts it, a size that does not, and a control with no
+  prefix. It could not settle the question, and that is its result — neither
+  oracle implements the prefix, so this library's stripping is corroborated by
+  nothing. `pyzk` misframes silently; `zkteco-js` never reads the declared size.
+
+Every one of these says what a *parser* does. None says what a
 device puts there — see PROVENANCE.md, *Both oracles agree on the offsets* and
 *The status/punch mapping*, for why that distinction is the whole point, and
 for the one case where the two oracles read the same bytes under conflicting
