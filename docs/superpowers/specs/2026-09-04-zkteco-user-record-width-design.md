@@ -1,7 +1,11 @@
 # User record width — design (v0.6)
 
 **Date:** 2026-09-04
-**Status:** approved in brainstorming; implementation plan to follow
+**Status:** shipped in v0.6.0 (`b04cfde` on `main`, tagged `v0.6.0`, published to npm). Implemented
+by `docs/superpowers/plans/2026-09-04-zkteco-user-record-width.md`. Three of this document's own
+claims were disproved during implementation and carry "Corrected 2026-09-04" blocks below; §3
+decision 3 and §6.2 carry a further correction made at final review, when the degradation guarantee
+turned out to need a reordering to become true.
 **Predecessors:** `2026-09-02-zkteco-library-correctness-design.md` (v0.5 sub-project A) and
 `2026-09-03-zkteco-diagnostics-evidence-design.md` (sub-project B). Both are merged; `v0.5.0` is
 tagged at `155fcbc` and published. This document continues them rather than superseding anything.

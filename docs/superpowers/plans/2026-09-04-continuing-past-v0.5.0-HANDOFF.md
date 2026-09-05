@@ -3,8 +3,10 @@
 **Date:** 2026-09-04
 **For:** a session picking this repository up cold
 **Repository:** https://github.com/ChuKhaLi/zkteco-protocol — public, MIT, `main`
-**State:** the v0.5 work — 46 test files, 724 tests passed, 3 skipped, zero runtime dependencies.
-`package.json` and `src/index.ts` both read `0.5.0`.
+**State, as of v0.5.0 and not since:** 46 test files, 724 tests passed, 3 skipped, zero runtime
+dependencies, with `package.json` and `src/index.ts` both reading `0.5.0`. **v0.6.0 has shipped
+since**; for the current state read `2026-09-05-continuing-past-v0.6.0-HANDOFF.md`, which continues
+this one. The sentences below are true of the v0.5 tree and are left that way deliberately.
 **Tag:** `v0.5.0` is applied, at `155fcbc` on `main`, and `0.5.0` is published to npm as `latest`.
 Both sub-projects below are merged; §1's steps are history, not work.
 
