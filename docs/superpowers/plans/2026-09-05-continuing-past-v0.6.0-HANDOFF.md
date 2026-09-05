@@ -8,10 +8,18 @@ v0.6.0 tag; experiment E5 added five after it and E6 six more, see §2 and §8).
 This line previously read 761 and "four" while §5 read 762 and "five" — the same count stated
 two ways, one of them wrong. 762 is what the tree measured before E6; §5 was right.
 `package.json` and `src/index.ts` both read `0.6.1`.
-**Tag:** `v0.6.1` is applied on `main`; `v0.6.0` remains at `b04cfde`, and `0.6.0` was published to
-npm as `latest` with provenance. CI was green on all eight jobs for that commit — including
-`drill (ubuntu-latest)`, which is the first time this cycle's code ran the packed-tarball drill on
-Linux. Nothing about the release remains to be done.
+**Tag:** `v0.6.1` is applied and **`0.6.1` is published to npm as `latest`, with a provenance
+attestation and zero dependencies**; the GitHub Release exists. `v0.6.0` remains at `b04cfde`. CI
+was green on all eight jobs for both merges, `drill` on Linux and Windows included. Nothing about
+the release remains to be done.
+
+After 0.6.1 published, two things were checked that the pipeline does not check itself, and both
+are written up in `docs/RELEASING.md` §5. The published tarball's shasum does **not** match a local
+`npm pack` of the tagged commit — but all twelve unpacked files are byte-identical, so the
+difference is gzip framing between ubuntu-latest/Node 24 and Windows, not content. Do not read a
+shasum mismatch as a broken build. And `npm install zkteco-protocol@0.6.1` into an empty directory,
+followed by driving the *installed* CLI against `tools/emulator-serve.ts`, produced exit 0 and a
+correctly redacted report — the first time the artifact a consumer downloads has been run here.
 
 This continues `2026-09-04-continuing-past-v0.5.0-HANDOFF.md`, which continues six before it.
 Everything in them remains accurate about the trees they describe. Read `CLAUDE.md` first, then
@@ -124,7 +132,10 @@ than "does this look right".
   behaviour. **That sentence stopped being true at 0.6.1**, which narrowed the `getUsers` catch —
   the first change since the tag that a consumer could observe, and the reason a version moved.
 - `pnpm release:drill` — 14/14, run on the merged tree locally (Windows) **and** on
-  `ubuntu-latest` and `windows-latest` in CI for `b04cfde`.
+  `ubuntu-latest` and `windows-latest` in CI, for `b04cfde` and for both merges since.
+- **The published 0.6.1 artifact itself was installed from the registry and driven**, which no
+  automated check does — the drill packs its own tarball. `docs/RELEASING.md` §5 records what that
+  established and what it did not: one manual run, on one operating system.
 - **The oracle fixtures regenerate byte-identically.** Re-running `pnpm oracle:experiments` on an
   unchanged tree leaves all fifty-four existing fixtures untouched, so the captures are reproducible
   rather than recorded once and trusted. That is a stronger claim than any single capture, and it

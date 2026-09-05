@@ -169,10 +169,27 @@ Stated because this project's signature defect is a check that reports more than
 - **The publish job rebuilds.** It publishes a build of the same commit with the same frozen
   lockfile that the drill ran against — not literally the bytes the drill installed. What the drill
   establishes is that a build of this commit packs, installs with zero transitive dependencies, and
-  produces a correctly redacted report. One data point against this being a real gap: 0.4.2's
-  published tarball has shasum `fd2920178c1059d013ec5ae96dd7987c0707f37e`, which a fresh local
-  `npm pack` of the same commit reproduces exactly. That is one sample on one machine, not a
-  determinism guarantee — but the gap is narrower than this bullet used to imply.
+  produces a correctly redacted report.
+
+  **Do not judge this by the tarball shasum.** 0.4.2's published tarball has shasum
+  `fd2920178c1059d013ec5ae96dd7987c0707f37e`, which a fresh local `npm pack` of that commit
+  reproduces exactly — but 0.4.2 was published by hand, from the same machine. **0.6.1, published by
+  the pipeline, does not match**: its registry shasum is `a79fa30c…` against `df73b2c4…` for a local
+  pack of the tagged commit. That difference is gzip framing, not content. Both archives were
+  unpacked and compared file by file: **all twelve files are byte-identical**, `dist/` included. The
+  archives differ because ubuntu-latest on Node 24 and Windows compress the same bytes differently.
+
+  So the useful check is content equality, not shasum equality, and a future reader who compares
+  shasums alone will conclude the build is non-reproducible when it is not.
+
+- **The registry round trip was exercised for 0.6.1, and it is not the same check as the drill.**
+  The drill installs a tarball this repository packed. After 0.6.1 published,
+  `npm install zkteco-protocol@0.6.1` was run in an empty directory (1 package, 0 transitive) and
+  the *installed* `npx zkteco-protocol` was driven against `tools/emulator-serve.ts`: exit 0, the
+  emulator's serial absent from both the Markdown report and the JSON sidecar, `MB360` present twice
+  so the absence is meaningful, and checklist item 1 naming `--raw-capture` as the remedy. That is
+  the first time the artifact a consumer actually downloads has been run in this project's history.
+  It is a manual check, not automated, and it has been done once, on Windows.
 - **A CommonJS TypeScript consumer is typechecked, on one TypeScript version.** The drill writes a
   `require()`-style consumer into the installed-tarball directory and compiles it under
   `module: node16` with this repository's own `typescript` — the resolution mode that produced
