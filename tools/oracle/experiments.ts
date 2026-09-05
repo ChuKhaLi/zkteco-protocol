@@ -169,9 +169,8 @@ const VARIANTS: Variant[] = [
   { name: 'E4-users-28-udp', experiment: 'E4', transport: 'udp', options: { userRecordSize: 28 }, freeSizesUserCount: USERS.length },
   // E5: exactly one nonzero word per run, swept across the whole reply. See
   // FREE_SIZES_SWEEP_OFFSETS above for what this can and cannot conclude.
-  // TCP only: the question is which word the parser reads, and nothing about
-  // that is transport-specific. A positive offset is re-run over UDP below
-  // once the sweep has said which offsets are positive.
+  // The sweep itself is TCP: the question is which word the parser reads, and
+  // the answer should not depend on the transport.
   ...FREE_SIZES_SWEEP_OFFSETS.map((offset): Variant => ({
     name: `E5-free-sizes-count-at-${offset}-tcp`,
     experiment: 'E5',
@@ -180,6 +179,27 @@ const VARIANTS: Variant[] = [
     freeSizesUserCount: USERS.length,
     freeSizesCountOffset: offset,
   })),
+  // "Should not depend on the transport" is an assumption until something
+  // checks it, so the sweep's result is re-run over UDP as a PAIR. The
+  // positive alone would not do: a UDP run that reads at offset 16 shows only
+  // that UDP reads something, not that it reads the same word. The negative
+  // beside it is what makes the pair evidence that UDP behaves as TCP did.
+  {
+    name: 'E5-free-sizes-count-at-16-udp',
+    experiment: 'E5',
+    transport: 'udp',
+    options: {},
+    freeSizesUserCount: USERS.length,
+    freeSizesCountOffset: 16,
+  },
+  {
+    name: 'E5-free-sizes-count-at-20-udp',
+    experiment: 'E5',
+    transport: 'udp',
+    options: {},
+    freeSizesUserCount: USERS.length,
+    freeSizesCountOffset: 20,
+  },
 ]
 
 async function runVariant(v: Variant): Promise<void> {

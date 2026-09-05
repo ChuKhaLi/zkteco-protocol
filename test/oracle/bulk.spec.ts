@@ -144,4 +144,25 @@ describe('free-sizes offset sweep (E5)', () => {
     expect(fixture.printed).toEqual(fixture.served.users)
     expect(fixture.sent.some((p) => p.command === PREPARE_BUFFER)).toBe(true)
   })
+
+  // The sweep runs over TCP. That the answer does not depend on the transport
+  // is an assumption until something checks it, so the result is re-run over
+  // UDP as a PAIR. A UDP positive on its own would show only that UDP reads
+  // some count, not that it reads the SAME word; the negative beside it is
+  // what makes the two fixtures evidence rather than a restatement.
+  it('holds over UDP too, positive and negative', () => {
+    const positive = JSON.parse(
+      readFileSync(path.join(DIR, 'E5-free-sizes-count-at-16-udp.json'), 'utf8'),
+    ) as SweepFixture
+    expect(positive.served.freeSizesReply.userCountOffset).toBe(LIBRARY_USER_COUNT_OFFSET)
+    expect(positive.printed).toEqual(positive.served.users)
+    expect(positive.sent.some((p) => p.command === PREPARE_BUFFER)).toBe(true)
+
+    const negative = JSON.parse(
+      readFileSync(path.join(DIR, 'E5-free-sizes-count-at-20-udp.json'), 'utf8'),
+    ) as SweepFixture
+    expect(negative.served.freeSizesReply.userCountOffset).toBe(20)
+    expect(negative.printed).toEqual([])
+    expect(negative.sent.some((p) => p.command === PREPARE_BUFFER)).toBe(false)
+  })
 })
