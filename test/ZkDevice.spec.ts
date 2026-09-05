@@ -3,6 +3,7 @@ import { CMD } from '../src/codec/commands.js'
 import { START_MARKER } from '../src/codec/framing.js'
 import { ZkDevice } from '../src/ZkDevice.js'
 import { ZkConnectionError } from '../src/errors.js'
+import type { Session } from '../src/session/Session.js'
 import { reply, startEmulator, type Emulator } from './emulator/index.js'
 import type { ZkUser } from '../src/types.js'
 
@@ -219,4 +220,39 @@ describe('ZkDevice defaults', () => {
     await device.disconnect()
     device = null
   })
+})
+
+it('lets a non-protocol error out of the count read instead of degrading', async () => {
+  // The other side of the swallow above. Every failure Session.exchange can
+  // produce is a ZkError, so no device reply can reach this path: a
+  // TypeError or RangeError raised inside getInfo is a bug in this library,
+  // and "no count" is not a defined answer to a bug. Before the catch was
+  // narrowed, getUsers() returned eight users here and the TypeError was
+  // gone.
+  //
+  // Reaching a private field is the seam, and it is the only one available.
+  // ZkDeviceOptions is published surface that test/smoke.spec.ts pins, so
+  // widening it with a test-only injection point would be the worse trade.
+  // The substitution is as small as it can be: GET_FREE_SIZES throws, every
+  // other command goes to the real Session.execute, so the user transfer
+  // below is genuine traffic against the emulator.
+  const eight = Array.from({ length: 8 }, (_, i) => emUser(i + 1, String(i + 1), `U${i + 1}`))
+  running = await startEmulator({ transport: 'tcp', users: eight })
+  device = new ZkDevice({ host: '127.0.0.1', port: running.port })
+  await device.connect()
+
+  const boom = new TypeError('not a device failure')
+  const session = (device as unknown as { session: Session }).session
+  const realExecute = session.execute.bind(session)
+  session.execute = ((command: number, data?: Buffer) =>
+    command === CMD.GET_FREE_SIZES ? Promise.reject(boom) : realExecute(command, data)) as Session['execute']
+
+  // Identity, not instanceof: the assertion is that THIS error came back out,
+  // not that something of the same shape was constructed on the way.
+  await expect(device.getUsers()).rejects.toBe(boom)
+  // And that it came from the count read rather than from anything earlier —
+  // a test that threw before the transfer would satisfy the line above while
+  // proving nothing about the catch.
+  expect(running.received.some((p) => p.command === CMD.PREPARE_BUFFER)).toBe(true)
+  expect(running.received.some((p) => p.command === CMD.GET_FREE_SIZES)).toBe(false)
 })
