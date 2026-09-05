@@ -318,3 +318,133 @@ describe('free-sizes record-count offset sweep (E6)', () => {
     expect(preparedFor(negative)).toEqual([])
   })
 })
+
+/**
+ * The two model-dependent bytes, per dialect, in the order
+ * `mapStatusAndVerify` receives them: `[status, punch]`.
+ *
+ * Hardcoded rather than imported from `src/codec/records/attendance.ts`, for
+ * the same reason the offsets above are. These fixtures are a fact about
+ * `pyzk`; importing the library's own numbers would let an edit to the library
+ * move the expectation with it, and the corroboration claim in PROVENANCE.md
+ * would keep passing while quietly coming to mean something else.
+ */
+const STATUS_PUNCH_OFFSETS: Readonly<Record<number, readonly [number, number]>> = {
+  40: [26, 31],
+  16: [8, 9],
+  8: [2, 7],
+}
+
+interface RecordFixture extends Fixture {
+  mode: string
+  stderr: string
+  served: { users: string[]; records: { size: number; rows: number; rowsHex: string[] } }
+}
+
+function recordFixture(name: string): RecordFixture {
+  const file = path.join(DIR, `${name}.json`)
+  expect(existsSync(file)).toBe(true)
+  return JSON.parse(readFileSync(file, 'utf8')) as RecordFixture
+}
+
+/** The `status` and `punch` bytes actually served, read out of the row itself. */
+function servedPair(fixture: RecordFixture, row: number): [number, number] {
+  const bytes = Buffer.from(fixture.served.records.rowsHex[row] as string, 'hex')
+  const [statusAt, punchAt] = STATUS_PUNCH_OFFSETS[fixture.served.records.size] as readonly [number, number]
+  return [bytes.readUInt8(statusAt), bytes.readUInt8(punchAt)]
+}
+
+/** The `status` and `punch` pyzk printed, out of `user_id|timestamp|status|punch`. */
+function printedPair(fixture: RecordFixture, row: number): [number, number] {
+  const fields = (fixture.printed[row] as string).split('|')
+  expect(fields).toHaveLength(4)
+  return [Number(fields[2]), Number(fields[3])]
+}
+
+// E7 asks which BYTE each implementation reads as `status` and which as
+// `punch` — the hypothesis `mapStatusAndVerify` has carried since v0.1, whose
+// own docblock promises this experiment and had never had it.
+//
+// E6 could not answer it and did not try: it served both bytes as ZERO, so
+// `0|0` is what a parser reading the right byte and one reading any other zero
+// byte would equally print. E7 serves six pairwise-distinct values that occur
+// nowhere else in their row — the test below pins that property, because
+// without it every assertion here could pass vacuously.
+//
+// What it does NOT establish: what those fields MEAN on a device (in/out
+// versus finger/card/face), which is semantics no emulator can settle and why
+// the README returns both as raw numbers; and what a device puts there at all.
+// PROVENANCE.md keeps those distinctions, and records that the second oracle
+// reads the same two bytes under DIFFERENT NAMES.
+describe('attendance status/punch mapping (E7)', () => {
+  const dialects = [
+    { name: 'E7-status-punch-40-tcp', size: 40 },
+    { name: 'E7-status-punch-16-tcp', size: 16 },
+    { name: 'E7-status-punch-8-tcp', size: 8 },
+  ] as const
+
+  it.each(dialects)('$name served bytes that can discriminate at all', ({ name, size }) => {
+    const fixture = recordFixture(name)
+    expect(fixture.served.records.size).toBe(size)
+    expect(fixture.mode).toBe('read-attendance')
+
+    // The property that makes every other assertion in this block mean
+    // something. Each served value must be unique WITHIN ITS OWN ROW, so a
+    // parser reading any other byte of that row cannot produce the same
+    // number by coincidence — and the six values must be distinct across
+    // rows, so a parser reading a fixed row cannot pass either.
+    const seen: number[] = []
+    for (let row = 0; row < fixture.served.records.rows; row++) {
+      const bytes = Buffer.from(fixture.served.records.rowsHex[row] as string, 'hex')
+      expect(bytes).toHaveLength(size)
+      const [status, punch] = servedPair(fixture, row)
+      expect(status).not.toBe(0)
+      expect(punch).not.toBe(0)
+      const [statusAt, punchAt] = STATUS_PUNCH_OFFSETS[size] as readonly [number, number]
+      for (let i = 0; i < bytes.length; i++) {
+        if (i === statusAt || i === punchAt) continue
+        expect(bytes.readUInt8(i)).not.toBe(status)
+        expect(bytes.readUInt8(i)).not.toBe(punch)
+      }
+      seen.push(status, punch)
+    }
+    expect(new Set(seen).size).toBe(seen.length)
+  })
+
+  it.each(dialects)('$name: pyzk read both bytes at the offsets this library reads', ({ name }) => {
+    const fixture = recordFixture(name)
+    expect(fixture.completed).toBe(true)
+    expect(fixture.exitCode).toBe(0)
+    expect(fixture.printed).toHaveLength(fixture.served.records.rows)
+    // Derived from the served bytes rather than written out: a hardcoded
+    // "17|34" would restate the answer instead of checking that what pyzk
+    // printed is what sat at those two offsets.
+    for (let row = 0; row < fixture.served.records.rows; row++) {
+      expect(printedPair(fixture, row)).toEqual(servedPair(fixture, row))
+    }
+  })
+
+  it('pyzk parsed all three dialects, so none of them is an absence of evidence', () => {
+    // The framing written before the run said a dialect pyzk cannot read
+    // records NO evidence rather than a disagreement. In the event it read
+    // all three, and this asserts that rather than leaving a reader to infer
+    // it from three passing tests that would also pass if a body came back
+    // empty.
+    for (const { name } of dialects) {
+      const fixture = recordFixture(name)
+      expect(fixture.printed.length).toBeGreaterThan(0)
+      expect(fixture.stderr).toBe('')
+    }
+  })
+
+  it('holds over UDP for the 40-byte dialect', () => {
+    // Cheaper than E6's positive/negative pair, and enough: E6 already showed
+    // this reply's handling does not differ by transport, so what is checked
+    // here is only that the RECORD decoding does not either. The two fixtures
+    // must agree line for line, not merely both be non-empty.
+    const tcp = recordFixture('E7-status-punch-40-tcp')
+    const udp = recordFixture('E7-status-punch-40-udp')
+    expect(udp.served.records.rowsHex).toEqual(tcp.served.records.rowsHex)
+    expect(udp.printed).toEqual(tcp.printed)
+  })
+})
