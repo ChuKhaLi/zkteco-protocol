@@ -3,23 +3,20 @@
 **Date:** 2026-09-05
 **For:** a session picking this repository up cold
 **Repository:** https://github.com/ChuKhaLi/zkteco-protocol — public, MIT, `main`
-**State:** 46 test files, 768 tests passed, 3 skipped, zero runtime dependencies (757 at the
-v0.6.0 tag; experiment E5 added five after it and E6 six more, see §2 and §8).
-This line previously read 761 and "four" while §5 read 762 and "five" — the same count stated
-two ways, one of them wrong. 762 is what the tree measured before E6; §5 was right.
-`package.json` and `src/index.ts` both read `0.6.1`.
-**Tag:** `v0.6.1` is applied and **`0.6.1` is published to npm as `latest`, with a provenance
-attestation and zero dependencies**; the GitHub Release exists. `v0.6.0` remains at `b04cfde`. CI
-was green on all eight jobs for both merges, `drill` on Linux and Windows included. Nothing about
-the release remains to be done.
+**State, as of v0.6.0 plus experiment E5 and not since:** 46 test files, 762 tests passed, 3
+skipped, zero runtime dependencies (757 at the v0.6.0 tag; experiment E5 added five after it, see
+§2), with `package.json` and `src/index.ts` both reading `0.6.0`. **0.6.1 has shipped since**; for
+the current state read `2026-09-05-continuing-past-v0.6.1-HANDOFF.md`, which continues this one.
+The sentences below are true of that tree and are left that way deliberately.
+**Tag:** `v0.6.0` is applied, at `b04cfde` on `main`, and `0.6.0` is published to npm as `latest`
+with provenance. CI was green on all eight jobs for that commit — including
+`drill (ubuntu-latest)`, which is the first time this cycle's code ran the packed-tarball drill on
+Linux. Nothing about the release remains to be done.
 
-After 0.6.1 published, two things were checked that the pipeline does not check itself, and both
-are written up in `docs/RELEASING.md` §5. The published tarball's shasum does **not** match a local
-`npm pack` of the tagged commit — but all twelve unpacked files are byte-identical, so the
-difference is gzip framing between ubuntu-latest/Node 24 and Windows, not content. Do not read a
-shasum mismatch as a broken build. And `npm install zkteco-protocol@0.6.1` into an empty directory,
-followed by driving the *installed* CLI against `tools/emulator-serve.ts`, produced exit 0 and a
-correctly redacted report — the first time the artifact a consumer downloads has been run here.
+**Corrected.** The state line above read 761 and "four" while §5 read 762 and "five" — one quantity
+stated two ways, one of them wrong. 762 is what the tree measured, so §5 was right and the state
+line was not. §5's fixture count read "thirty" and is likewise corrected to thirty-two: E5's UDP
+pair had already taken `test/fixtures/oracle/bulk/` there before this handoff was written.
 
 This continues `2026-09-04-continuing-past-v0.5.0-HANDOFF.md`, which continues six before it.
 Everything in them remains accurate about the trees they describe. Read `CLAUDE.md` first, then
@@ -127,17 +124,13 @@ than "does this look right".
 
 ## 5. What the checks establish now
 
-- `pnpm test` — 769 passed, 3 skipped, 46 files. `pnpm typecheck` clean. The tag `v0.6.0` was cut at
-  757; experiments E5 and E6 added five and six tests after it without changing any shipped
-  behaviour. **That sentence stopped being true at 0.6.1**, which narrowed the `getUsers` catch —
-  the first change since the tag that a consumer could observe, and the reason a version moved.
+- `pnpm test` — 762 passed, 3 skipped, 46 files. `pnpm typecheck` clean. The tag `v0.6.0` was cut at
+  757; experiment E5 added five tests after it without changing any shipped behaviour, so npm's
+  `0.6.0` still describes the published code exactly.
 - `pnpm release:drill` — 14/14, run on the merged tree locally (Windows) **and** on
-  `ubuntu-latest` and `windows-latest` in CI, for `b04cfde` and for both merges since.
-- **The published 0.6.1 artifact itself was installed from the registry and driven**, which no
-  automated check does — the drill packs its own tarball. `docs/RELEASING.md` §5 records what that
-  established and what it did not: one manual run, on one operating system.
+  `ubuntu-latest` and `windows-latest` in CI for `b04cfde`.
 - **The oracle fixtures regenerate byte-identically.** Re-running `pnpm oracle:experiments` on an
-  unchanged tree leaves all fifty-four existing fixtures untouched, so the captures are reproducible
+  unchanged tree leaves all thirty-two existing fixtures untouched, so the captures are reproducible
   rather than recorded once and trusted. That is a stronger claim than any single capture, and it
   is the check that would notice `pyzk` changing behaviour under a version bump.
 - CI runs the drill on both operating systems for every push to `main` and every pull request. A
@@ -149,38 +142,34 @@ than "does this look right".
 ## 6. The small backlog v0.6 left
 
 None of it blocks anything. All of it was seen, judged, and deliberately deferred. Ordered by
-value, not by effort. The item that headed this list — the unscoped `catch` — is closed below;
-nothing remaining changes behaviour a consumer could observe.
+value, not by effort — item 1 is the only one that changes behaviour a consumer could observe.
 
-1. **`ZkDevice.getUsers` open-codes `readUserStream` + `parseUserData`**, duplicating what
+1. **`ZkDevice.getUsers`'s `catch` is unscoped** — it catches any thrown value, not just protocol
+   errors, so a genuine programmer error inside `getInfo` degrades to "no count" instead of
+   surfacing. The final review judged that narrowing it to `ZkError` would be strictly better and
+   does **not** contradict the spec's §6.2, which mandates a comment rather than a bare `catch`.
+   The cheapest real improvement on this list.
+2. **`ZkDevice.getUsers` open-codes `readUserStream` + `parseUserData`**, duplicating what
    `getUsers` does, so a future change to `getUsers` will not reach the facade. Inherent to needing
    the count *between* the two halves; worth a comment if not a refactor.
-2. **The new timeout test is TCP-only**, matching its `ACK_UNAUTH` sibling. The behaviour sits above
+3. **The new timeout test is TCP-only**, matching its `ACK_UNAUTH` sibling. The behaviour sits above
    the transport split, so a UDP twin would re-prove the same path.
-3. **`test/ZkDevice.spec.ts`'s `timeoutMs: 200`** is the tightest deadline in the suite. Stable
+4. **`test/ZkDevice.spec.ts`'s `timeoutMs: 200`** is the tightest deadline in the suite. Stable
    across every run so far; if it ever flakes, raise the deadline rather than loosen the assertion.
-4. **The two `--out=` / `--raw-capture=` empty-string guards in `src/cli.ts` are near-identical.**
+5. **The two `--out=` / `--raw-capture=` empty-string guards in `src/cli.ts` are near-identical.**
    Left alone on purpose: their comments record genuinely different stakes (an unredacted file
    versus a late failure), and a shared helper would erase that distinction.
 
 **Closed since this handoff was first written:**
 
-- ~~`FREE_SIZES_OFFSET` corroborated by nothing~~ — experiments E5 and E6 (§8). Not verified;
-  corroborated, and only for `userCount` and `recordCount`. `recordCapacity` still rests on the
-  `zkteco-js` source reading alone.
+- ~~`FREE_SIZES_OFFSET` corroborated by nothing~~ — experiment E5 (§8). Not verified; corroborated.
 - ~~`chore/post-merge-cleanups` is a stale remote branch~~ — it was already gone from the remote;
   what remained was a stale local tracking ref, now pruned.
 - ~~The v0.6.0 release notes omit the residual~~ — written; the GitHub Release now carries what the
   cycle did and did not close.
-- ~~`ZkDevice.getUsers`'s `catch` is unscoped~~ — narrowed to `ZkError` and released as **0.6.1**.
-  Worth knowing what this did and did not move: every failure `Session.exchange` can produce is a
-  `ZkError`, so **no device-facing behaviour changed at all** and the dead-session trade in §3
-  stands exactly as it did. What stops now is a `TypeError` or `RangeError` from inside `getInfo`
-  being turned into "no count". Both directions are tested, and both were confirmed by mutation:
-  reverting to the bare `catch` reddens the propagation test alone, and swallowing nothing reddens
-  the two degradation tests alone. A third mutation widening the guard to `Error` also reddens the
-  propagation test, which is what shows that test discriminates `ZkError` rather than merely "some
-  error class".
+- ~~`ZkDevice.getUsers`'s `catch` is unscoped~~ (item 1 below) — narrowed to `ZkError` and released
+  as 0.6.1. What that did and did not move is in the v0.6.1 handoff; the short version is that no
+  device-facing behaviour changed, because every failure `Session.exchange` produces is a `ZkError`.
 
 **One defect this cycle introduced and then fixed, recorded because the shape recurs.** The commit
 that added E5 also added a comment saying a positive offset "is re-run over UDP below". There was
@@ -189,14 +178,6 @@ repository exists to catch, and it was written by the session doing the catching
 producing the evidence rather than by deleting the sentence — `E5-free-sizes-count-at-16-udp` and
 `-at-20-udp`, a positive and a negative, because the positive alone would have shown only that UDP
 reads *some* count rather than the *same word*.
-
-**A second instance, older and already shipped, found while adding E6.** `PROVENANCE.md`'s
-pyzk-boundary table said `capture_pyzk.py` called "none — nine lines, connect and disconnect only".
-That went stale at v0.5 when the script gained `get_users()`, and stayed wrong through v0.6 —
-directly under a paragraph asserting all three drivers had been audited. The passage had already
-been rewritten once *for going stale*, and the rewrite went stale the same way. Corrected, with the
-recurrence recorded in place rather than tidied over. The lesson is now in the file: the table row
-is the claim, not the audit sentence beneath it.
 
 ## 7. What not to do
 
@@ -233,21 +214,13 @@ and in doing so discovered a second fabrication path it could not close — one 
 output of that first run: each names the body length, the count or its absence, and both candidate
 readings.
 
-**Since then, experiments E5 and E6 have narrowed that premise without settling it**
-(`PROVENANCE.md`, *Both oracles agree on the offsets*). Sweeping one nonzero word at a time across
-the whole 80-byte `CMD_GET_FREE_SIZES` reply shows `pyzk` reads its user count from payload offset
-16 and from no other word — nineteen negatives, which is the half nothing previously established,
-and confirmed over UDP as a positive/negative pair so the result is not a TCP-only fact. E6 repeats
-the sweep asking for the attendance log instead and lands on offset 32, again with nineteen
-negatives and a UDP pair. **Offset 16 is one of E6's negatives and offset 32 one of E5's**, so the
-two counters gate two different reads from two different words rather than `pyzk` merely reacting to
-a nonzero number anywhere in the reply. `zkteco-js`, being MIT, was read rather than probed, and
-lands on the same offsets for all three fields once its 8-byte header is accounted for. Two
-implementations that share no code agree.
-
-`recordCapacity` is the one field with only the source reading behind it: nothing `pyzk` was asked
-to do gates on a capacity, so no sweep could locate it. Do not describe all three offsets as
-doubly corroborated.
+**Since then, experiment E5 has narrowed that premise without settling it** (`PROVENANCE.md`, *Both
+oracles agree on the offsets*). Sweeping one nonzero word at a time across the whole 80-byte
+`CMD_GET_FREE_SIZES` reply shows `pyzk` reads its user count from payload offset 16 and from no
+other word — nineteen negatives, which is the half nothing previously established, and confirmed
+over UDP as a positive/negative pair so the result is not a TCP-only fact. `zkteco-js`,
+being MIT, was read rather than probed, and lands on the same offset for all three fields once its
+8-byte header is accounted for. Two implementations that share no code agree.
 
 That is corroboration, not verification, and the distinction is the whole point: if every
 implementation inherited the same wrong offset from the same documentation, all of them would agree
