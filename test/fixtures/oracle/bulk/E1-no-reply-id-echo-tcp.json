@@ -14,7 +14,8 @@
     "freeSizesReply": {
       "userCount": 3,
       "replyBytes": 80,
-      "userCountOffset": 16
+      "userCountOffset": 16,
+      "otherWordsZero": true
     }
   },
   "completed": true,

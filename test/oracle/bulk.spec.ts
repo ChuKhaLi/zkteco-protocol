@@ -72,3 +72,76 @@ describe('buffered-read experiments (spec v0.5 §12)', () => {
     expect(fixture.sent.some((p) => p.command === PREPARE_BUFFER)).toBe(expected.prepared)
   })
 })
+
+/** The 80-byte override E5 sweeps, as 4-byte words. */
+const SWEEP_OFFSETS = Array.from({ length: 20 }, (_, word) => word * 4)
+
+/** The offset `src/commands/info.ts` reads, and the one E5 set out to test. */
+const LIBRARY_USER_COUNT_OFFSET = 16
+
+interface SweepFixture extends Fixture {
+  served: { users: string[]; freeSizesReply: { userCountOffset: number } }
+}
+
+function sweepFixture(offset: number): SweepFixture {
+  const file = path.join(DIR, `E5-free-sizes-count-at-${offset}-tcp.json`)
+  expect(existsSync(file)).toBe(true)
+  return JSON.parse(readFileSync(file, 'utf8')) as SweepFixture
+}
+
+// E5 asks which WORD of the free-sizes reply pyzk reads its user count from.
+//
+// E0b and E1-E4 could not answer it. They serve a body that is zero except at
+// offset 16, so "pyzk stopped when offset 16 was zeroed" is equally consistent
+// with pyzk reading offset 16 and with pyzk reading any word that was zero in
+// every one of those fixtures anyway. E5 serves exactly one nonzero word per
+// run and sweeps all twenty, so a run that reads must have read THAT word.
+//
+// The positive result at 16 is the weaker half and was already implied. The
+// nineteen NEGATIVES are what this experiment adds: nothing else in the reply
+// triggers the read, which is what turns "offset 16 is where pyzk looks" from
+// an inference into a recorded observation.
+//
+// What it does NOT establish: where a real device puts the field. This is a
+// fact about pyzk's parser. PROVENANCE.md, "Unverified field offsets", keeps
+// that distinction.
+describe('free-sizes offset sweep (E5)', () => {
+  it('sweeps every word of the 80-byte reply, so no offset is silently untested', () => {
+    // A future edit that shortened the sweep would otherwise narrow the
+    // finding without any test noticing.
+    expect(SWEEP_OFFSETS).toHaveLength(20)
+    expect(SWEEP_OFFSETS[SWEEP_OFFSETS.length - 1]! + 4).toBe(80)
+    for (const offset of SWEEP_OFFSETS) {
+      expect(sweepFixture(offset).served.freeSizesReply.userCountOffset).toBe(offset)
+    }
+  })
+
+  it('exactly one word triggers the read, and it is the offset the library reads', () => {
+    // Computed from the fixtures, never asserted per-offset from a hardcoded
+    // list: a table saying "16 reads, the rest do not" would restate the
+    // conclusion instead of deriving it, and would still pass if a
+    // regeneration turned a second offset positive.
+    const positives = SWEEP_OFFSETS.filter((offset) => sweepFixture(offset).printed.length > 0)
+    expect(positives).toEqual([LIBRARY_USER_COUNT_OFFSET])
+  })
+
+  it('every other word leaves pyzk stopping before it prepares a read', () => {
+    // The negative half, pinned as its own outcome rather than inferred from
+    // an empty `printed`: E2 and E3 show that printing nothing is also what a
+    // read that STARTED and failed looks like, so "no PREPARE_BUFFER" is the
+    // claim that separates "never began" from "began and broke".
+    for (const offset of SWEEP_OFFSETS.filter((o) => o !== LIBRARY_USER_COUNT_OFFSET)) {
+      const fixture = sweepFixture(offset)
+      expect(fixture.completed).toBe(true)
+      expect(fixture.printed).toEqual([])
+      expect(fixture.sent.some((p) => p.command === PREPARE_BUFFER)).toBe(false)
+    }
+  })
+
+  it('the positive offset reads the served users back in full', () => {
+    const fixture = sweepFixture(LIBRARY_USER_COUNT_OFFSET)
+    expect(fixture.completed).toBe(true)
+    expect(fixture.printed).toEqual(fixture.served.users)
+    expect(fixture.sent.some((p) => p.command === PREPARE_BUFFER)).toBe(true)
+  })
+})

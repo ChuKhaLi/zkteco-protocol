@@ -1,6 +1,6 @@
 {
-  "experiment": "E2",
-  "variant": "E2-size-at-0-tcp",
+  "experiment": "E5",
+  "variant": "E5-free-sizes-count-at-0-tcp",
   "transport": "tcp",
   "served": {
     "users": [
@@ -8,20 +8,18 @@
       "2|100002|Bo",
       "3|100003|Cy"
     ],
-    "options": {
-      "prepareBufferReply": "size-at-0"
-    },
+    "options": {},
     "freeSizesReply": {
       "userCount": 3,
       "replyBytes": 80,
-      "userCountOffset": 16,
+      "userCountOffset": 0,
       "otherWordsZero": true
     }
   },
-  "completed": false,
-  "exitCode": 2,
+  "completed": true,
+  "exitCode": 0,
   "printed": [],
-  "stderr": "pyzk read failed: unpack requires a buffer of 4 bytes",
+  "stderr": "",
   "sent": [
     {
       "command": 1000,
@@ -34,15 +32,9 @@
       "replyId": 1
     },
     {
-      "command": 1503,
-      "sessionId": 7982,
-      "replyId": 2,
-      "data": "0109000500000000000000"
-    },
-    {
       "command": 1001,
       "sessionId": 7982,
-      "replyId": 3
+      "replyId": 2
     }
   ]
 }

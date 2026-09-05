@@ -175,10 +175,23 @@ npx zkteco-protocol <host> --raw-capture trace.jsonl
 ```
 
 v0.6 made the case stronger, not weaker. It converted one silent fabrication into a loud refusal,
-and in doing so discovered a second fabrication path it could not close — one that now turns on
-whether `FREE_SIZES_OFFSET` is right, which no evidence in this repository can settle. The kit's
-refusal messages were written to be the entire evidentiary output of that first run: each names the
-body length, the count or its absence, and both candidate readings.
+and in doing so discovered a second fabrication path it could not close — one that turns on whether
+`FREE_SIZES_OFFSET` is right. The kit's refusal messages were written to be the entire evidentiary
+output of that first run: each names the body length, the count or its absence, and both candidate
+readings.
+
+**Since then, experiment E5 has narrowed that premise without settling it** (`PROVENANCE.md`, *Both
+oracles agree on the offsets*). Sweeping one nonzero word at a time across the whole 80-byte
+`CMD_GET_FREE_SIZES` reply shows `pyzk` reads its user count from payload offset 16 and from no
+other word — nineteen negatives, which is the half nothing previously established. `zkteco-js`,
+being MIT, was read rather than probed, and lands on the same offset for all three fields once its
+8-byte header is accounted for. Two implementations that share no code agree.
+
+That is corroboration, not verification, and the distinction is the whole point: if every
+implementation inherited the same wrong offset from the same documentation, all of them would agree
+and all of them would be wrong. The residual fabrication path now requires both to have inherited
+the same error rather than one undocumented table being wrong alone. Less likely; not zero.
+Checklist item 4 still retires it, and still needs a device.
 
 Three of the twenty-three checklist rows (items 8, 12, 22) will never move without hardware no
 matter how this codebase is refactored. The other twenty are waiting on the same thing.
