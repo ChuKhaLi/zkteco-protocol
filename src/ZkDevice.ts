@@ -4,7 +4,7 @@ import { getInfo } from './commands/info.js'
 import { readUserStream } from './commands/users.js'
 import { EVENT_FLAG } from './codec/events.js'
 import { parseUserData } from './codec/records/user.js'
-import { ZkConnectionError } from './errors.js'
+import { ZkConnectionError, ZkError } from './errors.js'
 import { DEFAULT_BUFFER_LIMIT, Subscription, type SubscribeOptions, type ZkEventStream } from './realtime/Subscription.js'
 import { Session } from './session/Session.js'
 import { createTransport } from './transport/createTransport.js'
@@ -212,10 +212,18 @@ export class ZkDevice {
     // 2. It does not make the count trustworthy, only optional. A count that
     //    arrives from a wrong FREE_SIZES_OFFSET is used as-is; see
     //    PROVENANCE.md, "What deriving it cost".
+    // 3. It does not swallow everything. Only a ZkError degrades. Every
+    //    failure Session.exchange can produce is one, so this narrowing moves
+    //    no device-facing behaviour at all -- points 1 and 2 above are as true
+    //    after it as before. What it stops is a TypeError or RangeError raised
+    //    inside getInfo, which is a bug in this library rather than a device
+    //    declining to answer, being turned into "no count" and handed back as
+    //    a user list nobody knows was assembled under a broken read.
     let userCount: number | null = null
     try {
       userCount = (await getInfo(session)).userCount
-    } catch {
+    } catch (err) {
+      if (!(err instanceof ZkError)) throw err
       userCount = null
     }
     return parseUserData(stream, userCount)

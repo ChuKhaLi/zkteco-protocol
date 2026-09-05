@@ -7,9 +7,9 @@
 v0.6.0 tag; experiment E5 added five after it and E6 six more, see §2 and §8).
 This line previously read 761 and "four" while §5 read 762 and "five" — the same count stated
 two ways, one of them wrong. 762 is what the tree measured before E6; §5 was right.
-`package.json` and `src/index.ts` both read `0.6.0`.
-**Tag:** `v0.6.0` is applied, at `b04cfde` on `main`, and `0.6.0` is published to npm as `latest`
-with provenance. CI was green on all eight jobs for that commit — including
+`package.json` and `src/index.ts` both read `0.6.1`.
+**Tag:** `v0.6.1` is applied on `main`; `v0.6.0` remains at `b04cfde`, and `0.6.0` was published to
+npm as `latest` with provenance. CI was green on all eight jobs for that commit — including
 `drill (ubuntu-latest)`, which is the first time this cycle's code ran the packed-tarball drill on
 Linux. Nothing about the release remains to be done.
 
@@ -119,9 +119,10 @@ than "does this look right".
 
 ## 5. What the checks establish now
 
-- `pnpm test` — 768 passed, 3 skipped, 46 files. `pnpm typecheck` clean. The tag `v0.6.0` was cut at
+- `pnpm test` — 769 passed, 3 skipped, 46 files. `pnpm typecheck` clean. The tag `v0.6.0` was cut at
   757; experiments E5 and E6 added five and six tests after it without changing any shipped
-  behaviour, so npm's `0.6.0` still describes the published code exactly.
+  behaviour. **That sentence stopped being true at 0.6.1**, which narrowed the `getUsers` catch —
+  the first change since the tag that a consumer could observe, and the reason a version moved.
 - `pnpm release:drill` — 14/14, run on the merged tree locally (Windows) **and** on
   `ubuntu-latest` and `windows-latest` in CI for `b04cfde`.
 - **The oracle fixtures regenerate byte-identically.** Re-running `pnpm oracle:experiments` on an
@@ -137,21 +138,17 @@ than "does this look right".
 ## 6. The small backlog v0.6 left
 
 None of it blocks anything. All of it was seen, judged, and deliberately deferred. Ordered by
-value, not by effort — item 1 is the only one that changes behaviour a consumer could observe.
+value, not by effort. The item that headed this list — the unscoped `catch` — is closed below;
+nothing remaining changes behaviour a consumer could observe.
 
-1. **`ZkDevice.getUsers`'s `catch` is unscoped** — it catches any thrown value, not just protocol
-   errors, so a genuine programmer error inside `getInfo` degrades to "no count" instead of
-   surfacing. The final review judged that narrowing it to `ZkError` would be strictly better and
-   does **not** contradict the spec's §6.2, which mandates a comment rather than a bare `catch`.
-   The cheapest real improvement on this list.
-2. **`ZkDevice.getUsers` open-codes `readUserStream` + `parseUserData`**, duplicating what
+1. **`ZkDevice.getUsers` open-codes `readUserStream` + `parseUserData`**, duplicating what
    `getUsers` does, so a future change to `getUsers` will not reach the facade. Inherent to needing
    the count *between* the two halves; worth a comment if not a refactor.
-3. **The new timeout test is TCP-only**, matching its `ACK_UNAUTH` sibling. The behaviour sits above
+2. **The new timeout test is TCP-only**, matching its `ACK_UNAUTH` sibling. The behaviour sits above
    the transport split, so a UDP twin would re-prove the same path.
-4. **`test/ZkDevice.spec.ts`'s `timeoutMs: 200`** is the tightest deadline in the suite. Stable
+3. **`test/ZkDevice.spec.ts`'s `timeoutMs: 200`** is the tightest deadline in the suite. Stable
    across every run so far; if it ever flakes, raise the deadline rather than loosen the assertion.
-5. **The two `--out=` / `--raw-capture=` empty-string guards in `src/cli.ts` are near-identical.**
+4. **The two `--out=` / `--raw-capture=` empty-string guards in `src/cli.ts` are near-identical.**
    Left alone on purpose: their comments record genuinely different stakes (an unredacted file
    versus a late failure), and a shared helper would erase that distinction.
 
@@ -164,6 +161,15 @@ value, not by effort — item 1 is the only one that changes behaviour a consume
   what remained was a stale local tracking ref, now pruned.
 - ~~The v0.6.0 release notes omit the residual~~ — written; the GitHub Release now carries what the
   cycle did and did not close.
+- ~~`ZkDevice.getUsers`'s `catch` is unscoped~~ — narrowed to `ZkError` and released as **0.6.1**.
+  Worth knowing what this did and did not move: every failure `Session.exchange` can produce is a
+  `ZkError`, so **no device-facing behaviour changed at all** and the dead-session trade in §3
+  stands exactly as it did. What stops now is a `TypeError` or `RangeError` from inside `getInfo`
+  being turned into "no count". Both directions are tested, and both were confirmed by mutation:
+  reverting to the bare `catch` reddens the propagation test alone, and swallowing nothing reddens
+  the two degradation tests alone. A third mutation widening the guard to `Error` also reddens the
+  propagation test, which is what shows that test discriminates `ZkError` rather than merely "some
+  error class".
 
 **One defect this cycle introduced and then fixed, recorded because the shape recurs.** The commit
 that added E5 also added a comment saying a positive offset "is re-run over UDP below". There was
