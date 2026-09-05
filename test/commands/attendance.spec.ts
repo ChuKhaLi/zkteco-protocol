@@ -281,6 +281,36 @@ for (const transportKind of ['tcp', 'udp'] as const) {
       expect(log).toMatchObject({ userId: 'Z9', uid: 3 })
     })
 
+    it('refuses a junk prefix the declared size does not count', async () => {
+      // The OTHER model of the relationship `attendance.ts` calls unverified.
+      // The test above serves a size that counts the prefix, which is this
+      // library's assumption; until now nothing served the alternative, so
+      // every junk-prefix test exercised exactly the assumption it tested.
+      //
+      // Here a device declares 120 for a body carrying nine prefix bytes and
+      // 120 of records. This library reads data[4 .. 4+120] — the prefix plus
+      // 111 bytes of records — strips the prefix, and is left with 111, which
+      // does not divide by three. It REFUSES.
+      //
+      // That refusal is the point, and it is worth pinning because the
+      // alternative is not hypothetical: given these same bytes `pyzk`
+      // returns three misframed records with a fabricated user id and exits 0
+      // (experiment E8, `test/fixtures/oracle/bulk/E8-junk-prefix-*`). Loudly
+      // wrong beats quietly wrong, and this test is what keeps it loud.
+      running = await startEmulator({
+        transport: transportKind,
+        info: { userCount: 0, recordCount: 3, recordCapacity: 1000 },
+        records: {
+          size: 40,
+          rows: [rec40(1, 'A', DAY), rec40(2, 'B', 2 * DAY), rec40(3, 'C', 3 * DAY)],
+          junkPrefix: true,
+          totalSizeOverride: 120,
+        },
+      })
+      session = await openSession(running.port)
+      await expect(getAttendanceLogs(session, transportKind)).rejects.toBeInstanceOf(ZkFramingError)
+    })
+
     it('attaches raw hex to every record', async () => {
       running = await startEmulator({
         transport: transportKind,

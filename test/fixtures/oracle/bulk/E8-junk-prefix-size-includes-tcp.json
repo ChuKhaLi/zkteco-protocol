@@ -1,7 +1,7 @@
 {
-  "experiment": "E7",
-  "variant": "E7-status-punch-40-udp",
-  "transport": "udp",
+  "experiment": "E8",
+  "variant": "E8-junk-prefix-size-includes-tcp",
+  "transport": "tcp",
   "mode": "read-attendance",
   "served": {
     "users": [
@@ -12,8 +12,8 @@
     "records": {
       "size": 40,
       "rows": 3,
-      "declaredTotalSize": 120,
-      "junkPrefix": false,
+      "declaredTotalSize": 129,
+      "junkPrefix": true,
       "rowsHex": [
         "01003130303030310000000000000000000000000000000000001100000000220000000000000000",
         "02003130303030320000000000000000000000000000000000003380510100440000000000000000",
@@ -31,9 +31,9 @@
   "completed": true,
   "exitCode": 0,
   "printed": [
-    "100001|2000-01-01 00:00:00|17|34",
-    "100002|2000-01-02 00:00:00|51|68",
-    "100003|2000-01-03 00:00:00|85|102"
+    "55|2000-01-01 00:00:00|0|0",
+    "|2000-01-01 00:00:00|0|0",
+    "|2000-01-01 00:00:00|0|0"
   ],
   "stderr": "",
   "sent": [
@@ -62,7 +62,7 @@
       "command": 1504,
       "sessionId": 7982,
       "replyId": 4,
-      "data": "000000007c000000"
+      "data": "0000000085000000"
     },
     {
       "command": 1502,
