@@ -2,6 +2,7 @@
   "experiment": "E3",
   "variant": "E3-chunk-transfer-tcp",
   "transport": "tcp",
+  "mode": "read-users",
   "served": {
     "users": [
       "1|100001|Ann",

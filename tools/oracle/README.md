@@ -56,12 +56,27 @@ message explaining what moved and why.
 pnpm oracle:experiments
 ```
 
-Runs the four black-box experiments (E1-E4, design spec v0.5 §12) that put
-`pyzk` against emulator configurations this project's own code cannot decide
-between on documentation alone — echo-dependence, the `PREPARE_BUFFER` size
-offset, the `READ_BUFFER` chunk shape, and the UDP user-record width. Fixtures
+Runs the black-box experiments that put `pyzk` against emulator configurations
+this project's own code cannot decide between on documentation alone. Fixtures
 land in `test/fixtures/oracle/bulk/`, their own directory for the same reason
 as `commkey/`, `realtime/`, and `params/` above. A `pyzk` run that could not be
 spawned, or that exited non-zero, is recorded as `completed: false` with the
 exit code — never folded into a result. See PROVENANCE.md for what each
 experiment showed.
+
+- **E1-E4** (design spec v0.5 §12) — echo-dependence, the `PREPARE_BUFFER` size
+  offset, the `READ_BUFFER` chunk shape, and the UDP user-record width.
+- **E0, E0b** — controls establishing what has to be served before any of the
+  above attempts a read at all. Not in the spec's table; they exist so that
+  precondition is a fixture rather than a claim in a comment.
+- **E5, E6** — offset sweeps, added after the spec. Each serves the 80-byte
+  `CMD_GET_FREE_SIZES` reply with exactly one nonzero 4-byte word, once per
+  word, and records whether `pyzk` goes on to read: E5 asks for the user list
+  and E6 for the attendance log, locating `FREE_SIZES_OFFSET.userCount` and
+  `.recordCount` respectively. The nineteen negatives are the evidence in both;
+  each positive was already implied — E5's by E0b and E1-E4, E6's by the
+  `zkteco-js` source reading.
+
+Both sweeps say which word `pyzk`'s parser reads. Neither says where a device
+puts the field — see PROVENANCE.md, *Both oracles agree on the offsets*, for
+why that distinction is the whole point.

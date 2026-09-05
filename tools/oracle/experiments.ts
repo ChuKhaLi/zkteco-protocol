@@ -1,11 +1,12 @@
 /**
  * Four black-box experiments against pyzk (spec v0.5 §12), plus the two E0
  * controls that establish what has to be served before any of them run at
- * all — neither is in the spec's table; both exist so that precondition is a
- * fixture rather than a claim. Each starts the
- * emulator in one configuration, runs pyzk's public API against it, and
- * records three observables: what pyzk sent (the emulator's log), what pyzk
- * printed (the users it believes it read), and how it exited.
+ * all, plus the two offset sweeps E5 and E6. Only E1-E4 are in the spec's
+ * table; the controls exist so their precondition is a fixture rather than a
+ * claim, and the sweeps postdate it. Each starts the emulator in one
+ * configuration, runs pyzk's public API against it, and records three
+ * observables: what pyzk sent (the emulator's log), what pyzk printed (the
+ * users or attendance records it believes it read), and how it exited.
  *
  * A run that could not be spawned, or exited non-zero without printing, is
  * recorded as `completed: false` with the exit code — never as a result.
@@ -16,7 +17,13 @@ import path from 'node:path'
 import { CMD } from '../../src/codec/commands.js'
 import { USER_RECORD_SIZE } from '../../src/codec/records/user.js'
 import type { ZkUser } from '../../src/types.js'
-import { startEmulator, reply, type EmulatorOptions, type Handler } from '../../test/emulator/index.js'
+import {
+  startEmulator,
+  reply,
+  type EmulatorOptions,
+  type EmulatorRecords,
+  type Handler,
+} from '../../test/emulator/index.js'
 
 const OUT_DIR = path.join('test', 'fixtures', 'oracle', 'bulk')
 const SESSION_ID = 0x1f2e
@@ -40,6 +47,29 @@ function emUser(uid: number, userId: string, name: string): ZkUser {
 // Three users: 3 × 72 + 4 = 220 body bytes, so a size read at the wrong
 // offset is unmistakable (0x000000dc at offset 1 reads as 0x0000dc00 at 0).
 const USERS = [emUser(1, '100001', 'Ann'), emUser(2, '100002', 'Bo'), emUser(3, '100003', 'Cy')]
+
+/** One attendance row in the 40-byte dialect: uid, printed user id, packed time. */
+function rec40(uid: number, userId: string, t: number): Buffer {
+  const b = Buffer.alloc(40)
+  b.writeUInt16LE(uid, 0)
+  b.write(userId, 2, 24, 'latin1')
+  b.writeUInt32LE(t, 27)
+  return b
+}
+
+// Three rows, one per served user, so the body is 3 × 40 = 120 bytes. Both
+// counts an oracle could plausibly read are therefore 3, which is what makes
+// the sweep below a test of WHICH WORD is read rather than of which value:
+// serving different counts for users and records would let a run be explained
+// by the value it found instead of by the offset it found it at.
+const RECORDS: EmulatorRecords = {
+  size: 40,
+  rows: [
+    rec40(1, '100001', 0),
+    rec40(2, '100002', 86_400),
+    rec40(3, '100003', 172_800),
+  ],
+}
 
 /**
  * pyzk's `get_users()` gates the whole buffered/legacy read on a count it
@@ -104,6 +134,45 @@ const FREE_SIZES_SWEEP_OFFSETS = Array.from(
   (_, word) => word * 4,
 )
 
+/**
+ * E6 applies E5's sweep to the OTHER load-bearing counter.
+ *
+ * Why it is worth a second sweep. `FREE_SIZES_OFFSET.recordCount` is
+ * load-bearing in the same way `userCount` is, and it fails more quietly:
+ * `detectRecordSize` divides the attendance body by it, and the known record
+ * sizes are multiples of one another, so a count wrong by a divisor of the
+ * true size MISFRAMES the log rather than refusing it. After E5, `userCount`
+ * rests on two independent methods — pyzk's behaviour and zkteco-js's source.
+ * `recordCount` rests on zkteco-js alone. This is the missing half.
+ *
+ * The shape is E5's, unchanged: exactly one nonzero 4-byte word per run,
+ * swept across all twenty words of the 80-byte reply, the rest zero, so a run
+ * that goes on to read must have read THAT word. Both a user list and an
+ * attendance log are served, and the driver is asked for the attendance one.
+ *
+ * WHAT THIS CAN CONCLUDE, written down before the first run rather than after
+ * it, so the framing is not fitted to the answer:
+ *
+ *  - Which word pyzk's parser reads before it attempts an attendance read.
+ *    The nineteen negatives are the evidence; a positive at 32 would only
+ *    confirm what zkteco-js's source already says.
+ *
+ * WHAT IT CANNOT:
+ *
+ *  - Where a device puts the field. This is a fact about pyzk's parser, in
+ *    exactly the way E5 is. If every implementation inherited the same wrong
+ *    offset from the same documentation, all of them would agree and all of
+ *    them would be wrong. Only checklist item 4, against hardware, retires
+ *    that.
+ *  - Anything at all, if pyzk turns out not to gate the attendance read on
+ *    this reply. Then every one of the twenty runs comes back positive, the
+ *    technique does not apply to this counter, and `recordCount` keeps
+ *    resting on zkteco-js alone. That is a legitimate outcome of running
+ *    this, not a failure to be tuned away: the twenty runs contain both
+ *    halves, which is why E6 needs no separate control of E0b's kind.
+ */
+const FREE_SIZES_RECORD_COUNT_OFFSET = 32
+
 interface Run { exitCode: number | null; stdout: string; stderr: string; spawned: boolean }
 
 // A hung pyzk process (e.g. blocked on a socket that never answers a shape
@@ -132,20 +201,33 @@ function runPyzk(args: string[]): Promise<Run> {
 
 interface Variant {
   name: string
-  experiment: 'E0' | 'E1' | 'E2' | 'E3' | 'E4' | 'E5'
+  experiment: 'E0' | 'E1' | 'E2' | 'E3' | 'E4' | 'E5' | 'E6'
   transport: 'tcp' | 'udp'
   options: Partial<EmulatorOptions>
   /**
    * The count to write into the 80-byte override, or `null` to leave the
    * emulator's own 68-byte default handler in place.
+   *
+   * Named for the value, not for the field: E5 writes a user count here and
+   * E6 a record count, and the two sweeps differ in which word they put it
+   * at, not in what they write. The fixture records it under the name that
+   * matches the mode, so a reader is never told a run served a `userCount`
+   * when the question was about records.
    */
-  freeSizesUserCount: number | null
+  freeSizesCount: number | null
   /**
    * Where in the 80-byte override that count goes. Defaults to the offset
-   * this library reads. Only E5 sets it, and only E5's fixtures are evidence
-   * about which word an oracle reads.
+   * this library reads for the user count. Only the sweeps set it, and only
+   * their fixtures are evidence about which word an oracle reads.
    */
   freeSizesCountOffset?: number
+  /**
+   * Which read the driver is asked to attempt. Every variant before E6 asked
+   * for the user list, which is why that is the default.
+   */
+  mode?: 'read-users' | 'read-attendance'
+  /** Attendance rows to serve. Only the modes that read them set this. */
+  records?: EmulatorRecords
 }
 
 const VARIANTS: Variant[] = [
@@ -153,20 +235,20 @@ const VARIANTS: Variant[] = [
   // bytes, no override below), with userCount served correctly. Exists so
   // the negative half of the finding above — that 68 bytes is NOT enough —
   // is itself a fixture, not just a claim in a comment.
-  { name: 'E0-free-sizes-default-tcp', experiment: 'E0', transport: 'tcp', options: {}, freeSizesUserCount: null },
+  { name: 'E0-free-sizes-default-tcp', experiment: 'E0', transport: 'tcp', options: {}, freeSizesCount: null },
   // Second control, holding the reply length fixed at the 80 bytes E1-E4 are
   // served and varying only the count. E0 vs E1-E4 changes two things at
   // once, so neither shows on its own whether pyzk gates on the count or
   // merely on the reply being long enough. This isolates the count.
-  { name: 'E0b-free-sizes-80-count-zero-tcp', experiment: 'E0', transport: 'tcp', options: {}, freeSizesUserCount: 0 },
-  { name: 'E1-no-reply-id-echo-tcp', experiment: 'E1', transport: 'tcp', options: { echoReplyId: false }, freeSizesUserCount: USERS.length },
-  { name: 'E1-wrong-session-id-tcp', experiment: 'E1', transport: 'tcp', options: { replySessionIdOverride: 0x2222 }, freeSizesUserCount: USERS.length },
-  { name: 'E2-size-at-1-tcp', experiment: 'E2', transport: 'tcp', options: { prepareBufferReply: 'size-at-1' }, freeSizesUserCount: USERS.length },
-  { name: 'E2-size-at-0-tcp', experiment: 'E2', transport: 'tcp', options: { prepareBufferReply: 'size-at-0' }, freeSizesUserCount: USERS.length },
-  { name: 'E3-chunk-transfer-tcp', experiment: 'E3', transport: 'tcp', options: { chunkReply: 'transfer' }, freeSizesUserCount: USERS.length },
-  { name: 'E3-chunk-single-packet-tcp', experiment: 'E3', transport: 'tcp', options: { chunkReply: 'single-packet' }, freeSizesUserCount: USERS.length },
-  { name: 'E4-users-72-udp', experiment: 'E4', transport: 'udp', options: { userRecordSize: 72 }, freeSizesUserCount: USERS.length },
-  { name: 'E4-users-28-udp', experiment: 'E4', transport: 'udp', options: { userRecordSize: 28 }, freeSizesUserCount: USERS.length },
+  { name: 'E0b-free-sizes-80-count-zero-tcp', experiment: 'E0', transport: 'tcp', options: {}, freeSizesCount: 0 },
+  { name: 'E1-no-reply-id-echo-tcp', experiment: 'E1', transport: 'tcp', options: { echoReplyId: false }, freeSizesCount: USERS.length },
+  { name: 'E1-wrong-session-id-tcp', experiment: 'E1', transport: 'tcp', options: { replySessionIdOverride: 0x2222 }, freeSizesCount: USERS.length },
+  { name: 'E2-size-at-1-tcp', experiment: 'E2', transport: 'tcp', options: { prepareBufferReply: 'size-at-1' }, freeSizesCount: USERS.length },
+  { name: 'E2-size-at-0-tcp', experiment: 'E2', transport: 'tcp', options: { prepareBufferReply: 'size-at-0' }, freeSizesCount: USERS.length },
+  { name: 'E3-chunk-transfer-tcp', experiment: 'E3', transport: 'tcp', options: { chunkReply: 'transfer' }, freeSizesCount: USERS.length },
+  { name: 'E3-chunk-single-packet-tcp', experiment: 'E3', transport: 'tcp', options: { chunkReply: 'single-packet' }, freeSizesCount: USERS.length },
+  { name: 'E4-users-72-udp', experiment: 'E4', transport: 'udp', options: { userRecordSize: 72 }, freeSizesCount: USERS.length },
+  { name: 'E4-users-28-udp', experiment: 'E4', transport: 'udp', options: { userRecordSize: 28 }, freeSizesCount: USERS.length },
   // E5: exactly one nonzero word per run, swept across the whole reply. See
   // FREE_SIZES_SWEEP_OFFSETS above for what this can and cannot conclude.
   // The sweep itself is TCP: the question is which word the parser reads, and
@@ -176,7 +258,7 @@ const VARIANTS: Variant[] = [
     experiment: 'E5',
     transport: 'tcp',
     options: {},
-    freeSizesUserCount: USERS.length,
+    freeSizesCount: USERS.length,
     freeSizesCountOffset: offset,
   })),
   // "Should not depend on the transport" is an assumption until something
@@ -189,7 +271,7 @@ const VARIANTS: Variant[] = [
     experiment: 'E5',
     transport: 'udp',
     options: {},
-    freeSizesUserCount: USERS.length,
+    freeSizesCount: USERS.length,
     freeSizesCountOffset: 16,
   },
   {
@@ -197,17 +279,54 @@ const VARIANTS: Variant[] = [
     experiment: 'E5',
     transport: 'udp',
     options: {},
-    freeSizesUserCount: USERS.length,
+    freeSizesCount: USERS.length,
     freeSizesCountOffset: 20,
+  },
+  // E6: the same sweep, asking for the ATTENDANCE read instead. See
+  // FREE_SIZES_RECORD_COUNT_OFFSET above for what this can and cannot
+  // conclude — written before the first run, not after it.
+  ...FREE_SIZES_SWEEP_OFFSETS.map((offset): Variant => ({
+    name: `E6-free-sizes-records-at-${offset}-tcp`,
+    experiment: 'E6',
+    transport: 'tcp',
+    options: {},
+    freeSizesCount: RECORDS.rows.length,
+    freeSizesCountOffset: offset,
+    mode: 'read-attendance',
+    records: RECORDS,
+  })),
+  // The same UDP pair E5 carries, for the same reason: a positive alone would
+  // show only that UDP reads some count, not that it reads the same word.
+  {
+    name: `E6-free-sizes-records-at-${FREE_SIZES_RECORD_COUNT_OFFSET}-udp`,
+    experiment: 'E6',
+    transport: 'udp',
+    options: {},
+    freeSizesCount: RECORDS.rows.length,
+    freeSizesCountOffset: FREE_SIZES_RECORD_COUNT_OFFSET,
+    mode: 'read-attendance',
+    records: RECORDS,
+  },
+  {
+    name: `E6-free-sizes-records-at-${FREE_SIZES_RECORD_COUNT_OFFSET + 4}-udp`,
+    experiment: 'E6',
+    transport: 'udp',
+    options: {},
+    freeSizesCount: RECORDS.rows.length,
+    freeSizesCountOffset: FREE_SIZES_RECORD_COUNT_OFFSET + 4,
+    mode: 'read-attendance',
+    records: RECORDS,
   },
 ]
 
 async function runVariant(v: Variant): Promise<void> {
-  const count = v.freeSizesUserCount
+  const count = v.freeSizesCount
+  const mode = v.mode ?? 'read-users'
   const emulator = await startEmulator({
     transport: v.transport,
     sessionId: SESSION_ID,
     users: USERS,
+    ...(v.records ? { records: v.records } : {}),
     // Only matters to E0: every other variant's GET_FREE_SIZES handler is
     // overridden below and ignores state.opts.info entirely.
     info: { userCount: USERS.length, recordCount: 0, recordCapacity: 0 },
@@ -227,7 +346,7 @@ async function runVariant(v: Variant): Promise<void> {
         }),
   })
   try {
-    const run = await runPyzk([String(emulator.port), v.transport, '0', 'read-users'])
+    const run = await runPyzk([String(emulator.port), v.transport, '0', mode])
     await new Promise((r) => setTimeout(r, 300))
     const sent = emulator.received.map((p) => ({
       command: p.command,
@@ -240,22 +359,45 @@ async function runVariant(v: Variant): Promise<void> {
       experiment: v.experiment,
       variant: v.name,
       transport: v.transport,
+      // Which read the driver was asked for. Recorded on every fixture, not
+      // just the ones that vary it: with two modes in existence, a fixture
+      // that omits this leaves a reader to infer the question from the
+      // experiment name, and `printed: []` means something different under
+      // each mode.
+      mode,
       served: {
         users: USERS.map((u) => `${u.uid}|${u.userId}|${u.name}`),
+        ...(v.records
+          ? {
+              records: {
+                size: v.records.size,
+                rows: v.records.rows.length,
+                // The bytes themselves, so what pyzk printed can be checked
+                // against what it was given rather than against a summary.
+                rowsHex: v.records.rows.map((r) => r.toString('hex')),
+              },
+            }
+          : {}),
         options: v.options,
         // See the comment on freeSizesHandler above: without the override,
         // pyzk never attempts the read this fixture exists to observe. E0
         // deliberately gets none, to put that negative result in a fixture
         // rather than only in this comment.
+        // The single nonzero word is named for the count the mode is about.
+        // E5 writes a user count and E6 a record count into the same slot;
+        // labelling E6's `userCount` would describe the run as evidence about
+        // the field it is NOT asking after.
         freeSizesReply: count === null
           ? 'default encodeFreeSizes: 68 bytes, userCount 3'
           : {
-              userCount: count,
+              ...(mode === 'read-attendance' ? { recordCount: count } : { userCount: count }),
               replyBytes: FREE_SIZES_REPLY_LEN,
-              // The offset actually served, not the constant — E5 varies it,
-              // and a fixture that recorded the constant while serving
-              // something else would be evidence of the wrong thing.
-              userCountOffset: v.freeSizesCountOffset ?? FREE_SIZES_USER_COUNT_OFFSET,
+              // The offset actually served, not the constant — the sweeps
+              // vary it, and a fixture that recorded the constant while
+              // serving something else would be evidence of the wrong thing.
+              ...(mode === 'read-attendance'
+                ? { recordCountOffset: v.freeSizesCountOffset ?? FREE_SIZES_RECORD_COUNT_OFFSET }
+                : { userCountOffset: v.freeSizesCountOffset ?? FREE_SIZES_USER_COUNT_OFFSET }),
               // Everything else in the 80 bytes is zero, which is what makes
               // a completed read attributable to this one word.
               otherWordsZero: true,

@@ -2,6 +2,7 @@
   "experiment": "E4",
   "variant": "E4-users-28-udp",
   "transport": "udp",
+  "mode": "read-users",
   "served": {
     "users": [
       "1|100001|Ann",

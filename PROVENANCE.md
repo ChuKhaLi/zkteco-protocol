@@ -44,23 +44,32 @@ It is executed as a separate process, driven only through its own public
 constructor, lifecycle methods, and documented instance methods — never
 through anything internal — against the test emulator in `test/emulator/`,
 with the bytes it puts on the socket recorded as fixtures under
-`test/fixtures/oracle/`. There are now three driver scripts, one per capture
-added in v0.1, v0.2 and v0.3, and each calls a larger slice of that public
-surface than the one before it:
+`test/fixtures/oracle/`. There are three driver scripts, added in v0.1, v0.2
+and v0.3. They were once a strict progression, each calling a larger slice of
+the public surface than the one before it; the first has since grown two read
+modes of its own, so the table below lists what each calls **today** rather
+than what it called when it was added:
 
 | Script | Added | Public API called, beyond `ZK(...)`, `.connect()`, `.disconnect()` |
 |---|---|---|
-| [`tools/oracle/capture_pyzk.py`](tools/oracle/capture_pyzk.py) | v0.1 | none — nine lines, connect and disconnect only |
+| [`tools/oracle/capture_pyzk.py`](tools/oracle/capture_pyzk.py) | v0.1 | `.get_users()` (added v0.5) and `.get_attendance()` (added for E6), one per mode argument; `get_attendance` and the fields of the objects it returns are probed with `getattr` first, and its absence exits 3 rather than being reported as an empty read |
 | [`tools/oracle/capture_pyzk_realtime.py`](tools/oracle/capture_pyzk_realtime.py) | v0.2 | `.live_capture()` |
 | [`tools/oracle/capture_pyzk_params.py`](tools/oracle/capture_pyzk_params.py) | v0.3 | `.get_serialnumber()`, `.get_device_name()`, `.get_platform()`, `.get_fp_version()`, `.get_firmware_version()`, `.get_time()` — each probed with `getattr` first, so a method pyzk does not expose is recorded as producing no evidence rather than assumed away |
 
-All three scripts were read for this v0.3 fix pass and confirmed to call only
+All three scripts were re-read for the E6 pass and confirmed to call only
 public, documented constructor, lifecycle, and instance methods, with no
 internals, structures, or naming that could only have come from pyzk's
-source. This supersedes the earlier statement that named only
-`capture_pyzk.py` and an audit that covered it alone — that statement went
-stale at v0.2 and staler at v0.3, when the other two drivers were added
-without this passage being revisited.
+source.
+
+**This passage has now gone stale twice, the same way, and the second time is
+worth recording.** It first named only `capture_pyzk.py` and an audit covering
+it alone, which went stale at v0.2 and staler at v0.3 as the other two drivers
+arrived. The v0.3 fix added the table above — and that table then said
+`capture_pyzk.py` called "none — nine lines, connect and disconnect only"
+through the whole of v0.5 and v0.6, while the script was in fact calling
+`get_users()`. An audit statement is not evidence about code it has stopped
+describing. The row is the claim; re-read the scripts and correct it whenever a
+driver gains a call.
 
 That is observation, not copying. GPL-2.0 §0 restricts copying, distribution
 and modification — not execution — and covers a program's output only where
@@ -621,7 +630,10 @@ The byte offsets `CMD_GET_FREE_SIZES` uses for `userCount`, `recordCount`, and
 documentation-derived and have never been checked against a real reply from
 hardware. **Both oracles now corroborate them, by two different methods, and
 neither method is hardware** (see *Both oracles agree on the offsets* below).
-A wrong `recordCount` silently poisons the framing guard
+`userCount` and `recordCount` each have both methods behind them; the pyzk half
+of `recordCapacity` has never been probed, because nothing `pyzk` was asked to
+do gates on a capacity — that one still rests on `zkteco-js`'s source and the
+documentation alone. A wrong `recordCount` silently poisons the framing guard
 described in the design spec §5.3: the record-size division still "succeeds"
 on a count that is off by a divisor of the true size. Since v0.5
 `getAttendanceLogs` reads the count on both sides of the transfer and refuses
@@ -636,10 +648,13 @@ the first-hardware checklist.
 
 ### Both oracles agree on the offsets
 
-Two independent implementations put `userCount` at payload offset 16, each
-established by the method its license allows.
+Two independent implementations put `userCount` at payload offset 16 and
+`recordCount` at payload offset 32, each established by the method its license
+allows. The two counters were corroborated by separate experiments — E5 and E6
+— because they are read by separate code paths, and until E6 ran, only
+`userCount` had been probed behaviourally.
 
-**`pyzk` — behaviour, black box (experiment E5).** The 80-byte
+**`pyzk` — behaviour, black box (experiment E5), for `userCount`.** The 80-byte
 `CMD_GET_FREE_SIZES` override is served with **exactly one nonzero 4-byte word**
 and the rest zero, once per word, sweeping all twenty words of the reply. A run
 that goes on to read the user list must have read the word that was nonzero.
@@ -663,6 +678,45 @@ with `pyzk` reading offset 16 and with `pyzk` reading any word that happened to
 be zero throughout those fixtures. **The nineteen negatives are what E5 adds**;
 the positive was already implied.
 
+**`pyzk` — behaviour, black box (experiment E6), for `recordCount`.** E5's
+sweep, applied to the other counter and asking `pyzk` for the attendance log
+instead of the user list. Same override, same twenty words, one nonzero at a
+time; three users and three 40-byte attendance rows served, so **both**
+candidate counts are 3 and a run is explained by the offset it read at rather
+than by the value it found there. Result: **offset 32 alone** proceeds —
+`CMD_PREPARE_BUFFER` carrying command 13 (`ATTLOG_RRQ`), then `READ_BUFFER`,
+`FREE_DATA`, and all three rows printed back. **The other nineteen stop after
+`CMD_CONNECT`, `CMD_GET_FREE_SIZES`, `CMD_EXIT`, sending no `PREPARE_BUFFER` at
+all.** Fixtures: `test/fixtures/oracle/bulk/E6-free-sizes-records-at-*.json`,
+with the same TCP sweep plus UDP pair (32 positive, 36 negative) E5 carries and
+for the same reason. The positive offset is computed from the fixtures in
+`test/oracle/bulk.spec.ts`, never listed in the test.
+
+**Offset 16 is one of E6's nineteen negatives, and that is the load-bearing
+one.** Serving the user-count word alone produces no attendance read at all, so
+`pyzk` is not merely reacting to *some* nonzero number in the reply: the two
+counters gate two different reads from two different words. The converse holds
+in E5's fixtures — with only word 32 nonzero, the *user* read does not happen.
+Both directions are asserted, because either alone would leave "the words are
+different" resting on one.
+
+E6 could equally have concluded nothing. Had `pyzk` not gated the attendance
+read on this reply, all twenty runs would have come back positive and
+`recordCount` would still rest on `zkteco-js` alone. That possibility is
+written into `tools/oracle/experiments.ts` above the sweep, in the commit that
+added it, before any fixture existed — the framing was fixed before the answer
+was known, not fitted to it afterwards.
+
+*Incidental, and bounded:* `pyzk` printed the served user ids (`100001`,
+`100002`, `100003`) and timestamps (`2000-01-01`, `-02`, `-03`) back exactly,
+which corroborates the 40-byte record's printed-user-id field at byte 2 and its
+packed timestamp at byte 27 — both distinct per row, so a parser reading either
+elsewhere would print NULs or a different date. It says **nothing** about
+`status` (byte 26) or `punch` (byte 31): the emulator served both as zero, and
+`0|0` is what a parser reading the right byte and one reading any other zero
+byte would equally print. The status/punch mapping remains the hypothesis
+`mapStatusAndVerify` documents.
+
 **`zkteco-js` — source, MIT and readable.** `ztcp.js:609` and `zudp.js:460` both
 read `userCounts` as `data.readUIntLE(24, 4)`. That 24 is not a disagreement:
 `executeCmd` returns the packet after `removeTcpHeader` (`helper/utils.js:100`)
@@ -676,12 +730,15 @@ All three of this library's offsets are corroborated.
 **What this establishes, and what it does not.** Two implementations that do not
 share code agree on all three offsets, which is this project's ordinary standard
 for a claim resting on more than documentation. It moves the table from
-*documentation only* to *documentation plus two independent implementations*. It
-is **not** hardware, and it cannot be: E5 is a fact about `pyzk`'s parser, and
-the `zkteco-js` reading is a fact about its source. If every implementation
-inherited the same wrong offset from the same documentation, all three would
-agree and all three would be wrong. Checklist item 4 is what retires this, and
-it still needs a device.
+*documentation only* to *documentation plus two independent implementations*.
+The two counters the library actually divides by — `userCount` and
+`recordCount` — are each corroborated twice over, once behaviourally and once
+by source; `recordCapacity` is corroborated by the source reading alone, and no
+experiment has put it to `pyzk`. It is **not** hardware, and it cannot be: E5
+and E6 are facts about `pyzk`'s parser, and the `zkteco-js` reading is a fact
+about its source. If every implementation inherited the same wrong offset from
+the same documentation, all three would agree and all three would be wrong.
+Checklist item 4 is what retires this, and it still needs a device.
 
 **What it changes about v0.6's residual.** *User record width and size* above
 records a path where a `userCount` read from a wrong offset still fabricates
@@ -689,3 +746,11 @@ users. That path is unchanged in kind — it turns on the offset being wrong, an
 the offset is still unverified — but it now requires both independent
 implementations to have inherited the same error. That is less likely than one
 undocumented table being wrong on its own. It is not zero.
+
+The same sentence now applies, word for word, to the attendance side. A
+`recordCount` read from a wrong offset misframes the log rather than refusing
+it, since 8, 16 and 40 are multiples of one another; after E6 that too requires
+both implementations to have inherited the same error. Both residuals are
+narrowed by the same amount and neither is closed, and the reason is identical
+in both cases: corroboration between implementations cannot rule out a common
+ancestor, and only a device can.

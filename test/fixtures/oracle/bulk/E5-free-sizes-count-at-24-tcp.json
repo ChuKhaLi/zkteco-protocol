@@ -2,6 +2,7 @@
   "experiment": "E5",
   "variant": "E5-free-sizes-count-at-24-tcp",
   "transport": "tcp",
+  "mode": "read-users",
   "served": {
     "users": [
       "1|100001|Ann",
