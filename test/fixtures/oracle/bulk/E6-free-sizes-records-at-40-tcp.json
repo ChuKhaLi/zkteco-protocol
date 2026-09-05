@@ -1,19 +1,28 @@
 {
-  "experiment": "E5",
-  "variant": "E5-free-sizes-count-at-60-tcp",
+  "experiment": "E6",
+  "variant": "E6-free-sizes-records-at-40-tcp",
   "transport": "tcp",
-  "mode": "read-users",
+  "mode": "read-attendance",
   "served": {
     "users": [
       "1|100001|Ann",
       "2|100002|Bo",
       "3|100003|Cy"
     ],
+    "records": {
+      "size": 40,
+      "rows": 3,
+      "rowsHex": [
+        "01003130303030310000000000000000000000000000000000000000000000000000000000000000",
+        "02003130303030320000000000000000000000000000000000000080510100000000000000000000",
+        "03003130303030330000000000000000000000000000000000000000a30200000000000000000000"
+      ]
+    },
     "options": {},
     "freeSizesReply": {
-      "userCount": 3,
+      "recordCount": 3,
       "replyBytes": 80,
-      "userCountOffset": 60,
+      "recordCountOffset": 40,
       "otherWordsZero": true
     }
   },

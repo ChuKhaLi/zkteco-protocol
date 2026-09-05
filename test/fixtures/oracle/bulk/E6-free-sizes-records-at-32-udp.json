@@ -1,0 +1,76 @@
+{
+  "experiment": "E6",
+  "variant": "E6-free-sizes-records-at-32-udp",
+  "transport": "udp",
+  "mode": "read-attendance",
+  "served": {
+    "users": [
+      "1|100001|Ann",
+      "2|100002|Bo",
+      "3|100003|Cy"
+    ],
+    "records": {
+      "size": 40,
+      "rows": 3,
+      "rowsHex": [
+        "01003130303030310000000000000000000000000000000000000000000000000000000000000000",
+        "02003130303030320000000000000000000000000000000000000080510100000000000000000000",
+        "03003130303030330000000000000000000000000000000000000000a30200000000000000000000"
+      ]
+    },
+    "options": {},
+    "freeSizesReply": {
+      "recordCount": 3,
+      "replyBytes": 80,
+      "recordCountOffset": 32,
+      "otherWordsZero": true
+    }
+  },
+  "completed": true,
+  "exitCode": 0,
+  "printed": [
+    "100001|2000-01-01 00:00:00|0|0",
+    "100002|2000-01-02 00:00:00|0|0",
+    "100003|2000-01-03 00:00:00|0|0"
+  ],
+  "stderr": "",
+  "sent": [
+    {
+      "command": 1000,
+      "sessionId": 0,
+      "replyId": 0
+    },
+    {
+      "command": 50,
+      "sessionId": 7982,
+      "replyId": 1
+    },
+    {
+      "command": 50,
+      "sessionId": 7982,
+      "replyId": 2
+    },
+    {
+      "command": 1503,
+      "sessionId": 7982,
+      "replyId": 3,
+      "data": "010d000000000000000000"
+    },
+    {
+      "command": 1504,
+      "sessionId": 7982,
+      "replyId": 4,
+      "data": "000000007c000000"
+    },
+    {
+      "command": 1502,
+      "sessionId": 7982,
+      "replyId": 5
+    },
+    {
+      "command": 1001,
+      "sessionId": 7982,
+      "replyId": 6
+    }
+  ]
+}

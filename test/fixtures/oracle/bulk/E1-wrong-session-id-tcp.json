@@ -2,6 +2,7 @@
   "experiment": "E1",
   "variant": "E1-wrong-session-id-tcp",
   "transport": "tcp",
+  "mode": "read-users",
   "served": {
     "users": [
       "1|100001|Ann",

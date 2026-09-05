@@ -2,6 +2,7 @@
   "experiment": "E0",
   "variant": "E0-free-sizes-default-tcp",
   "transport": "tcp",
+  "mode": "read-users",
   "served": {
     "users": [
       "1|100001|Ann",
