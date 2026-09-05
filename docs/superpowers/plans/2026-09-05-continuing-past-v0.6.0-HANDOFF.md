@@ -3,7 +3,8 @@
 **Date:** 2026-09-05
 **For:** a session picking this repository up cold
 **Repository:** https://github.com/ChuKhaLi/zkteco-protocol — public, MIT, `main`
-**State:** 46 test files, 757 tests passed, 3 skipped, zero runtime dependencies.
+**State:** 46 test files, 761 tests passed, 3 skipped, zero runtime dependencies (757 at the
+v0.6.0 tag; experiment E5 added four after it, see §2).
 `package.json` and `src/index.ts` both read `0.6.0`.
 **Tag:** `v0.6.0` is applied, at `b04cfde` on `main`, and `0.6.0` is published to npm as `latest`
 with provenance. CI was green on all eight jobs for that commit — including
@@ -116,7 +117,8 @@ than "does this look right".
 
 ## 5. What the checks establish now
 
-- `pnpm test` — 757 passed, 3 skipped, 46 files. `pnpm typecheck` clean.
+- `pnpm test` — 761 passed, 3 skipped, 46 files. `pnpm typecheck` clean. The tag `v0.6.0` was cut at
+  757; E5 added four tests after it without changing any shipped behaviour.
 - `pnpm release:drill` — 14/14, run on the merged tree locally (Windows) **and** on
   `ubuntu-latest` and `windows-latest` in CI for `b04cfde`.
 - CI runs the drill on both operating systems for every push to `main` and every pull request. A
