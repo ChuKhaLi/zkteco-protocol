@@ -3,8 +3,10 @@
 **Date:** 2026-09-05
 **For:** a session picking this repository up cold
 **Repository:** https://github.com/ChuKhaLi/zkteco-protocol — public, MIT, `main`
-**State:** 46 test files, 761 tests passed, 3 skipped, zero runtime dependencies (757 at the
-v0.6.0 tag; experiment E5 added four after it, see §2).
+**State:** 46 test files, 768 tests passed, 3 skipped, zero runtime dependencies (757 at the
+v0.6.0 tag; experiment E5 added five after it and E6 six more, see §2 and §8).
+This line previously read 761 and "four" while §5 read 762 and "five" — the same count stated
+two ways, one of them wrong. 762 is what the tree measured before E6; §5 was right.
 `package.json` and `src/index.ts` both read `0.6.0`.
 **Tag:** `v0.6.0` is applied, at `b04cfde` on `main`, and `0.6.0` is published to npm as `latest`
 with provenance. CI was green on all eight jobs for that commit — including
@@ -117,13 +119,13 @@ than "does this look right".
 
 ## 5. What the checks establish now
 
-- `pnpm test` — 762 passed, 3 skipped, 46 files. `pnpm typecheck` clean. The tag `v0.6.0` was cut at
-  757; experiment E5 added five tests after it without changing any shipped behaviour, so npm's
-  `0.6.0` still describes the published code exactly.
+- `pnpm test` — 768 passed, 3 skipped, 46 files. `pnpm typecheck` clean. The tag `v0.6.0` was cut at
+  757; experiments E5 and E6 added five and six tests after it without changing any shipped
+  behaviour, so npm's `0.6.0` still describes the published code exactly.
 - `pnpm release:drill` — 14/14, run on the merged tree locally (Windows) **and** on
   `ubuntu-latest` and `windows-latest` in CI for `b04cfde`.
 - **The oracle fixtures regenerate byte-identically.** Re-running `pnpm oracle:experiments` on an
-  unchanged tree leaves all thirty existing fixtures untouched, so the captures are reproducible
+  unchanged tree leaves all fifty-four existing fixtures untouched, so the captures are reproducible
   rather than recorded once and trusted. That is a stronger claim than any single capture, and it
   is the check that would notice `pyzk` changing behaviour under a version bump.
 - CI runs the drill on both operating systems for every push to `main` and every pull request. A
@@ -155,7 +157,9 @@ value, not by effort — item 1 is the only one that changes behaviour a consume
 
 **Closed since this handoff was first written:**
 
-- ~~`FREE_SIZES_OFFSET` corroborated by nothing~~ — experiment E5 (§8). Not verified; corroborated.
+- ~~`FREE_SIZES_OFFSET` corroborated by nothing~~ — experiments E5 and E6 (§8). Not verified;
+  corroborated, and only for `userCount` and `recordCount`. `recordCapacity` still rests on the
+  `zkteco-js` source reading alone.
 - ~~`chore/post-merge-cleanups` is a stale remote branch~~ — it was already gone from the remote;
   what remained was a stale local tracking ref, now pruned.
 - ~~The v0.6.0 release notes omit the residual~~ — written; the GitHub Release now carries what the
@@ -168,6 +172,14 @@ repository exists to catch, and it was written by the session doing the catching
 producing the evidence rather than by deleting the sentence — `E5-free-sizes-count-at-16-udp` and
 `-at-20-udp`, a positive and a negative, because the positive alone would have shown only that UDP
 reads *some* count rather than the *same word*.
+
+**A second instance, older and already shipped, found while adding E6.** `PROVENANCE.md`'s
+pyzk-boundary table said `capture_pyzk.py` called "none — nine lines, connect and disconnect only".
+That went stale at v0.5 when the script gained `get_users()`, and stayed wrong through v0.6 —
+directly under a paragraph asserting all three drivers had been audited. The passage had already
+been rewritten once *for going stale*, and the rewrite went stale the same way. Corrected, with the
+recurrence recorded in place rather than tidied over. The lesson is now in the file: the table row
+is the claim, not the audit sentence beneath it.
 
 ## 7. What not to do
 
@@ -204,13 +216,21 @@ and in doing so discovered a second fabrication path it could not close — one 
 output of that first run: each names the body length, the count or its absence, and both candidate
 readings.
 
-**Since then, experiment E5 has narrowed that premise without settling it** (`PROVENANCE.md`, *Both
-oracles agree on the offsets*). Sweeping one nonzero word at a time across the whole 80-byte
-`CMD_GET_FREE_SIZES` reply shows `pyzk` reads its user count from payload offset 16 and from no
-other word — nineteen negatives, which is the half nothing previously established, and confirmed
-over UDP as a positive/negative pair so the result is not a TCP-only fact. `zkteco-js`,
-being MIT, was read rather than probed, and lands on the same offset for all three fields once its
-8-byte header is accounted for. Two implementations that share no code agree.
+**Since then, experiments E5 and E6 have narrowed that premise without settling it**
+(`PROVENANCE.md`, *Both oracles agree on the offsets*). Sweeping one nonzero word at a time across
+the whole 80-byte `CMD_GET_FREE_SIZES` reply shows `pyzk` reads its user count from payload offset
+16 and from no other word — nineteen negatives, which is the half nothing previously established,
+and confirmed over UDP as a positive/negative pair so the result is not a TCP-only fact. E6 repeats
+the sweep asking for the attendance log instead and lands on offset 32, again with nineteen
+negatives and a UDP pair. **Offset 16 is one of E6's negatives and offset 32 one of E5's**, so the
+two counters gate two different reads from two different words rather than `pyzk` merely reacting to
+a nonzero number anywhere in the reply. `zkteco-js`, being MIT, was read rather than probed, and
+lands on the same offsets for all three fields once its 8-byte header is accounted for. Two
+implementations that share no code agree.
+
+`recordCapacity` is the one field with only the source reading behind it: nothing `pyzk` was asked
+to do gates on a capacity, so no sweep could locate it. Do not describe all three offsets as
+doubly corroborated.
 
 That is corroboration, not verification, and the distinction is the whole point: if every
 implementation inherited the same wrong offset from the same documentation, all of them would agree

@@ -74,7 +74,8 @@ experiment showed.
   word, and records whether `pyzk` goes on to read: E5 asks for the user list
   and E6 for the attendance log, locating `FREE_SIZES_OFFSET.userCount` and
   `.recordCount` respectively. The nineteen negatives are the evidence in both;
-  the positive was already implied by the source reading.
+  each positive was already implied — E5's by E0b and E1-E4, E6's by the
+  `zkteco-js` source reading.
 
 Both sweeps say which word `pyzk`'s parser reads. Neither says where a device
 puts the field — see PROVENANCE.md, *Both oracles agree on the offsets*, for
