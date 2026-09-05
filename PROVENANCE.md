@@ -650,6 +650,13 @@ Result: offset 16 proceeds to a full buffered read of all three served users;
 `test/oracle/bulk.spec.ts`, where the single positive offset is computed from
 the fixtures rather than written into the test.
 
+The sweep runs over TCP. That the answer does not depend on the transport is an
+assumption, so it is checked rather than asserted: `E5-free-sizes-count-at-16-udp`
+and `E5-free-sizes-count-at-20-udp` re-run the result over UDP as a pair — 16
+reads all three users, 20 sends no `PREPARE_BUFFER`. The positive alone would
+show only that UDP reads *some* count; the negative beside it is what makes the
+two fixtures say UDP reads the *same word*.
+
 E0b could not establish this. It and E1–E4 all serve a body that is zero except
 at offset 16, so "zeroing offset 16 stopped the read" was equally consistent
 with `pyzk` reading offset 16 and with `pyzk` reading any word that happened to

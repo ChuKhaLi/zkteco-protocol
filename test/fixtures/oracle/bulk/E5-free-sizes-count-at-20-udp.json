@@ -1,0 +1,40 @@
+{
+  "experiment": "E5",
+  "variant": "E5-free-sizes-count-at-20-udp",
+  "transport": "udp",
+  "served": {
+    "users": [
+      "1|100001|Ann",
+      "2|100002|Bo",
+      "3|100003|Cy"
+    ],
+    "options": {},
+    "freeSizesReply": {
+      "userCount": 3,
+      "replyBytes": 80,
+      "userCountOffset": 20,
+      "otherWordsZero": true
+    }
+  },
+  "completed": true,
+  "exitCode": 0,
+  "printed": [],
+  "stderr": "",
+  "sent": [
+    {
+      "command": 1000,
+      "sessionId": 0,
+      "replyId": 0
+    },
+    {
+      "command": 50,
+      "sessionId": 7982,
+      "replyId": 1
+    },
+    {
+      "command": 1001,
+      "sessionId": 7982,
+      "replyId": 2
+    }
+  ]
+}

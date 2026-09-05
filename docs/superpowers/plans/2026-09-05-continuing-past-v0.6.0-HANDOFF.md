@@ -117,10 +117,15 @@ than "does this look right".
 
 ## 5. What the checks establish now
 
-- `pnpm test` — 761 passed, 3 skipped, 46 files. `pnpm typecheck` clean. The tag `v0.6.0` was cut at
-  757; E5 added four tests after it without changing any shipped behaviour.
+- `pnpm test` — 762 passed, 3 skipped, 46 files. `pnpm typecheck` clean. The tag `v0.6.0` was cut at
+  757; experiment E5 added five tests after it without changing any shipped behaviour, so npm's
+  `0.6.0` still describes the published code exactly.
 - `pnpm release:drill` — 14/14, run on the merged tree locally (Windows) **and** on
   `ubuntu-latest` and `windows-latest` in CI for `b04cfde`.
+- **The oracle fixtures regenerate byte-identically.** Re-running `pnpm oracle:experiments` on an
+  unchanged tree leaves all thirty existing fixtures untouched, so the captures are reproducible
+  rather than recorded once and trusted. That is a stronger claim than any single capture, and it
+  is the check that would notice `pyzk` changing behaviour under a version bump.
 - CI runs the drill on both operating systems for every push to `main` and every pull request. A
   push to a feature branch with no open pull request runs nothing.
 - The count-forwarding tests are built on the one body length (504) where a dropped, hardcoded or
@@ -129,7 +134,8 @@ than "does this look right".
 
 ## 6. The small backlog v0.6 left
 
-None of it blocks anything. All of it was seen, judged, and deliberately deferred.
+None of it blocks anything. All of it was seen, judged, and deliberately deferred. Ordered by
+value, not by effort — item 1 is the only one that changes behaviour a consumer could observe.
 
 1. **`ZkDevice.getUsers`'s `catch` is unscoped** — it catches any thrown value, not just protocol
    errors, so a genuine programmer error inside `getInfo` degrades to "no count" instead of
@@ -146,6 +152,22 @@ None of it blocks anything. All of it was seen, judged, and deliberately deferre
 5. **The two `--out=` / `--raw-capture=` empty-string guards in `src/cli.ts` are near-identical.**
    Left alone on purpose: their comments record genuinely different stakes (an unredacted file
    versus a late failure), and a shared helper would erase that distinction.
+
+**Closed since this handoff was first written:**
+
+- ~~`FREE_SIZES_OFFSET` corroborated by nothing~~ — experiment E5 (§8). Not verified; corroborated.
+- ~~`chore/post-merge-cleanups` is a stale remote branch~~ — it was already gone from the remote;
+  what remained was a stale local tracking ref, now pruned.
+- ~~The v0.6.0 release notes omit the residual~~ — written; the GitHub Release now carries what the
+  cycle did and did not close.
+
+**One defect this cycle introduced and then fixed, recorded because the shape recurs.** The commit
+that added E5 also added a comment saying a positive offset "is re-run over UDP below". There was
+no such variant. A comment promising evidence the code never produced is exactly what this
+repository exists to catch, and it was written by the session doing the catching. It was fixed by
+producing the evidence rather than by deleting the sentence — `E5-free-sizes-count-at-16-udp` and
+`-at-20-udp`, a positive and a negative, because the positive alone would have shown only that UDP
+reads *some* count rather than the *same word*.
 
 ## 7. What not to do
 
@@ -185,7 +207,8 @@ readings.
 **Since then, experiment E5 has narrowed that premise without settling it** (`PROVENANCE.md`, *Both
 oracles agree on the offsets*). Sweeping one nonzero word at a time across the whole 80-byte
 `CMD_GET_FREE_SIZES` reply shows `pyzk` reads its user count from payload offset 16 and from no
-other word — nineteen negatives, which is the half nothing previously established. `zkteco-js`,
+other word — nineteen negatives, which is the half nothing previously established, and confirmed
+over UDP as a positive/negative pair so the result is not a TCP-only fact. `zkteco-js`,
 being MIT, was read rather than probed, and lands on the same offset for all three fields once its
 8-byte header is accounted for. Two implementations that share no code agree.
 
