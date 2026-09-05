@@ -307,8 +307,13 @@ return parseUserData(stream, userCount)
 `readUserStream` is the transfer half of it, exported so `ZkDevice` need not reach into
 `src/session/`.
 
-Second, "it must not mask a dead session" is a requirement the code cannot meet in either
-ordering, and stating it as satisfied was the false claim. Only `ZkAuthError` and `ZkProtocolError`
+Second, "it must not mask a dead session" was stated as satisfied when it was not, but the two
+orderings are not equally guilty and an earlier draft of this block wrongly said they were. Under
+the old ordering nothing was masked: the dead session announced itself at once by destroying the
+read, which is exactly why the list was lost. **Masking is a cost the reordering introduces.**
+Saying it "cannot be met in either ordering" read as exonerating the change, which is this
+project's own defect shape aimed the other way — at making a change look cheaper than it is —
+inside the block written to correct an overstatement. Only `ZkAuthError` and `ZkProtocolError`
 leave a usable session — those are the replies where the device *answered*. `ZkTimeoutError`,
 `ZkFramingError` and `ZkConnectionError` each end the session inside `Session.exchange` before the
 `catch` here is reached, so the swallow cannot restore it. Under the new ordering the visible

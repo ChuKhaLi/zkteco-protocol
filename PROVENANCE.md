@@ -447,9 +447,14 @@ returns its full user list and leaves the caller holding a dead session: the
 next `ZkDevice` call fails with "this session is not open", and `connect()` is
 the recovery. Until v0.6 the two reads were ordered the other way round, and
 that same device lost the list as well — the read after the failed count threw
-`ZkConnectionError` from a session the count had already killed. The claim that
-the swallow "cannot mask a dead session" was false under both orderings; what
-is true is that it now costs the session rather than the data.
+`ZkConnectionError` from a session the count had already killed. The two
+orderings fail differently, and the newer one is not strictly better. Under the
+old one nothing was masked — the dead session announced itself immediately, by
+destroying the read. Under the new one the data survives and the deadness is
+silent: the list comes back and the caller learns the session is gone only on
+its next call. **Hiding that state change is a cost v0.6 introduced**, not one
+it inherited. The trade is deliberate — a list plus a stale session beats no
+list — but it is a trade, not a repair.
 
 **The closure is conditional on that same offset**, and refusal is not the only
 way a wrong one can land. `detectUserRecordSize` trusts the count absolutely —
