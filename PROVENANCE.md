@@ -623,6 +623,80 @@ this library reject good replies from real hardware. This is on the
 first-hardware checklist rather than fixed on the same speculative
 approach.
 
+## The status/punch mapping — offsets settled, names not
+
+`mapStatusAndVerify` (`src/codec/records/attendance.ts`) has declared itself a
+HYPOTHESIS since v0.1, and until experiment E7 this file did not record it at
+all — a gap in the document whose whole job is saying what rests on what.
+
+The claim has two halves, and they are not equally settled.
+
+**Half one: which two bytes carry the model-dependent fields.** Settled as far
+as two implementations can settle anything.
+
+*`pyzk` — behaviour, black box (experiment E7).* Three attendance rows are
+served per dialect, carrying six values that are pairwise distinct and occur
+**nowhere else in their own row**, so a parser reading any other byte cannot
+produce them by coincidence. E6 could not ask this question and did not try: it
+served both bytes as zero, and `0|0` is what a parser reading the right byte
+and one reading any other zero byte would equally print. Result — what `pyzk`
+prints as `status` is the byte this library reads as `status`, and what it
+prints as `punch` is the byte this library reads as `punch`, in **all three**
+dialects:
+
+| dialect | `status` | `punch` |
+|---|---|---|
+| 40-byte | 26 | 31 |
+| 16-byte | 8 | 9 |
+| 8-byte | 2 | 7 |
+
+Fixtures: `test/fixtures/oracle/bulk/E7-status-punch-*.json`, the 40-byte case
+also over UDP. The assertions derive their expectations from the served row
+bytes rather than restating `17|34`, and a separate test pins the
+discriminating property itself.
+
+*`zkteco-js` — source, MIT and readable.* `helper/utils.js:152`
+(`decodeRecordData40`) reads **the same two bytes**: offset 26 and offset 31.
+The offsets are corroborated by a second implementation that shares no code.
+
+**Half two: which public field each byte feeds. Not settled, and the second
+oracle points the other way.** `pyzk` names byte 26 `status` and byte 31
+`punch`, matching this library. `zkteco-js` names byte 26 **`type`** and byte
+31 **`state`**. The two vocabularies do not overlap, so the names cannot be
+aligned without an assumption — and the obvious assumption, matching `state`
+to `status`, puts `zkteco-js`'s "status" at byte 31, the opposite of where this
+library and `pyzk` put it.
+
+Per `mapStatusAndVerify`'s own instruction — adopt the oracles' mapping *only
+if they agree* — **nothing is adopted and the divergence is recorded here**.
+The function is unchanged. What E7 bought is that its two offsets are right;
+whether byte 26 means in/out and byte 31 means finger/card/face is a question
+about semantics that no emulator can answer, which is why the README returns
+both as raw numbers instead of decoding them.
+
+**Where the second oracle is silent.** `zkteco-js`'s `decodeRecordData16`
+(`helper/utils.js:167`) decodes a user id and a timestamp and **neither** of
+these two bytes, and it has no 8-byte record decoder at all. So the 16- and
+8-byte rows of the table above rest on `pyzk` alone. That is absence of
+evidence from the second oracle, not disagreement, and must not be written up
+as one.
+
+**Two field widths noticed while reading that source, recorded because they
+are divergences and not because anything was changed.** `decodeRecordData40`
+takes the printed user id as `slice(2, 11)` — nine bytes — where this library
+reads up to twenty-four from the same offset; both stop at the first NUL, so
+they differ only for an id longer than eight characters. `decodeRecordData16`
+reads its user id as `readUIntLE(0, 2)` — **two** bytes — where this library
+reads four. E7's 16-byte rows carry 100001, which needs three, and `pyzk`
+printed it back in full; so `pyzk` read at least three bytes and agrees with
+this library as far as this value can show, while `zkteco-js`'s source would
+have truncated it to 34465. Neither divergence is acted on here.
+
+**What none of this is.** It is not hardware. E7 is a fact about `pyzk`'s
+parser and the `zkteco-js` reading is a fact about its source, exactly as with
+the free-sizes offsets above. If both inherited the same layout from the same
+documentation, both would agree and both could be wrong.
+
 ## Unverified field offsets
 
 The byte offsets `CMD_GET_FREE_SIZES` uses for `userCount`, `recordCount`, and
@@ -714,8 +788,8 @@ packed timestamp at byte 27 — both distinct per row, so a parser reading eithe
 elsewhere would print NULs or a different date. It says **nothing** about
 `status` (byte 26) or `punch` (byte 31): the emulator served both as zero, and
 `0|0` is what a parser reading the right byte and one reading any other zero
-byte would equally print. The status/punch mapping remains the hypothesis
-`mapStatusAndVerify` documents.
+byte would equally print. Experiment E7 asked that question properly, by
+serving values that discriminate — see *The status/punch mapping* above.
 
 **`zkteco-js` — source, MIT and readable.** `ztcp.js:609` and `zudp.js:460` both
 read `userCounts` as `data.readUIntLE(24, 4)`. That 24 is not a disagreement:

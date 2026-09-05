@@ -3,9 +3,11 @@
 **Date:** 2026-09-05
 **For:** a session picking this repository up cold
 **Repository:** https://github.com/ChuKhaLi/zkteco-protocol — public, MIT, `main`
-**State:** 46 test files, 769 tests passed, 3 skipped, zero runtime dependencies, with
-`package.json` and `src/index.ts` both reading `0.6.1`. 54 oracle fixtures under
-`test/fixtures/oracle/bulk/`.
+**State:** 46 test files, 777 tests passed, 3 skipped, zero runtime dependencies, with
+`package.json` and `src/index.ts` both reading `0.6.1`. 58 oracle fixtures under
+`test/fixtures/oracle/bulk/`. Experiment E7 landed after the tag and added eight tests; it changed
+one docblock in `src/` and no behaviour at all, so npm's `0.6.1` still describes the published
+behaviour exactly.
 **Tag:** `v0.6.1` is applied, and `0.6.1` is published to npm as `latest` **with a provenance
 attestation and zero dependencies**; the GitHub Release exists. `v0.6.0` remains at `b04cfde`. CI
 was green on all eight jobs for every merge in this cycle, `drill` on Linux and Windows included.
@@ -15,8 +17,8 @@ This continues `2026-09-05-continuing-past-v0.6.0-HANDOFF.md`, which continues s
 Everything in them remains accurate about the trees they describe. Read `CLAUDE.md` first, then
 `docs/RELEASING.md` if you intend to release anything.
 
-This was a small cycle: one experiment that produced evidence and changed no shipped code, and one
-three-line behaviour fix that closed the last item on v0.6's backlog a consumer could observe.
+This was a small cycle: two experiments that produced evidence and changed no shipped behaviour,
+and one three-line fix that closed the last item on v0.6's backlog a consumer could observe.
 
 ---
 
@@ -65,6 +67,61 @@ corroborates the 40-byte record's printed-user-id field at byte 2 and its packed
 `0|0` is what a parser reading the right byte and one reading any other zero byte would equally
 print. The status/punch mapping remains the hypothesis `mapStatusAndVerify` documents.
 
+## 1b. Experiment E7 — the status/punch mapping, half settled
+
+**The promise that had never been kept.** `mapStatusAndVerify`
+(`src/codec/records/attendance.ts`) has declared itself a HYPOTHESIS since v0.1,
+and its docblock promised precisely one thing: "the oracle task decodes
+identical record bytes with two independent implementations and adopts their
+mapping only if they agree". No such task had ever run. `PROVENANCE.md` did not
+record the hypothesis at all — a gap in the file whose job is saying what rests
+on what.
+
+**Why E6 could not answer it.** E6 served both model-dependent bytes as **zero**,
+so `0|0` is what a parser reading the right byte and one reading any other zero
+byte would equally print. E7 serves six values that are pairwise distinct and
+occur **nowhere else in their own row**; a test pins that property, because
+without it every other assertion in the block would pass vacuously.
+
+**The result, half one — offsets, settled.** What `pyzk` prints as `status` is
+the byte this library reads as `status`, and likewise for `punch`, in all three
+dialects — 40-byte: 26 and 31; 16-byte: 8 and 9; 8-byte: 2 and 7. Confirmed
+over UDP for the 40-byte form. `zkteco-js`'s `decodeRecordData40`
+(`helper/utils.js:152`, MIT, read rather than probed) reads **the same two
+bytes**.
+
+**The result, half two — names, not settled, and the second oracle points the
+other way.** `pyzk` calls byte 26 `status` and byte 31 `punch`, matching this
+library. `zkteco-js` calls byte 26 **`type`** and byte 31 **`state`**. The two
+vocabularies do not overlap, so the names cannot be aligned without an
+assumption — and the obvious one, matching `state` to `status`, puts its
+"status" at byte 31, the opposite of where this library puts it.
+
+Per the docblock's own rule, **nothing is adopted and the divergence is
+recorded**. `mapStatusAndVerify` is unchanged; only its comment moved, to say
+what ran and what it found. Do not "resolve" this by picking the side that
+looks tidier.
+
+**Where the second oracle is silent.** `zkteco-js`'s `decodeRecordData16` reads
+neither byte, and it has no 8-byte decoder at all. The 16- and 8-byte rows rest
+on `pyzk` alone. That is absence of evidence from the second oracle, not
+disagreement — the framing written before the run set that case aside
+deliberately, and it must not be written up as a conflict.
+
+**Two field-width divergences noticed while reading that source**, recorded in
+`PROVENANCE.md` and acted on nowhere: `zkteco-js` takes the 40-byte printed
+user id as nine bytes where this library reads up to twenty-four (both stop at
+the first NUL, so they differ only past eight characters), and reads the
+16-byte user id as **two** bytes where this library reads four. E7's rows carry
+100001, which needs three; `pyzk` printed it back in full, so it agrees with
+this library as far as that value can show, while `zkteco-js`'s source would
+have truncated it to 34465.
+
+**Eight mutation checks**, all confirming the intended test reddens: the two
+fields swapped in each of the three dialects, a status read from some other
+byte, the served bytes losing their discriminating property in two different
+ways, a dialect parsing nothing, and UDP disagreeing with TCP.
+
 ## 2. The pyzk driver grew a second mode, and the GPL boundary held
 
 `tools/oracle/capture_pyzk.py`'s `argv[4]` was a boolean recognising only `read-users`. It is now a
@@ -76,6 +133,9 @@ no evidence rather than as agreement; the record fields are probed the same way 
 prints as `<absent:name>`, so a line with four resolved fields cannot be confused with a line that
 merely has four separators. Only the public constructor, lifecycle and documented instance methods
 are called. No file of its source was opened.
+
+**E7 needed no driver change at all**, which is the payoff for having built the mode this way: it
+already printed all four fields, so the experiment was four emulator variants and nothing else.
 
 **The method that made the change checkable, worth reusing.** The driver landed in its own commit
 with `experiments.ts` untouched. Regenerating then produced **all thirty-two existing fixtures
@@ -134,11 +194,11 @@ manual, was done once, and only on Windows.
 
 ## 5. What the checks establish now
 
-- `pnpm test` — 769 passed, 3 skipped, 46 files. `pnpm typecheck` clean. Run `pnpm build` first; the
+- `pnpm test` — 777 passed, 3 skipped, 46 files. `pnpm typecheck` clean. Run `pnpm build` first; the
   smoke test reads `dist/`.
 - `pnpm release:drill` — 14/14 locally (Windows) and on `ubuntu-latest` and `windows-latest` in CI.
 - **The oracle fixtures regenerate byte-identically.** `pnpm oracle:experiments` on an unchanged
-  tree leaves all **fifty-four** untouched. Any churn is a signal; investigate it rather than
+  tree leaves all **fifty-eight** untouched. Any churn is a signal; investigate it rather than
   committing it.
 - CI runs the drill on both operating systems for every push to `main` and every pull request. A
   push to a feature branch with no open pull request runs nothing.
@@ -223,9 +283,17 @@ one undocumented table being wrong alone. Less likely. Not zero, and not verific
 implementation inherited the same wrong offset from the same documentation, all of them would agree
 and all of them would be wrong.
 
-Checklist item 4 retires that, and it needs a device. Three of the twenty-three rows (items 8, 12,
-22) will never move without one no matter how this codebase is refactored, and the other twenty are
-waiting on the same thing.
+Checklist item 4 retires that, and it needs a device.
+
+E7 (§1b) shows the same shape from the other end. It settled which two bytes carry the
+model-dependent fields — three implementations' worth of agreement — and then ran straight into a
+question no emulator can touch: `pyzk` and `zkteco-js` read those bytes under **conflicting
+names**, and what the fields MEAN is semantics. An oracle can say which byte a parser reads. It
+cannot say whether byte 26 is the one that means in-versus-out. Only a device badging a known
+punch, in a known direction, settles that.
+
+Three of the twenty-three rows (items 8, 12, 22) will never move without one no matter how this
+codebase is refactored, and the other twenty are waiting on the same thing.
 
 **No physical ZKTeco device has ever been connected to this library.** Nothing in 0.6.1 changed
 that, and it remains the only fact that should shape what you pick up next.

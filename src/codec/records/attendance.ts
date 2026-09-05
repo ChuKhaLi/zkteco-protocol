@@ -30,14 +30,23 @@ export interface DecodedAttendanceRecord {
  * Maps the two model-dependent bytes a record carries onto the two the public
  * API exposes.
  *
- * HYPOTHESIS. The record layouts name their fields `status` and `punch`; the
- * public API exposes `status` (in/out) and `verifyMode` (finger/card/face/
- * password). Which feeds which is not settled by the available documentation,
- * so the name-preserving mapping is assumed here and isolated in this one
- * function. The oracle task decodes identical record bytes with two
- * independent implementations and adopts their mapping only if they agree; if
- * they disagree, the divergence is recorded and left for first-hardware
- * verification. Change this function, and nothing else, when that resolves.
+ * STILL A HYPOTHESIS, but a narrower one than it was. The record layouts name
+ * their fields `status` and `punch`; the public API exposes `status` (in/out)
+ * and `verifyMode` (finger/card/face/password). Which feeds which is not
+ * settled by the available documentation, so the name-preserving mapping is
+ * assumed here and isolated in this one function.
+ *
+ * The oracle task this docblock used to promise has now RUN — experiment E7,
+ * `PROVENANCE.md`, *The status/punch mapping*. It settled the half about
+ * OFFSETS: `pyzk` reads these two bytes and no others, in all three dialects,
+ * and `zkteco-js`'s source reads the same two for the 40-byte form. It did not
+ * settle the half about NAMES, and pointed the other way on it: `zkteco-js`
+ * calls byte 26 `type` and byte 31 `state`, so aligning `state` with `status`
+ * would swap what this function does. The two oracles do not agree, so per the
+ * rule this docblock has always carried, NEITHER mapping is adopted and the
+ * divergence is recorded instead.
+ *
+ * Change this function, and nothing else, when hardware resolves it.
  */
 export function mapStatusAndVerify(
   recordStatus: number,
