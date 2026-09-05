@@ -77,6 +77,15 @@ experiment showed.
   each positive was already implied — E5's by E0b and E1-E4, E6's by the
   `zkteco-js` source reading.
 
-Both sweeps say which word `pyzk`'s parser reads. Neither says where a device
-puts the field — see PROVENANCE.md, *Both oracles agree on the offsets*, for
-why that distinction is the whole point.
+- **E7** — the two model-dependent bytes of an attendance record, served
+  pairwise distinct instead of zero, one variant per dialect (40/16/8) plus the
+  40-byte form over UDP. It asks which byte a parser reads as `status` and
+  which as `punch` — the hypothesis `mapStatusAndVerify` has carried since
+  v0.1. E6 could not ask it: it served both bytes as zero, so `0|0` proved
+  nothing.
+
+Every one of these says which byte or word a *parser* reads. None says what a
+device puts there — see PROVENANCE.md, *Both oracles agree on the offsets* and
+*The status/punch mapping*, for why that distinction is the whole point, and
+for the one case where the two oracles read the same bytes under conflicting
+names.

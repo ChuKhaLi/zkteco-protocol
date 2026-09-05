@@ -1,9 +1,10 @@
 /**
  * Four black-box experiments against pyzk (spec v0.5 §12), plus the two E0
  * controls that establish what has to be served before any of them run at
- * all, plus the two offset sweeps E5 and E6. Only E1-E4 are in the spec's
- * table; the controls exist so their precondition is a fixture rather than a
- * claim, and the sweeps postdate it. Each starts the emulator in one
+ * all, plus the two offset sweeps E5 and E6 and the record-byte probe E7.
+ * Only E1-E4 are in the spec's table; the controls exist so their precondition
+ * is a fixture rather than a claim, and the rest postdate it. Each starts the
+ * emulator in one
  * configuration, runs pyzk's public API against it, and records three
  * observables: what pyzk sent (the emulator's log), what pyzk printed (the
  * users or attendance records it believes it read), and how it exited.
@@ -48,12 +49,40 @@ function emUser(uid: number, userId: string, name: string): ZkUser {
 // offset is unmistakable (0x000000dc at offset 1 reads as 0x0000dc00 at 0).
 const USERS = [emUser(1, '100001', 'Ann'), emUser(2, '100002', 'Bo'), emUser(3, '100003', 'Cy')]
 
-/** One attendance row in the 40-byte dialect: uid, printed user id, packed time. */
-function rec40(uid: number, userId: string, t: number): Buffer {
+/**
+ * One attendance row in the 40-byte dialect: uid, printed user id, the two
+ * model-dependent bytes, packed time.
+ *
+ * `status` and `punch` default to 0 so E6's rows keep the exact bytes they
+ * were captured with. E7 below is the only caller that sets them.
+ */
+function rec40(uid: number, userId: string, t: number, status = 0, punch = 0): Buffer {
   const b = Buffer.alloc(40)
   b.writeUInt16LE(uid, 0)
   b.write(userId, 2, 24, 'latin1')
+  b.writeUInt8(status, 26)
   b.writeUInt32LE(t, 27)
+  b.writeUInt8(punch, 31)
+  return b
+}
+
+/** One row in the 16-byte dialect: numeric user id, packed time, then the two bytes. */
+function rec16(numericUserId: number, t: number, status: number, punch: number): Buffer {
+  const b = Buffer.alloc(16)
+  b.writeUInt32LE(numericUserId, 0)
+  b.writeUInt32LE(t, 4)
+  b.writeUInt8(status, 8)
+  b.writeUInt8(punch, 9)
+  return b
+}
+
+/** One row in the 8-byte dialect: uid, status, packed time, punch. */
+function rec8(uid: number, t: number, status: number, punch: number): Buffer {
+  const b = Buffer.alloc(8)
+  b.writeUInt16LE(uid, 0)
+  b.writeUInt8(status, 2)
+  b.writeUInt32LE(t, 3)
+  b.writeUInt8(punch, 7)
   return b
 }
 
@@ -69,6 +98,81 @@ const RECORDS: EmulatorRecords = {
     rec40(2, '100002', 86_400),
     rec40(3, '100003', 172_800),
   ],
+}
+
+/**
+ * E7 asks which BYTE of an attendance record each implementation reads as
+ * `status` and which as `punch`.
+ *
+ * Why it needs asking. `mapStatusAndVerify` (src/codec/records/attendance.ts)
+ * has declared itself a HYPOTHESIS since v0.1: the record layouts name two
+ * model-dependent bytes `status` and `punch`, the public API exposes `status`
+ * and `verifyMode`, and which feeds which is not settled by the available
+ * documentation. Its own docblock promises exactly this experiment — "decodes
+ * identical record bytes with two independent implementations and adopts
+ * their mapping only if they agree" — and that promise has never been kept.
+ * Each of the three dialects carries its own pair of offsets (40-byte:
+ * status 26, punch 31; 16-byte: 8 and 9; 8-byte: 2 and 7), so a run that
+ * covered only one would leave the other two guessed.
+ *
+ * E6 could not answer it and deliberately did not try: it served both bytes
+ * as ZERO, so `0|0` is what an implementation reading the right byte and one
+ * reading any other zero byte would equally print. E7 serves six values that
+ * are pairwise distinct and appear nowhere else in the row, so a swap, or a
+ * read at any other offset, is unmistakable in what gets printed back.
+ *
+ * WHAT THIS CAN CONCLUDE, written before the first run so the framing is not
+ * fitted to the answer:
+ *
+ *  - Which byte `pyzk` reads into the field it calls `status`, and which into
+ *    the one it calls `punch`, per dialect it can parse at all.
+ *
+ * WHAT IT CANNOT:
+ *
+ *  - What those two fields MEAN on a device — in/out versus finger, card,
+ *    face, password. That is semantics, which no emulator can settle, and is
+ *    why the README returns both as raw numbers rather than decoding them.
+ *  - What a device puts in those bytes. Same limit as E5 and E6: this is a
+ *    fact about a parser.
+ *  - Anything about a dialect `pyzk` cannot read. A run that fails to parse
+ *    the 8- or 16-byte body records NO EVIDENCE for that dialect. It is not a
+ *    disagreement, and must not be written up as one.
+ *
+ * If the two oracles disagree with each other, the divergence gets recorded
+ * and neither side is adopted — the docblock's instruction, not a judgement
+ * made here.
+ */
+const STATUS_PUNCH: ReadonlyArray<readonly [status: number, punch: number]> = [
+  [0x11, 0x22],
+  [0x33, 0x44],
+  [0x55, 0x66],
+]
+
+const E7_RECORDS: Readonly<Record<8 | 16 | 40, EmulatorRecords>> = {
+  40: {
+    size: 40,
+    rows: [
+      rec40(1, '100001', 0, ...STATUS_PUNCH[0]!),
+      rec40(2, '100002', 86_400, ...STATUS_PUNCH[1]!),
+      rec40(3, '100003', 172_800, ...STATUS_PUNCH[2]!),
+    ],
+  },
+  16: {
+    size: 16,
+    rows: [
+      rec16(100_001, 0, ...STATUS_PUNCH[0]!),
+      rec16(100_002, 86_400, ...STATUS_PUNCH[1]!),
+      rec16(100_003, 172_800, ...STATUS_PUNCH[2]!),
+    ],
+  },
+  8: {
+    size: 8,
+    rows: [
+      rec8(1, 0, ...STATUS_PUNCH[0]!),
+      rec8(2, 86_400, ...STATUS_PUNCH[1]!),
+      rec8(3, 172_800, ...STATUS_PUNCH[2]!),
+    ],
+  },
 }
 
 /**
@@ -201,7 +305,7 @@ function runPyzk(args: string[]): Promise<Run> {
 
 interface Variant {
   name: string
-  experiment: 'E0' | 'E1' | 'E2' | 'E3' | 'E4' | 'E5' | 'E6'
+  experiment: 'E0' | 'E1' | 'E2' | 'E3' | 'E4' | 'E5' | 'E6' | 'E7'
   transport: 'tcp' | 'udp'
   options: Partial<EmulatorOptions>
   /**
@@ -316,6 +420,37 @@ const VARIANTS: Variant[] = [
     freeSizesCountOffset: FREE_SIZES_RECORD_COUNT_OFFSET + 4,
     mode: 'read-attendance',
     records: RECORDS,
+  },
+  // E7: the two model-dependent bytes, served distinct instead of zero. See
+  // STATUS_PUNCH above for what this can and cannot conclude — written before
+  // the first run, not after it. One variant per dialect, because each
+  // carries its own pair of offsets and a run covering only the 40-byte form
+  // would leave the other two guessed.
+  ...([40, 16, 8] as const).map((size): Variant => ({
+    name: `E7-status-punch-${size}-tcp`,
+    experiment: 'E7',
+    transport: 'tcp',
+    options: {},
+    freeSizesCount: E7_RECORDS[size].rows.length,
+    // The word E6 established pyzk reads its record count from. E7 depends on
+    // that result rather than re-deriving it.
+    freeSizesCountOffset: FREE_SIZES_RECORD_COUNT_OFFSET,
+    mode: 'read-attendance',
+    records: E7_RECORDS[size],
+  })),
+  // The 40-byte dialect again over UDP. Not a full second sweep: the question
+  // is which byte a parser reads, and E6 already showed this reply's handling
+  // does not differ by transport. This is the cheap check that the RECORD
+  // decoding does not either.
+  {
+    name: 'E7-status-punch-40-udp',
+    experiment: 'E7',
+    transport: 'udp',
+    options: {},
+    freeSizesCount: E7_RECORDS[40].rows.length,
+    freeSizesCountOffset: FREE_SIZES_RECORD_COUNT_OFFSET,
+    mode: 'read-attendance',
+    records: E7_RECORDS[40],
   },
 ]
 
