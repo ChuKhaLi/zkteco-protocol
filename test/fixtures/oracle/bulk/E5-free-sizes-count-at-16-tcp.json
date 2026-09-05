@@ -1,6 +1,6 @@
 {
-  "experiment": "E3",
-  "variant": "E3-chunk-single-packet-tcp",
+  "experiment": "E5",
+  "variant": "E5-free-sizes-count-at-16-tcp",
   "transport": "tcp",
   "served": {
     "users": [
@@ -8,9 +8,7 @@
       "2|100002|Bo",
       "3|100003|Cy"
     ],
-    "options": {
-      "chunkReply": "single-packet"
-    },
+    "options": {},
     "freeSizesReply": {
       "userCount": 3,
       "replyBytes": 80,
@@ -18,10 +16,14 @@
       "otherWordsZero": true
     }
   },
-  "completed": false,
-  "exitCode": 2,
-  "printed": [],
-  "stderr": "pyzk read failed: can't read chunk 0:[220]",
+  "completed": true,
+  "exitCode": 0,
+  "printed": [
+    "1|100001|Ann",
+    "2|100002|Bo",
+    "3|100003|Cy"
+  ],
+  "stderr": "",
   "sent": [
     {
       "command": 1000,
@@ -46,21 +48,14 @@
       "data": "00000000dc000000"
     },
     {
-      "command": 1504,
+      "command": 1502,
       "sessionId": 7982,
-      "replyId": 4,
-      "data": "00000000dc000000"
-    },
-    {
-      "command": 1504,
-      "sessionId": 7982,
-      "replyId": 5,
-      "data": "00000000dc000000"
+      "replyId": 4
     },
     {
       "command": 1001,
       "sessionId": 7982,
-      "replyId": 6
+      "replyId": 5
     }
   ]
 }

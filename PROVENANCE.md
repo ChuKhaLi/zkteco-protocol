@@ -619,9 +619,9 @@ approach.
 The byte offsets `CMD_GET_FREE_SIZES` uses for `userCount`, `recordCount`, and
 `recordCapacity` (`FREE_SIZES_OFFSET` in `src/commands/info.ts`) are
 documentation-derived and have never been checked against a real reply from
-hardware. Neither oracle exercises this command in a way that pins those
-offsets — the captures above cover the handshake and comm-key authentication,
-not storage counters. A wrong `recordCount` silently poisons the framing guard
+hardware. **Both oracles now corroborate them, by two different methods, and
+neither method is hardware** (see *Both oracles agree on the offsets* below).
+A wrong `recordCount` silently poisons the framing guard
 described in the design spec §5.3: the record-size division still "succeeds"
 on a count that is off by a divisor of the true size. Since v0.5
 `getAttendanceLogs` reads the count on both sides of the transfer and refuses
@@ -633,3 +633,52 @@ exposure is no longer confined to attendance; *User record width and size*
 above records what that trade cost. For that reason the offsets live as named
 constants in one place, and confirming them against a real device is item 4 on
 the first-hardware checklist.
+
+### Both oracles agree on the offsets
+
+Two independent implementations put `userCount` at payload offset 16, each
+established by the method its license allows.
+
+**`pyzk` — behaviour, black box (experiment E5).** The 80-byte
+`CMD_GET_FREE_SIZES` override is served with **exactly one nonzero 4-byte word**
+and the rest zero, once per word, sweeping all twenty words of the reply. A run
+that goes on to read the user list must have read the word that was nonzero.
+Result: offset 16 proceeds to a full buffered read of all three served users;
+**the other nineteen offsets stop after `CMD_CONNECT`, `CMD_GET_FREE_SIZES`,
+`CMD_EXIT`, sending no `PREPARE_BUFFER` at all.** Fixtures:
+`test/fixtures/oracle/bulk/E5-free-sizes-count-at-*-tcp.json`; asserted in
+`test/oracle/bulk.spec.ts`, where the single positive offset is computed from
+the fixtures rather than written into the test.
+
+E0b could not establish this. It and E1–E4 all serve a body that is zero except
+at offset 16, so "zeroing offset 16 stopped the read" was equally consistent
+with `pyzk` reading offset 16 and with `pyzk` reading any word that happened to
+be zero throughout those fixtures. **The nineteen negatives are what E5 adds**;
+the positive was already implied.
+
+**`zkteco-js` — source, MIT and readable.** `ztcp.js:609` and `zudp.js:460` both
+read `userCounts` as `data.readUIntLE(24, 4)`. That 24 is not a disagreement:
+`executeCmd` returns the packet after `removeTcpHeader` (`helper/utils.js:100`)
+strips only the 8-byte `0x50 0x50 0x82 0x7d`+length TCP wrapper, leaving the
+8-byte ZK command header in place — which the same function confirms by reading
+the session id at `rReply.readUInt16LE(4)`. So its 24 is payload offset **16**.
+By the same arithmetic its `logCounts` at 40 and `logCapacity` at 72 are payload
+offsets **32** and **64**, matching `recordCount` and `recordCapacity` exactly.
+All three of this library's offsets are corroborated.
+
+**What this establishes, and what it does not.** Two implementations that do not
+share code agree on all three offsets, which is this project's ordinary standard
+for a claim resting on more than documentation. It moves the table from
+*documentation only* to *documentation plus two independent implementations*. It
+is **not** hardware, and it cannot be: E5 is a fact about `pyzk`'s parser, and
+the `zkteco-js` reading is a fact about its source. If every implementation
+inherited the same wrong offset from the same documentation, all three would
+agree and all three would be wrong. Checklist item 4 is what retires this, and
+it still needs a device.
+
+**What it changes about v0.6's residual.** *User record width and size* above
+records a path where a `userCount` read from a wrong offset still fabricates
+users. That path is unchanged in kind — it turns on the offset being wrong, and
+the offset is still unverified — but it now requires both independent
+implementations to have inherited the same error. That is less likely than one
+undocumented table being wrong on its own. It is not zero.

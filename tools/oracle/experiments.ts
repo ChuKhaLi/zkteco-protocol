@@ -73,11 +73,36 @@ const FREE_SIZES_USER_COUNT_OFFSET = 16
  * count at offset 16 was read": E0 and E1-E4 differ in length as well as
  * count, so on their own they cannot tell those apart.
  */
-const freeSizesHandler = (userCount: number): Handler => (req, state) => {
+const freeSizesHandler = (
+  userCount: number,
+  offset: number = FREE_SIZES_USER_COUNT_OFFSET,
+): Handler => (req, state) => {
   const body = Buffer.alloc(FREE_SIZES_REPLY_LEN)
-  body.writeUInt32LE(userCount, FREE_SIZES_USER_COUNT_OFFSET)
+  body.writeUInt32LE(userCount, offset)
   return [reply(state, req, CMD.ACK_OK, body)]
 }
+
+/**
+ * E5 sweeps `offset` across every 4-byte word of the 80-byte reply, one
+ * variant per word, with the rest of the body zero.
+ *
+ * E0b and E1-E4 together show only that zeroing offset 16 stops pyzk's read.
+ * They never served a nonzero word anywhere else, so they cannot separate
+ * "pyzk reads offset 16" from "pyzk reads some word that happens to be
+ * nonzero only at offset 16 in those fixtures". Exactly one nonzero word per
+ * run settles that: a run that proceeds to the user read read THAT word.
+ *
+ * The negative results are the point. Offset 16 coming back positive is
+ * already implied by E1-E4; what nothing currently shows is that no OTHER
+ * word also triggers the read.
+ *
+ * What this can conclude: which word pyzk's parser reads. What it cannot:
+ * where a device puts the field. PROVENANCE.md records the difference.
+ */
+const FREE_SIZES_SWEEP_OFFSETS = Array.from(
+  { length: FREE_SIZES_REPLY_LEN / 4 },
+  (_, word) => word * 4,
+)
 
 interface Run { exitCode: number | null; stdout: string; stderr: string; spawned: boolean }
 
@@ -107,7 +132,7 @@ function runPyzk(args: string[]): Promise<Run> {
 
 interface Variant {
   name: string
-  experiment: 'E0' | 'E1' | 'E2' | 'E3' | 'E4'
+  experiment: 'E0' | 'E1' | 'E2' | 'E3' | 'E4' | 'E5'
   transport: 'tcp' | 'udp'
   options: Partial<EmulatorOptions>
   /**
@@ -115,6 +140,12 @@ interface Variant {
    * emulator's own 68-byte default handler in place.
    */
   freeSizesUserCount: number | null
+  /**
+   * Where in the 80-byte override that count goes. Defaults to the offset
+   * this library reads. Only E5 sets it, and only E5's fixtures are evidence
+   * about which word an oracle reads.
+   */
+  freeSizesCountOffset?: number
 }
 
 const VARIANTS: Variant[] = [
@@ -136,6 +167,19 @@ const VARIANTS: Variant[] = [
   { name: 'E3-chunk-single-packet-tcp', experiment: 'E3', transport: 'tcp', options: { chunkReply: 'single-packet' }, freeSizesUserCount: USERS.length },
   { name: 'E4-users-72-udp', experiment: 'E4', transport: 'udp', options: { userRecordSize: 72 }, freeSizesUserCount: USERS.length },
   { name: 'E4-users-28-udp', experiment: 'E4', transport: 'udp', options: { userRecordSize: 28 }, freeSizesUserCount: USERS.length },
+  // E5: exactly one nonzero word per run, swept across the whole reply. See
+  // FREE_SIZES_SWEEP_OFFSETS above for what this can and cannot conclude.
+  // TCP only: the question is which word the parser reads, and nothing about
+  // that is transport-specific. A positive offset is re-run over UDP below
+  // once the sweep has said which offsets are positive.
+  ...FREE_SIZES_SWEEP_OFFSETS.map((offset): Variant => ({
+    name: `E5-free-sizes-count-at-${offset}-tcp`,
+    experiment: 'E5',
+    transport: 'tcp',
+    options: {},
+    freeSizesUserCount: USERS.length,
+    freeSizesCountOffset: offset,
+  })),
 ]
 
 async function runVariant(v: Variant): Promise<void> {
@@ -153,7 +197,14 @@ async function runVariant(v: Variant): Promise<void> {
     // instead of letting the spread above win outright. E0 is the one
     // variant that must NOT get it, so its fixture can show the emulator's
     // unmodified default behaviour; E0b gets it with a count of 0.
-    ...(count === null ? {} : { handlers: { ...v.options.handlers, [CMD.GET_FREE_SIZES]: freeSizesHandler(count) } }),
+    ...(count === null
+      ? {}
+      : {
+          handlers: {
+            ...v.options.handlers,
+            [CMD.GET_FREE_SIZES]: freeSizesHandler(count, v.freeSizesCountOffset),
+          },
+        }),
   })
   try {
     const run = await runPyzk([String(emulator.port), v.transport, '0', 'read-users'])
@@ -178,7 +229,17 @@ async function runVariant(v: Variant): Promise<void> {
         // rather than only in this comment.
         freeSizesReply: count === null
           ? 'default encodeFreeSizes: 68 bytes, userCount 3'
-          : { userCount: count, replyBytes: FREE_SIZES_REPLY_LEN, userCountOffset: FREE_SIZES_USER_COUNT_OFFSET },
+          : {
+              userCount: count,
+              replyBytes: FREE_SIZES_REPLY_LEN,
+              // The offset actually served, not the constant — E5 varies it,
+              // and a fixture that recorded the constant while serving
+              // something else would be evidence of the wrong thing.
+              userCountOffset: v.freeSizesCountOffset ?? FREE_SIZES_USER_COUNT_OFFSET,
+              // Everything else in the 80 bytes is zero, which is what makes
+              // a completed read attributable to this one word.
+              otherWordsZero: true,
+            },
       },
       completed: run.spawned && run.exitCode === 0,
       exitCode: run.exitCode,
