@@ -86,7 +86,10 @@ export async function getAttendanceLogs(
 
   const needsLookup =
     opts.resolveUserIds !== false && records.some((r) => r.userIdFromRecord === null)
-  const users = needsLookup ? await getUsers(session, transport) : []
+  // `after` is the count read AFTER the attendance transfer, so it is the
+  // freshest one this call holds and it costs no extra round-trip -- which is
+  // the whole reason getUsers does not fetch a count itself.
+  const users = needsLookup ? await getUsers(session, transport, after.userCount) : []
   const byUid = new Map(users.map((u) => [u.uid, u]))
   // The 16-byte dialect carries a numeric user id, so match on the numeric
   // value of the printed one. Leading zeros survive because the string from

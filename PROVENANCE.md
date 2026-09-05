@@ -402,17 +402,99 @@ the returned string is unchanged.
 **The reference decodes 28-byte user records over UDP and 72-byte records over
 TCP** (`ztcp.js:471`, `zudp.js:382`, `helper/utils.js:114-126`). Whether that
 is a property of the transport, of firmware age, or of the reference's own
-history is not recorded anywhere readable. This library reads 72 on both
-transports and refuses a body that is not a whole number of 72-byte records,
-so a 28-byte device is refused rather than misparsed **unless its body length
-happens to divide both widths**. That case is reachable, not theoretical: 28
-and 72 share a factor of 4, so a device sending a multiple of eighteen records
-— 18, 36, 54 and so on — sends a whole number of 72-byte records, since
-18 × 28 = 504 = 7 × 72. The guard passes on a body it should refuse and the
-caller receives seven fabricated users. Nothing detects that today, and nothing
-here proposes a heuristic that would: telling the two widths apart from the
-bytes is a new wire hypothesis, and the first hardware run is where the
-question is settled. Experiment E4
+history is not recorded anywhere readable. This library decodes 72-byte records
+on both transports and has no decoder for the other width. Until v0.6 it also
+*assumed* that width, refusing only a body that was not a whole multiple of 72
+— which left a hole wherever the two readings agree: 28 and 72 share a factor
+of 4, so 504 bytes is eighteen 28-byte records and also seven 72-byte ones. A
+28-byte device sending eighteen users passed that guard, and the caller
+received seven users nobody had enrolled.
+
+Since v0.6 the width is **derived rather than assumed**: `detectUserRecordSize`
+(`src/codec/records/user.ts`) divides the body length by the device's own
+`userCount` from `CMD_GET_FREE_SIZES`. That is the technique `detectRecordSize`
+(`records/attendance.ts`) has used for the attendance dialects since v0.3, and
+it **inspects no record byte**, so it adds no wire hypothesis: telling the two
+widths apart from the bytes themselves is still unproposed and still
+unanswered, and the first hardware run is still where that question is settled.
+A derived width of 28 is **refused, not decoded**. Where no count is available
+the 72-byte read continues as before, except that a non-zero multiple of 504 —
+the lengths where the two readings agree — is refused instead of decoded, so a
+legitimate 72-byte device with a multiple of seven enrolled users needs the
+count to be read at all.
+
+**What deriving it cost** (`docs/superpowers/specs/2026-09-04-zkteco-user-record-width-design.md`
+§9.2): the user read now depends on `FREE_SIZES_OFFSET.userCount`, an offset no
+device has ever confirmed (*Unverified field offsets* below), exactly as the
+attendance read has depended on `recordCount` since v0.3. If that offset is
+wrong, a device whose user list reads fine today starts refusing instead. That
+is correct under *refuse rather than guess*, and it is bounded on one side
+only: `ZkDevice.getUsers` falls back to no count when `CMD_GET_FREE_SIZES`
+**fails**, but a reply that succeeds with the count taken from the wrong offset
+gets no such fallback. It is a real way v0.6 could make first contact with
+hardware worse rather than better, and it is on this record for that reason.
+
+**What that fallback preserves, and what it does not.** It preserves the user
+*list*. `ZkDevice.getUsers` transfers the list first and asks for the count
+afterwards, so bytes already in hand cannot be lost to a count that never
+arrives. It does **not** preserve the *session*. Only `ZkAuthError` and
+`ZkProtocolError` — the two that mean the device *answered*, with
+`CMD_ACK_UNAUTH` or `CMD_ACK_ERROR` — leave a session that still works. A
+timeout, a framing failure or a connection failure ends the session inside
+`Session.exchange` (design spec v0.5 §5.2) before the swallowing `catch` is
+ever reached. So a device that answers `CMD_GET_FREE_SIZES` with silence
+returns its full user list and leaves the caller holding a dead session: the
+next `ZkDevice` call fails with "this session is not open", and `connect()` is
+the recovery. Until v0.6 the two reads were ordered the other way round, and
+that same device lost the list as well — the read after the failed count threw
+`ZkConnectionError` from a session the count had already killed. The two
+orderings fail differently, and the newer one is not strictly better. Under the
+old one nothing was masked — the dead session announced itself immediately, by
+destroying the read. Under the new one the data survives and the deadness is
+silent: the list comes back and the caller learns the session is gone only on
+its next call. **Hiding that state change is a cost v0.6 introduced**, not one
+it inherited. The trade is deliberate — a list plus a stale session beats no
+list — but it is a trade, not a repair.
+
+**The closure is conditional on that same offset**, and refusal is not the only
+way a wrong one can land. `detectUserRecordSize` trusts the count absolutely —
+it divides the body by it (`src/codec/records/user.ts:131`) — so a misread
+value that happens to equal `bodyLength / 72` satisfies both the divisibility
+check and the width check. Where the true width is 28 that means a body length
+both widths divide, and the caller receives fabricated users exactly as before
+v0.6: eighteen 28-byte users under a misread count of seven is the pair
+`(504, 7)`, which is the pair a legitimate 72-byte device with seven users
+presents as well. Those two numbers are the function's only inputs, so nothing
+computed from them separates the two devices; this is recorded as a residual
+rather than closed. What did change is its reach — before v0.6 that body
+fabricated users unconditionally, with no count involved at all, and it now
+takes a wrong offset whose value coincides with `bodyLength / 72`.
+
+**A second unconfirmed premise, distinct from the offset: that the count and
+the body describe the same moment.** Dividing `bodyLength` by `userCount`
+requires the `USERTEMP_RRQ` body to hold exactly `userCount` records. Neither
+oracle has been asked this and no device has answered it; the documentation
+above conditions the new risk entirely on `FREE_SIZES_OFFSET` being right, and
+this is a separate claim that has to be right as well. Its observable
+consequence is a race rather than a fabrication: a user enrolled between the
+two reads leaves the count describing a different device than the body does,
+and the read is refused — as "does not divide evenly" where the new count does
+not divide the body (four users is 288 bytes and a count of 5 does not divide
+it), and as an implied width that is neither 72 nor 28 where it happens to
+(seven users is 504 bytes, and a count of 8 implies 63-byte records). Refusing
+is correct under *refuse rather than guess*, and the next poll recovers.
+
+`getAttendanceLogs` guards its analogous race by reading the record count on
+**both** sides of the transfer and refusing only if it moved. The user path
+deliberately does not: that second round-trip was ruled out for the poll loop
+(design spec §3 decision 2 — `getUsers` runs inside it, and a hidden
+`CMD_GET_FREE_SIZES` per poll keeps the terminal busy for the people badging at
+it). Reading the list before the count, which v0.6 does for the reason recorded
+above, does not remove this race — it **flips** it. The count now describes the
+device *after* the transfer, so it is an enrolment landing during the read,
+rather than one landing just before it, that produces the refusal.
+
+Experiment E4
 (`test/fixtures/oracle/bulk/E4-*.json`, recorded under *The buffered read —
 restated from a single readable source*) served `pyzk` three users as
 72-byte and as 28-byte records over UDP; it decoded both correctly. So
@@ -545,6 +627,9 @@ on a count that is off by a divisor of the true size. Since v0.5
 `getAttendanceLogs` reads the count on both sides of the transfer and refuses
 if it moved, which catches a count that changed during the read but not one
 that was wrong to begin with — a wrong OFFSET returns a wrong count twice,
-consistently. For that reason the offsets live as named constants in one
-place, and confirming them against a real device is item 4 on the
-first-hardware checklist.
+consistently. Since v0.6 `userCount` is load-bearing the same way for the user
+read — the record width is derived by dividing the body by it — so this table's
+exposure is no longer confined to attendance; *User record width and size*
+above records what that trade cost. For that reason the offsets live as named
+constants in one place, and confirming them against a real device is item 4 on
+the first-hardware checklist.

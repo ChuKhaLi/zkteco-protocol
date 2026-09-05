@@ -98,6 +98,17 @@ Recorded so they are not re-litigated from memory.
    refusing outright. Rationale: a device whose `CMD_GET_FREE_SIZES` reply is broken keeps a
    working user read and the kit keeps its encoding verdict, while the hazard is still closed
    unconditionally — the count rescues legitimate devices, it does not close the hole.
+
+   **Corrected 2026-09-04, at final review.** "A device whose `CMD_GET_FREE_SIZES` reply is broken
+   keeps a working user read" was false as first implemented, and it took a reordering to make it
+   true. `ZkDevice.getUsers` fetched the count *before* the transfer, and `Session.exchange` ends
+   the session on `ZkTimeoutError`, `ZkFramingError` or `ZkConnectionError` (v0.5 §5.2) — so a
+   device that simply never answered `CMD_GET_FREE_SIZES` had a dead session by the time the
+   `catch` set the count to `null`, and the read that followed threw `ZkConnectionError`. Eight
+   users — 576 bytes, an unambiguous length needing no count at all — were lost where v0.5 had
+   returned them. The fix is ordering, not error handling: the transfer runs first, `getInfo`
+   second, so bytes in hand cannot be lost to a count that never arrives. `getAttendanceLogs` had
+   this ordering already. The guarantee is now the narrower one §6.2 states.
 4. **Detection lives in the codec**, beside `parseUserData`, mirroring `detectRecordSize`. Every
    framing refusal in this library lives in `src/codec/`; putting one in `src/commands/` would hide
    it where a reader would not look.
@@ -164,7 +175,15 @@ Division, exactly `detectRecordSize`'s technique:
 | `bodyLength` is a non-zero multiple of 504 | refuse — undecidable |
 
 Because 504 is `lcm(72, 28)`, the third row is exactly and only the exposure described in §1.1.
-Every body that decodes correctly today still decodes. The change is not over-broad, and §5's
+Every body whose length is **not** a non-zero multiple of 504 decodes exactly as it does today.
+
+**Corrected 2026-09-04, during implementation.** An earlier draft of this section claimed "every
+body that decodes correctly today still decodes." That is false, and it is this project's own
+defect shape appearing in the document written to prevent it. A legitimate 72-byte device with a
+multiple of seven users produces a 504-byte body, which decodes correctly today and is refused
+under the no-count path. That refusal is the deliberate price of the ambiguity, and §3's decision 3
+is where the count earns its keep by rescuing exactly those devices — but the cost is real and
+saying otherwise understated it. The change is not over-broad, and §5's
 576-byte test is what holds that property in place.
 
 ### 4.4 Two edge cases
@@ -235,6 +254,16 @@ One command-level test asserts that `ZkDevice.getUsers()` still resolves when `g
 (§6.2), and that the resulting error, when the read then fails on its own, still reads sensibly
 rather than blaming the count.
 
+**Corrected 2026-09-04, at final review.** That is two tests, and only the first was written. The
+one that existed picked `ACK_UNAUTH` — the case where the session survives — so it covered the
+half of §6.2 that was never in doubt and left the half that was actually broken untested. Both now
+exist in `test/ZkDevice.spec.ts`: the `ACK_UNAUTH` case, and a device that answers
+`CMD_GET_FREE_SIZES` with silence against a short `timeoutMs`. The second asserts what the
+corrected ordering gives — the eight users, because the bytes arrive before the count is
+attempted — and then asserts the consequence §6.2's correction names, that the session behind them
+is dead. Written against the pre-fix code it failed with `ZkConnectionError` from `readBulk`,
+which is the regression itself.
+
 ---
 
 ## 6. Supplying the count
@@ -258,6 +287,41 @@ behaviour rather than a guess, and the `catch` carries a comment saying so. It m
 session: under v0.5 §5.2 a timeout closes the session, so a `getInfo` timeout is followed by a bulk
 read that fails on its own with its own message. §5's last test holds that the resulting error is
 still legible.
+
+**Corrected 2026-09-04, at final review.** Two errors, and the second is the one that shipped.
+
+First, "a `getInfo` timeout is followed by a bulk read that fails on its own with its own message"
+described the *defect*, not a safeguard. The bulk read failed with `ZkConnectionError` — "this
+session is not open" — which is not the count's message and not a legible account of what went
+wrong; it is a working user read being thrown away because an optional count could not be fetched.
+See §3 decision 3's correction. The order is now transfer first, count second:
+
+```ts
+const stream = await readUserStream(session, this.transportKind)
+let userCount: number | null = null
+try { userCount = (await getInfo(session)).userCount } catch { userCount = null }
+return parseUserData(stream, userCount)
+```
+
+`getUsers(session, transport, userCount)` is unchanged and keeps both its other call sites;
+`readUserStream` is the transfer half of it, exported so `ZkDevice` need not reach into
+`src/session/`.
+
+Second, "it must not mask a dead session" was stated as satisfied when it was not, but the two
+orderings are not equally guilty and an earlier draft of this block wrongly said they were. Under
+the old ordering nothing was masked: the dead session announced itself at once by destroying the
+read, which is exactly why the list was lost. **Masking is a cost the reordering introduces.**
+Saying it "cannot be met in either ordering" read as exonerating the change, which is this
+project's own defect shape aimed the other way — at making a change look cheaper than it is —
+inside the block written to correct an overstatement. Only `ZkAuthError` and `ZkProtocolError`
+leave a usable session — those are the replies where the device *answered*. `ZkTimeoutError`,
+`ZkFramingError` and `ZkConnectionError` each end the session inside `Session.exchange` before the
+`catch` here is reached, so the swallow cannot restore it. Under the new ordering the visible
+consequence is that **`ZkDevice.getUsers` can return a complete user list and leave the session
+dead**: the caller's next `ZkDevice` call fails with "this session is not open", and `connect()`
+is the recovery. That is a better trade than losing the list, and it is still a state change
+hidden from the caller. The `catch`'s comment says so rather than claiming otherwise, and §5's
+last test asserts both halves — the eight users, and the dead session behind them.
 
 ### 6.3 Public surface
 
@@ -332,21 +396,51 @@ wording) are already on `main`; the branch is a stale Aug-29 duplicate.
   misparsed, that no second decoder was added, and §9.2 below.
 - **`src/codec/records/user.ts`'s doc comment** describes the fabrication as unaddressed. It is the
   file being changed; its comment must not survive the change.
-- **The v0.5.0 handoff** — §1's "tag is not applied yet" is now history, §4.3 is closed by this
-  cycle, and two of the four follow-ups it carried were already closed before it was written
-  (`test/commands/info.spec.ts:60` covers the full-length `ACK_UNAUTH` free-sizes body;
-  `src/diagnostics/report.ts:139` explains item 13's `registered` conjunct as deliberate defence).
+- **The v0.5.0 handoff** — §1's "tag is not applied yet" is now history, and its §4 item 3 (the
+  28-byte dialect) is closed by this cycle in the narrow sense §9.2 records.
+
+  **Corrected 2026-09-04, during implementation.** An earlier draft added that "two of the four
+  follow-ups it carried were already closed before it was written", naming
+  `test/commands/info.spec.ts:60` and `src/diagnostics/report.ts:139`. Those two belong to a
+  session-memory follow-up list, not to the handoff, whose §4 items are checklist item 22, item 8,
+  the 28-byte dialect, and the `FREE_SIZES_OFFSET`/E0b entry. Two four-item lists were conflated.
+  The handoff's count goes from four to four — item 3 is replaced by the half of it that is still
+  open, not deleted outright, because the dialect itself remains unanswered.
 
 ### 9.2 The risk this change introduces
 
 `getUsers` now behaves differently depending on `FREE_SIZES_OFFSET.userCount`, a field no device
 has ever confirmed. **If that offset is wrong, a device that reads users fine today starts
-refusing.** That is correct behaviour under *refuse rather than guess*, and §4.3's no-count path
-limits the blast radius to callers that do supply a count — but it is a real way this change could
-make first contact with hardware worse rather than better.
+refusing.** That is correct behaviour under *refuse rather than guess*, and it is a real way this
+change could make first contact with hardware worse rather than better.
 
-It belongs in `PROVENANCE.md` and in the v0.6.0 release notes. It is not a reason to skip the
-change: the alternative is continuing to hand callers seven strangers.
+**Corrected 2026-09-04, during implementation.** Two things an earlier draft of this section got
+wrong, both in the direction of sounding safer than the code is.
+
+First, it claimed §4.3's no-count path "limits the blast radius to callers that do supply a count".
+It does not. That path engages only when `CMD_GET_FREE_SIZES` *fails*; a call that succeeds while
+reading from a wrong offset returns a confident wrong number, and nothing falls back. The bound
+holds on one side only.
+
+Second, and worse, refusal is not the only outcome of a wrong offset. `detectUserRecordSize`
+divides and trusts: a 28-byte device with eighteen users sends 504 bytes, and a misread count of 7
+gives `504 / 7 = 72`, which passes every guard and returns seven fabricated users — the defect this
+cycle exists to close, reached through the offset this cycle admits is unverified.
+
+That residual cannot be closed here, and the reason is structural rather than an oversight:
+`detectUserRecordSize` sees only `(bodyLength, userCount)`, and the misread 28-byte device presents
+`(504, 7)` — the identical pair a legitimate seven-user 72-byte device presents. No function of
+those two numbers separates them. The escapes all leave this cycle's constraints: reading record
+bytes (§2.2), adopting the reference's transport hypothesis, or re-reading a count that a wrong
+offset returns wrongly twice.
+
+So the honest framing is narrower than "the hazard is closed". Before v0.6 a 504-byte body
+fabricated users unconditionally, with no count involved at all. After it, that outcome requires a
+wrong offset whose garbage value coincides with `bodyLength / 72`. That is a large reduction, not
+an elimination, and `PROVENANCE.md` records it as such.
+
+All of this belongs in `PROVENANCE.md` and in the v0.6.0 release notes. None of it is a reason to
+skip the change: the alternative is continuing to hand callers seven strangers unconditionally.
 
 ---
 

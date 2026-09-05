@@ -102,6 +102,16 @@ export function parseCliArgs(argv: string[]): CliOptions {
     throw new Error("--raw-capture needs a path, got ''. The raw capture is UNREDACTED; give it a path of its own.")
   }
 
+  // `--out=` (no value) parses as the empty string and used to fail only when
+  // writeOutputs tried the path, after the whole probe had run against the
+  // device. Lower stakes than --raw-capture= above, whose output is
+  // unredacted, but the same shape: rejected during parsing so it fails
+  // before anything is probed.
+  const out = values.out ?? null
+  if (out === '') {
+    throw new Error("--out needs a path, got ''. Omit --out to write the report to stdout.")
+  }
+
   return {
     host,
     port: parseNumberOption('port', values.port, 4370),
@@ -110,7 +120,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     timeoutMs: parseNumberOption('timeout', values.timeout, 5000),
     attendance,
     rawCapture,
-    out: values.out ?? null,
+    out,
     realtimeSeconds: parseNumberOption('realtime', values.realtime, 0),
     concurrent: values.concurrent ?? false,
   }

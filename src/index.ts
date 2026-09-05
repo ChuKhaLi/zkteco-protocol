@@ -21,4 +21,4 @@ export { EVENT_FLAG } from './codec/events.js'
 export { DEVICE_PARAM } from './codec/params.js'
 export type { SubscribeOptions, ZkEventStream } from './realtime/Subscription.js'
 
-export const VERSION = '0.5.0'
+export const VERSION = '0.6.0'

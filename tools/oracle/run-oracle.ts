@@ -72,3 +72,21 @@ export async function runOracleScript(
   }
   return { run: await run('npx', ['tsx', tsScript, ...args], true), script: tsScript }
 }
+
+/**
+ * Names the oracle runs that produced no fixture and returns the exit code the
+ * capture should adopt.
+ *
+ * Lives here rather than in capture.ts because that file is a top-level-await
+ * script and cannot be imported by a test. The decision is three lines and the
+ * consequence is not: a capture that skipped every fixture but exited 0 would
+ * leave the committed evidence looking refreshed when nothing was rewritten.
+ *
+ * `write` is injected so a test can read what was printed without a subprocess.
+ */
+export function reportFailures(failures: string[], write: (s: string) => void): number {
+  if (failures.length === 0) return 0
+  write(`\n${failures.length} oracle run(s) produced no fixture:\n`)
+  for (const line of failures) write(`  ${line}\n`)
+  return 1
+}
