@@ -19,6 +19,7 @@ import { CMD } from '../../src/codec/commands.js'
 import { USER_RECORD_SIZE } from '../../src/codec/records/user.js'
 import type { ZkUser } from '../../src/types.js'
 import {
+  attendanceBody,
   startEmulator,
   reply,
   type EmulatorOptions,
@@ -305,7 +306,7 @@ function runPyzk(args: string[]): Promise<Run> {
 
 interface Variant {
   name: string
-  experiment: 'E0' | 'E1' | 'E2' | 'E3' | 'E4' | 'E5' | 'E6' | 'E7'
+  experiment: 'E0' | 'E1' | 'E2' | 'E3' | 'E4' | 'E5' | 'E6' | 'E7' | 'E8'
   transport: 'tcp' | 'udp'
   options: Partial<EmulatorOptions>
   /**
@@ -452,6 +453,74 @@ const VARIANTS: Variant[] = [
     mode: 'read-attendance',
     records: E7_RECORDS[40],
   },
+  /**
+   * E8: does the declared totalSize COUNT the junk prefix or not?
+   *
+   * `src/codec/records/attendance.ts` skips a 9-byte junk prefix at the head
+   * of some 40-byte payloads, and says in as many words that "its exact
+   * relationship to the declared totalSize is unverified". This library
+   * assumes the size INCLUDES it: the body is taken as `data[4 .. 4+total]`
+   * and the prefix is stripped afterwards. If devices declare a size that
+   * EXCLUDES the prefix, this library takes nine bytes too few, the remainder
+   * no longer divides by the record count, and the read fails with
+   * ZkFramingError. Loud, not silent — but still a read that does not work on
+   * that device. Nothing in this repository's own suite has ever served the
+   * other model: `attendanceBody` declares `prefixed.length`, so every junk
+   * prefix test to date has exercised exactly the assumption it was testing.
+   *
+   * Three arms, differing in one thing each:
+   *
+   *   includes — prefix served, size declared 129 (this library's model)
+   *   excludes — prefix served, size declared 120
+   *   control  — no prefix, size declared 120
+   *
+   * The control is what makes a failure attributable. Without it, both arms
+   * failing would be equally consistent with "pyzk rejects both models" and
+   * with "pyzk cannot read these rows at all".
+   *
+   * COUNTING LINES IS NOT ENOUGH, and this is the trap the arms are built to
+   * avoid. Under the wrong model a parser does not necessarily fail: given
+   * 120 bytes that begin with the prefix, it can read three 40-byte records
+   * that are misaligned by nine bytes and print three lines of garbage. So
+   * the assertions compare printed CONTENT against the served rows. Three
+   * lines is not a pass.
+   *
+   * WHAT THIS CAN CONCLUDE, written before the run:
+   *
+   *  - Which of the two models `pyzk` implements, IF it implements the junk
+   *    prefix at all.
+   *
+   * WHAT IT CANNOT:
+   *
+   *  - What a device declares. Same limit as E5-E7: a fact about a parser.
+   *  - Anything from the second oracle. `zkteco-js` was read first, and it has
+   *    no position to offer: `ztcp.js:533` skips the 4-byte header and then
+   *    consumes 40 bytes at a time while any remain, so it never reads the
+   *    declared size at all, and it has no junk-prefix handling anywhere. That
+   *    is absence of evidence and must not be written up as agreement with
+   *    either arm.
+   *  - Anything about the relationship, if `pyzk` turns out to have no
+   *    junk-prefix handling either. Then BOTH arms come back wrong — one
+   *    failing, one printing misaligned garbage — and the finding is that
+   *    neither oracle implements the prefix, which leaves this library's
+   *    stripping resting on documentation alone. That is a legitimate result
+   *    of running this, and the arms are named for what they serve rather
+   *    than for what they are expected to show.
+   */
+  ...([
+    { arm: 'size-includes', records: { ...E7_RECORDS[40], junkPrefix: true } },
+    { arm: 'size-excludes', records: { ...E7_RECORDS[40], junkPrefix: true, totalSizeOverride: 120 } },
+    { arm: 'no-prefix-control', records: E7_RECORDS[40] },
+  ] as const).map(({ arm, records }): Variant => ({
+    name: `E8-junk-prefix-${arm}-tcp`,
+    experiment: 'E8',
+    transport: 'tcp',
+    options: {},
+    freeSizesCount: records.rows.length,
+    freeSizesCountOffset: FREE_SIZES_RECORD_COUNT_OFFSET,
+    mode: 'read-attendance',
+    records,
+  })),
 ]
 
 async function runVariant(v: Variant): Promise<void> {
@@ -507,6 +576,14 @@ async function runVariant(v: Variant): Promise<void> {
               records: {
                 size: v.records.size,
                 rows: v.records.rows.length,
+                // What the body actually declares and whether it carries the
+                // junk prefix. E8's two arms differ in NOTHING ELSE, so a
+                // fixture that left these out would need its own name read as
+                // evidence — the mistake E6's recordCountOffset exists to
+                // avoid. Read back out of the body the emulator builds, not
+                // recomputed here, so the two cannot drift.
+                declaredTotalSize: attendanceBody(v.records).readUInt32LE(0),
+                junkPrefix: v.records.junkPrefix ?? false,
                 // The bytes themselves, so what pyzk printed can be checked
                 // against what it was given rather than against a summary.
                 rowsHex: v.records.rows.map((r) => r.toString('hex')),

@@ -1,7 +1,7 @@
 {
-  "experiment": "E7",
-  "variant": "E7-status-punch-40-udp",
-  "transport": "udp",
+  "experiment": "E8",
+  "variant": "E8-junk-prefix-no-prefix-control-tcp",
+  "transport": "tcp",
   "mode": "read-attendance",
   "served": {
     "users": [

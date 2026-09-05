@@ -448,3 +448,136 @@ describe('attendance status/punch mapping (E7)', () => {
     expect(udp.printed).toEqual(tcp.printed)
   })
 })
+
+/**
+ * The junk prefix `src/codec/records/attendance.ts` strips.
+ *
+ * Hardcoded here for the same reason the offsets above are: what these
+ * fixtures record is what `pyzk` did with these bytes, not what this library
+ * believes about them. Importing the constant would let an edit to the library
+ * move the expectation with it.
+ */
+const JUNK_PREFIX = Buffer.from([0xff, 0x32, 0x35, 0x35, 0x00, 0x00, 0x00, 0x00, 0x00])
+
+interface PrefixFixture extends RecordFixture {
+  served: {
+    users: string[]
+    records: {
+      size: number
+      rows: number
+      rowsHex: string[]
+      declaredTotalSize: number
+      junkPrefix: boolean
+    }
+  }
+}
+
+function prefixFixture(arm: string): PrefixFixture {
+  const file = path.join(DIR, `E8-junk-prefix-${arm}-tcp.json`)
+  expect(existsSync(file)).toBe(true)
+  return JSON.parse(readFileSync(file, 'utf8')) as PrefixFixture
+}
+
+/** The printed user id of one row, out of `user_id|timestamp|status|punch`. */
+const printedUserId = (fixture: PrefixFixture, row: number): string =>
+  (fixture.printed[row] as string).split('|')[0] as string
+
+// E8 asks whether the declared totalSize COUNTS the junk prefix.
+//
+// This library assumes it does — the body is taken as data[4 .. 4+total] and
+// the prefix stripped afterwards — and `attendance.ts` says outright that the
+// relationship is unverified. Nothing in this repository's own suite had ever
+// served the other model, because `attendanceBody` declares `prefixed.length`.
+//
+// Three arms differing in one thing each, and a control without the prefix so
+// that a failure is attributable to the prefix rather than to the rows.
+//
+// The answer is that pyzk cannot adjudicate it, which the framing written
+// before the run set aside as a possible outcome: pyzk has no junk-prefix
+// handling at all, so both models come back wrong in the same way. Combined
+// with zkteco-js — which skips the 4-byte header and consumes 40 bytes at a
+// time, never reading the declared size and never looking for a prefix —
+// NEITHER oracle implements this. The stripping rests on documentation alone,
+// and PROVENANCE.md records that rather than claiming corroboration.
+describe('junk prefix versus declared totalSize (E8)', () => {
+  it('the arms differ in exactly the one thing they are meant to differ in', () => {
+    // Read from the fixtures, not asserted from the variant table: an arm that
+    // served something other than its name would otherwise be evidence about a
+    // question nobody asked.
+    const includes = prefixFixture('size-includes')
+    const excludes = prefixFixture('size-excludes')
+    const control = prefixFixture('no-prefix-control')
+
+    expect(includes.served.records.junkPrefix).toBe(true)
+    expect(excludes.served.records.junkPrefix).toBe(true)
+    expect(control.served.records.junkPrefix).toBe(false)
+
+    // 3 × 40 rows, plus nine bytes of prefix in the arm that counts them.
+    expect(control.served.records.declaredTotalSize).toBe(120)
+    expect(excludes.served.records.declaredTotalSize).toBe(120)
+    expect(includes.served.records.declaredTotalSize).toBe(120 + JUNK_PREFIX.length)
+
+    // And the rows themselves are the same in all three, so nothing but the
+    // framing varies.
+    expect(excludes.served.records.rowsHex).toEqual(includes.served.records.rowsHex)
+    expect(control.served.records.rowsHex).toEqual(includes.served.records.rowsHex)
+  })
+
+  it('the control reads all three rows back, so the rows are not what breaks', () => {
+    const control = prefixFixture('no-prefix-control')
+    expect(control.completed).toBe(true)
+    expect(control.printed).toHaveLength(control.served.records.rows)
+    for (let row = 0; row < control.served.records.rows; row++) {
+      const bytes = Buffer.from(control.served.records.rowsHex[row] as string, 'hex')
+      // The printed user id is the NUL-terminated string at offset 2, derived
+      // from the served row rather than written out.
+      const served = bytes.subarray(2, 2 + 9).toString('latin1').split('\0')[0] as string
+      expect(printedUserId(control, row)).toBe(served)
+    }
+  })
+
+  it('neither model reproduces the rows, so pyzk has no junk-prefix handling', () => {
+    const control = prefixFixture('no-prefix-control')
+    for (const arm of ['size-includes', 'size-excludes'] as const) {
+      const fixture = prefixFixture(arm)
+      expect(fixture.printed).not.toEqual(control.printed)
+    }
+  })
+
+  it('and it fails SILENTLY — three plausible records, a fabricated id, exit 0', () => {
+    // The part worth stating on its own. pyzk did not refuse: it completed,
+    // printed the right NUMBER of records, and invented an identity for the
+    // first one. Counting lines would have called both arms a success, which
+    // is why the assertions here compare content.
+    for (const arm of ['size-includes', 'size-excludes'] as const) {
+      const fixture = prefixFixture(arm)
+      expect(fixture.completed).toBe(true)
+      expect(fixture.exitCode).toBe(0)
+      expect(fixture.printed).toHaveLength(fixture.served.records.rows)
+
+      // The fabricated id is exactly what a window shifted by the prefix
+      // predicts: read the user-id field out of `prefix + row0` instead of out
+      // of `row0`. Derived, so this pins the MECHANISM and not just a string.
+      const shifted = Buffer.concat([
+        JUNK_PREFIX,
+        Buffer.from(fixture.served.records.rowsHex[0] as string, 'hex'),
+      ]).subarray(0, fixture.served.records.size)
+      const misread = shifted.subarray(2, 2 + 9).toString('latin1').split('\0')[0] as string
+      expect(misread).not.toBe('')
+      expect(printedUserId(fixture, 0)).toBe(misread)
+    }
+  })
+
+  it('the declared size changed nothing, which is why E8 cannot settle the question', () => {
+    // The negative result, asserted rather than described. 129 and 120 are the
+    // two models; pyzk printed the same thing under both, so its behaviour
+    // carries no information about which one a device uses. If a future pyzk
+    // gains junk-prefix handling these two fixtures will stop matching, and
+    // this test is what will notice.
+    const includes = prefixFixture('size-includes')
+    const excludes = prefixFixture('size-excludes')
+    expect(includes.served.records.declaredTotalSize)
+      .not.toBe(excludes.served.records.declaredTotalSize)
+    expect(includes.printed).toEqual(excludes.printed)
+  })
+})

@@ -12,6 +12,8 @@
     "records": {
       "size": 16,
       "rows": 3,
+      "declaredTotalSize": 48,
+      "junkPrefix": false,
       "rowsHex": [
         "a1860100000000001122000000000000",
         "a2860100805101003344000000000000",
