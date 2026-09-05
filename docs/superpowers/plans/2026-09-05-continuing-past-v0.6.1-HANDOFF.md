@@ -163,8 +163,15 @@ was 0.6.1.
 2. **The `getUsers` timeout test is TCP-only**, matching its `ACK_UNAUTH` sibling. The behaviour
    sits above the transport split, so a UDP twin would re-prove the same path. The new propagation
    test is TCP-only for the same reason.
-3. **`test/ZkDevice.spec.ts`'s `timeoutMs: 200`** is the tightest deadline in the suite. Stable
-   across every run so far; if it ever flakes, raise the deadline rather than loosen the assertion.
+3. **Three deadlines in the suite are tight enough to be worth knowing about.**
+   `test/ZkDevice.spec.ts:177` and `test/scenarios.spec.ts:203` use `timeoutMs: 200`;
+   `test/session/dataRead.legacy.spec.ts:134` and `test/session/session.spec.ts:335` use **150**,
+   which is tighter. All stable across every run so far; if one ever flakes, raise that deadline
+   rather than loosen the assertion.
+
+   The v0.6.0 handoff called the 200ms one "the tightest deadline in the suite" and this handoff
+   repeated it. It was never true — the two 150s predate both. A backlog entry is a claim like any
+   other, and this one had been carried forward unchecked.
 4. **The two `--out=` / `--raw-capture=` empty-string guards in `src/cli.ts` are near-identical.**
    Left alone on purpose: their comments record genuinely different stakes (an unredacted file
    versus a late failure), and a shared helper would erase that distinction.
