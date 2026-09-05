@@ -59,9 +59,13 @@ function decodeOne(rec: Buffer): ZkUser {
  * The count is what rescues a legitimate 72-byte device with a multiple of
  * seven users; it is not what closes the hole.
  *
- * A count that IS supplied is trusted absolutely. Nothing here second-guesses
- * it, because the only other input is the body length and no function of those
- * two numbers can separate a right count from a wrong one -- so a count read
+ * A count that IS supplied is trusted absolutely wherever it survives the
+ * guards below. Those guards do reject many wrong counts -- one that does not
+ * divide the body, or that implies 28 bytes, or that implies neither width.
+ * What none of them can reject is a wrong count that implies exactly 72, since
+ * the only inputs are the body length and the count, and (504, 7) is the same
+ * pair whether it came from seven 72-byte records or from eighteen 28-byte
+ * ones misread as seven. So a count read
  * from a wrong FREE_SIZES_OFFSET.userCount can still fabricate users at the
  * division below, exactly as pre-v0.6 did unconditionally. Two premises this
  * function cannot check are therefore load-bearing: that the offset is right,

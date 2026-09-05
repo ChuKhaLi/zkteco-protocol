@@ -179,8 +179,14 @@ export class ZkDevice {
    * 18 x 28 are the same 504 bytes — but asking for it first meant a device
    * that would not answer CMD_GET_FREE_SIZES lost the user list too, because
    * the failed count had already taken the session down. Bytes in hand cannot
-   * be lost to a count that never arrives. `getAttendanceLogs` orders its own
-   * getInfo the same way, for the same reason.
+   * be lost to a count that never arrives.
+   *
+   * `getAttendanceLogs` is NOT the same shape, though an earlier draft of this
+   * comment said it was: it reads the count before its own transfer and again
+   * after, and the value it hands to getUsers is read before the USER transfer,
+   * not after it. It also has no swallow — a failed getInfo aborts the whole
+   * call — so it offers no degradation guarantee to compare against. The
+   * ordering below is this method's own.
    */
   async getUsers(): Promise<ZkUser[]> {
     const session = this.requireIdleSession()
