@@ -235,7 +235,12 @@ was 0.6.1.
 4. **The two `--out=` / `--raw-capture=` empty-string guards in `src/cli.ts` are near-identical.**
    Left alone on purpose: their comments record genuinely different stakes (an unredacted file
    versus a late failure), and a shared helper would erase that distinction.
-5. **The registry round trip (§4) is manual and Windows-only.** Automating it would mean a workflow
+5. **E7's 16- and 8-byte variants are TCP-only.** Only the 40-byte dialect got a UDP twin, which
+   showed record decoding does not differ by transport; extending that to the other two would
+   re-prove the same path. Listed rather than left silent, because "a check that has only run in one
+   environment has established something about that environment and nothing else" is this
+   repository's own rule and applies to its experiments too.
+6. **The registry round trip (§4) is manual and Windows-only.** Automating it would mean a workflow
    that installs from npm after a publish. Weigh it against the fact that it has found nothing yet
    — unlike the Linux drill, which found a shipped defect the first time it ran.
 
