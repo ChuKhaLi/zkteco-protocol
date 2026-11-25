@@ -3,6 +3,7 @@ import { realpathSync } from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { parseArgs } from 'node:util'
 import { pathToFileURL } from 'node:url'
+import { assertCommKey } from './codec/commkey.js'
 import {
   auditChecksums, auditCommKey, auditReplyIds, emptyFindings, probeBulk, probeConcurrent, probeIdentity,
   probeRealtime, probeState,
@@ -116,7 +117,7 @@ export function parseCliArgs(argv: string[]): CliOptions {
     host,
     port: parseNumberOption('port', values.port, 4370),
     transport,
-    commKey: parseNumberOption('comm-key', values['comm-key'], 0),
+    commKey: assertCommKey(parseNumberOption('comm-key', values['comm-key'], 0), '--comm-key'),
     timeoutMs: parseNumberOption('timeout', values.timeout, 5000),
     attendance,
     rawCapture,

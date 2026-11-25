@@ -53,6 +53,16 @@ describe('parseCliArgs', () => {
     expect(() => parseCliArgs(['h', '--transport=serial'])).toThrow(/transport/)
   })
 
+  it('rejects a --comm-key that is not an integer from 0 to 2^32 - 1, naming the flag', () => {
+    for (const k of ['12.5', '-1', '4294967296']) {
+      expect(() => parseCliArgs(['h', `--comm-key=${k}`])).toThrow(/--comm-key must be an integer/)
+    }
+  })
+
+  it('accepts the largest --comm-key', () => {
+    expect(parseCliArgs(['h', '--comm-key=4294967295']).commKey).toBe(0xffffffff)
+  })
+
   it('rejects a non-numeric port', () => {
     expect(() => parseCliArgs(['h', '--port=nope'])).toThrow(/port/)
   })
