@@ -256,3 +256,18 @@ it('lets a non-protocol error out of the count read instead of degrading', async
   expect(running.received.some((p) => p.command === CMD.PREPARE_BUFFER)).toBe(true)
   expect(running.received.some((p) => p.command === CMD.GET_FREE_SIZES)).toBe(false)
 })
+
+describe('ZkDevice commKey option', () => {
+  it('refuses a commKey that is not an integer from 0 to 2^32 - 1 when constructed, before any socket', () => {
+    for (const commKey of [12.5, -1, 2 ** 32, Number.NaN]) {
+      expect(() => new ZkDevice({ host: '127.0.0.1', commKey })).toThrow(RangeError)
+      expect(() => new ZkDevice({ host: '127.0.0.1', commKey })).toThrow(/commKey must be an integer/)
+    }
+  })
+
+  it('accepts 0, the default (unset), and the largest key', () => {
+    expect(() => new ZkDevice({ host: '127.0.0.1' })).not.toThrow()
+    expect(() => new ZkDevice({ host: '127.0.0.1', commKey: 0 })).not.toThrow()
+    expect(() => new ZkDevice({ host: '127.0.0.1', commKey: 0xffffffff })).not.toThrow()
+  })
+})

@@ -2,6 +2,21 @@ const XOR_TAG = [0x5a, 0x4b, 0x53, 0x4f] as const // 'Z', 'K', 'S', 'O'
 const DEFAULT_TICKS = 50
 
 /**
+ * The comm key the device is configured with: an integer from 0 to 2^32 - 1, where 0 means unset.
+ * Returns it unchanged, or throws a RangeError naming `name`.
+ *
+ * RangeError, not a Zk* class: a bad key is a bad argument, not something the device said. Without
+ * this check `mixCommKey`'s bit operations quietly turn 12.5 into 12 and wrap -1 and 2^32 into
+ * other keys, and the device then refuses auth with no hint that the key was never the one given.
+ */
+export function assertCommKey(value: number, name = 'commKey'): number {
+  if (!Number.isInteger(value) || value < 0 || value > 0xffffffff) {
+    throw new RangeError(`${name} must be an integer from 0 to 4294967295 (0 = unset), got ${String(value)}`)
+  }
+  return value
+}
+
+/**
  * Mixes the device comm key with the session id into the 4 bytes CMD_AUTH
  * carries.
  *
@@ -25,6 +40,7 @@ const DEFAULT_TICKS = 50
  * second opinion.
  */
 export function mixCommKey(commKey: number, sessionId: number, ticks = DEFAULT_TICKS): Buffer {
+  assertCommKey(commKey)
   // 1. Reverse the bit order: input bit 0 becomes output bit 31.
   let k = 0
   for (let i = 0; i < 32; i++) {

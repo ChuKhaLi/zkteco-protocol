@@ -2,6 +2,7 @@ import { getAttendanceLogs, type GetAttendanceOptions } from './commands/attenda
 import { getIdentity, getParameters, getTime } from './commands/device.js'
 import { getInfo } from './commands/info.js'
 import { readUserStream } from './commands/users.js'
+import { assertCommKey } from './codec/commkey.js'
 import { EVENT_FLAG } from './codec/events.js'
 import { parseUserData } from './codec/records/user.js'
 import { ZkConnectionError, ZkError } from './errors.js'
@@ -20,7 +21,7 @@ export interface ZkDeviceOptions {
    * more reliable of the two; UDP is a fallback for firmware that needs it.
    */
   transport?: 'tcp' | 'udp'
-  /** Device comm key. 0, the default, means unset. */
+  /** Device comm key: an integer from 0 to 2^32 - 1. 0, the default, means unset. Anything else throws a RangeError. */
   commKey?: number
   /** Per-request deadline. Defaults to 5000ms. */
   timeoutMs?: number
@@ -40,7 +41,7 @@ export class ZkDevice {
     this.host = opts.host
     this.port = opts.port ?? 4370
     this.transportKind = opts.transport ?? 'tcp'
-    this.commKey = opts.commKey ?? 0
+    this.commKey = assertCommKey(opts.commKey ?? 0)
     this.timeoutMs = opts.timeoutMs ?? 5_000
   }
 
