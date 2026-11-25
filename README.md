@@ -28,7 +28,7 @@ const dev = new ZkDevice({
   host: '192.168.1.201',
   port: 4370,        // default
   transport: 'tcp',  // 'tcp' | 'udp' — default 'tcp'
-  commKey: 0,        // 0 means unset
+  commKey: 0,        // integer 0..4294967295; 0 means unset; anything else throws RangeError
   timeoutMs: 5_000,
 })
 
@@ -208,7 +208,7 @@ npx zkteco-protocol <host> [flags]
 |---|---|---|
 | `--port` | `4370` | Device port. |
 | `--transport` | `tcp` | `tcp` or `udp`. |
-| `--comm-key` | `0` | The device's comm key, if one is set. |
+| `--comm-key` | `0` | The device's comm key, if one is set: an integer from 0 to 4294967295. |
 | `--timeout` | `5000` | Per-request timeout, in milliseconds. |
 | `--attendance` | `auto` | `auto` reads the attendance log unless the device reports more than 10,000 records; `always` reads regardless; `never` skips it. |
 | `--out` | *(stdout)* | Where the Markdown report goes. The JSON sidecar is always written too — alongside it, or as `zkteco-report.json` in the current directory when `--out` is omitted. If `--out` itself ends in `.json`, the sidecar becomes `<name>.sidecar.json` rather than overwriting the report. |
